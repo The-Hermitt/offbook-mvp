@@ -3,9 +3,10 @@
 //
 // HTTP MCP endpoint that proxies to the same REST debug routes.
 // POST /mcp { tool, args } -> { ok, result|error }
+//
+// NOTE: Node 20+ has global fetch, so no node-fetch import needed.
 
 import express from 'express';
-import fetch from 'node-fetch';
 import { z } from 'zod';
 
 // ---------- Validation ----------
@@ -44,6 +45,7 @@ export function createMcpServer() {
       const PORT = process.env.PORT || '3010';
       const BASE = `http://127.0.0.1:${PORT}/debug`;
 
+      // optional secret passthrough
       const secret = req.get('X-Shared-Secret');
       const headers: Record<string, string> = { 'Content-Type': 'application/json' };
       if (secret) headers['X-Shared-Secret'] = secret;
