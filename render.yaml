@@ -1,12 +1,17 @@
 services:
   - type: web
-    name: offbook
+    name: offbook-mvp
     env: node
     plan: free
-    buildCommand: npm install
-    startCommand: npm start
+    region: oregon
+    branch: main
+    buildCommand: "npm install"
+    startCommand: "npm start"
+    healthCheckPath: "/health"
     envVars:
       - key: NODE_VERSION
-        value: 20
+        value: "20"
       - key: OPENAI_API_KEY
-        sync: false
+        sync: false         # set the value in the dashboard if you prefer
+      - key: SHARED_SECRET
+        value: "super-dev-secret"   # optional
