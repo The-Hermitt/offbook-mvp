@@ -8,9 +8,8 @@
   },
   "scripts": {
     "dev": "PORT=${PORT:-3010} tsx watch src/server.ts",
-    "build": "tsc",
     "start": "PORT=${PORT:-3010} node --no-warnings --experimental-import-meta-resolve node_modules/tsx/dist/cli.mjs src/server.ts",
-    "db:reset": "tsx -e \"import('./src/lib/db.ts').then(m => m.initDatabase && m.initDatabase());\""
+    "build": "echo \"skipping tsc build (tsx runs TS directly)\""
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.4",
@@ -30,7 +29,6 @@
     "@types/cors": "^2.8.17",
     "@types/express": "^4.17.21",
     "@types/node": "^20.10.6",
-    "@types/pdf-parse": "^1.1.4",
     "tsx": "^4.7.0",
     "typescript": "^5.3.3"
   }
