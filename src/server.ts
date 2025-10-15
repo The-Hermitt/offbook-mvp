@@ -49,7 +49,7 @@ if (fs.existsSync(publicDir)) {
     } else {
       console.warn('[server] ./http-routes present but no export found');
     }
-  } catch (e) {
+  } catch {
     console.warn('[server] ./http-routes not found (continuing without debug routes)');
   }
 })();
