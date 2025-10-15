@@ -1,9 +1,9 @@
 // src/server.ts
-import "dotenv/config"; // load env ASAP (before other imports)
-
+// @ts-nocheck
+import "dotenv/config";
 import express from "express";
 import cors from "cors";
-import fs, { mkdirSync } from "fs";
+import fs from "fs";
 import path from "path";
 import mime from "mime";
 
@@ -18,12 +18,8 @@ import { ttsProvider } from "./lib/tts.js";
 
 const app = express();
 const PORT = Number(process.env.PORT || 3010);
+const HOST = process.env.HOST || "0.0.0.0";
 
-// ensure asset dirs exist
-mkdirSync(path.join(process.cwd(), "assets", "pdfs"), { recursive: true });
-mkdirSync(path.join(process.cwd(), "assets", "renders"), { recursive: true });
-
-// middleware
 app.use(
   cors({
     origin: "*",
@@ -36,12 +32,13 @@ app.use(express.json());
 // REST debug routes
 app.use("/debug", debugRoutes);
 
-// MCP (kept for later)
+// MCP endpoint
 const sessions: Record<string, StreamableHTTPServerTransport> = {};
 
 app.post("/mcp", async (req, res) => {
   const sessionId = (req.headers["mcp-session-id"] as string) || "";
-  let transport: StreamableHTTPServerTransport | undefined = sessionId && sessions[sessionId];
+  let transport: StreamableHTTPServerTransport | undefined =
+    sessionId && sessions[sessionId];
 
   if (!transport && isInitializeRequest(req.body)) {
     transport = new StreamableHTTPServerTransport({
@@ -104,7 +101,6 @@ app.get("/health", (_req, res) => {
     sessions: Object.keys(sessions).length,
   });
 });
-
 app.get("/health/tts", (_req, res) => {
   res.json({ provider: ttsProvider(), has_key: !!process.env.OPENAI_API_KEY });
 });
@@ -114,10 +110,8 @@ app.get("/api/assets/:assetId", (req, res) => {
     const r = getRender(req.params.assetId);
     const audioPath = r?.audio_path;
     if (!audioPath) return res.status(404).json({ error: "Asset not found" });
-
     const abs = path.resolve(String(audioPath));
     if (!fs.existsSync(abs)) return res.status(404).json({ error: "File missing" });
-
     res.setHeader("Content-Type", mime.getType(abs) || "application/octet-stream");
     fs.createReadStream(abs).pipe(res);
   } catch (e: any) {
@@ -125,8 +119,6 @@ app.get("/api/assets/:assetId", (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
-  console.log("\n🎭 OffBook Server (REST debug harness)");
-  console.log(`   http://localhost:${PORT}`);
-  console.log(`   /debug, /health, /health/tts`);
+app.listen(PORT, HOST, () => {
+  console.log(`🎭 OffBook Server listening on http://${HOST}:${PORT}`);
 });
