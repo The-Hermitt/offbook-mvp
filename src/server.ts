@@ -1,124 +1,76 @@
-// src/server.ts
 // @ts-nocheck
-import "dotenv/config";
-import express from "express";
-import cors from "cors";
-import fs from "fs";
-import path from "path";
-import mime from "mime";
+// src/server.ts
+//
+// Mounts: /health, /health/tts, /debug (if present), /mcp, /api/assets/:rid
 
-import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
-import { randomUUID } from "node:crypto";
+import express from 'express';
+import path from 'path';
+import fs from 'fs';
+import { fileURLToPath } from 'url';
+import { createMcpServer } from './mcp-server'; // no extension
 
-import { createMcpServer } from "./mcp-server.js";
-import debugRoutes from "./http-routes.js";
-import { getRender } from "./lib/db.js";
-import { ttsProvider } from "./lib/tts.js";
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const app = express();
-const PORT = Number(process.env.PORT || 3010);
-const HOST = process.env.HOST || "0.0.0.0";
+app.use(express.json({ limit: '5mb' }));
 
-app.use(
-  cors({
-    origin: "*",
-    exposedHeaders: ["Mcp-Session-Id"],
-    allowedHeaders: ["Content-Type", "mcp-session-id"],
-  })
-);
-app.use(express.json());
+// --------- Optional shared-secret guard ---------
+const SHARED_SECRET = process.env.SHARED_SECRET;
+function requireSecret(req, res, next) {
+  if (!SHARED_SECRET) return next();
+  const supplied = req.get('X-Shared-Secret');
+  if (supplied && supplied === SHARED_SECRET) return next();
+  return res.status(401).json({ error: 'unauthorized' });
+}
 
-// REST debug routes
-app.use("/debug", debugRoutes);
-
-// MCP endpoint
-const sessions: Record<string, StreamableHTTPServerTransport> = {};
-
-app.post("/mcp", async (req, res) => {
-  const sessionId = (req.headers["mcp-session-id"] as string) || "";
-  let transport: StreamableHTTPServerTransport | undefined =
-    sessionId && sessions[sessionId];
-
-  if (!transport && isInitializeRequest(req.body)) {
-    transport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: () => randomUUID(),
-      onsessioninitialized: (sid) => {
-        sessions[sid] = transport!;
-        console.log(`✓ MCP session initialized: ${sid}`);
-      },
-      enableDnsRebindingProtection: true,
-      allowedHosts: ["127.0.0.1", "localhost"],
-    });
-
-    const mcp = createMcpServer();
-    await mcp.connect(transport);
-
-    transport.onclose = () => {
-      if (transport?.sessionId) {
-        delete sessions[transport.sessionId];
-        console.log(`✗ MCP session closed: ${transport.sessionId}`);
-      }
-    };
-  }
-
-  if (!transport) {
-    res.status(400).json({
-      jsonrpc: "2.0",
-      error: { code: -32000, message: "No valid session/initialize" },
-      id: null,
-    });
-    return;
-  }
-
-  await transport.handleRequest(req, res, req.body);
+// --------- Health ---------
+app.get('/health', (_req, res) => res.json({ ok: true }));
+app.get('/health/tts', (_req, res) => {
+  const hasKey = !!process.env.OPENAI_API_KEY;
+  res.json({ provider: hasKey ? 'openai' : 'stub', has_key: hasKey });
 });
 
-app.get("/mcp", async (req, res) => {
-  const sessionId = (req.headers["mcp-session-id"] as string) || "";
-  const transport = sessions[sessionId];
-  if (!transport) return res.status(400).send("Invalid session");
-  await transport.handleRequest(req, res);
-});
+// --------- Static (optional) ---------
+const publicDir = path.join(process.cwd(), 'public');
+if (fs.existsSync(publicDir)) {
+  app.use(express.static(publicDir, { maxAge: '1h' }));
+  console.log('[server] static /public mounted');
+}
 
-app.delete("/mcp", async (req, res) => {
-  const sessionId = (req.headers["mcp-session-id"] as string) || "";
-  const transport = sessions[sessionId];
-  if (!transport) return res.status(400).send("Invalid session");
-  await transport.handleRequest(req, res);
-});
-
-app.get("/mcp/session", (_req, res) => {
-  const ids = Object.keys(sessions);
-  res.json({ session_id: ids[0] ?? null, sessions: ids });
-});
-
-// Health & assets
-app.get("/health", (_req, res) => {
-  res.json({
-    status: "ok",
-    version: "1.0.0",
-    sessions: Object.keys(sessions).length,
-  });
-});
-app.get("/health/tts", (_req, res) => {
-  res.json({ provider: ttsProvider(), has_key: !!process.env.OPENAI_API_KEY });
-});
-
-app.get("/api/assets/:assetId", (req, res) => {
+// --------- REST debug harness (optional) ---------
+(async () => {
   try {
-    const r = getRender(req.params.assetId);
-    const audioPath = r?.audio_path;
-    if (!audioPath) return res.status(404).json({ error: "Asset not found" });
-    const abs = path.resolve(String(audioPath));
-    if (!fs.existsSync(abs)) return res.status(404).json({ error: "File missing" });
-    res.setHeader("Content-Type", mime.getType(abs) || "application/octet-stream");
-    fs.createReadStream(abs).pipe(res);
-  } catch (e: any) {
-    res.status(500).json({ error: "Asset serving error", detail: String(e?.message || e) });
+    const mod = await import('./http-routes'); // prefer default export Router
+    const httpRoutes = mod.default || mod.router || null;
+    if (httpRoutes) {
+      app.use('/debug', requireSecret, httpRoutes);
+      console.log('[server] /debug routes mounted');
+    } else {
+      console.warn('[server] ./http-routes present but no export found');
+    }
+  } catch (e) {
+    console.warn('[server] ./http-routes not found (continuing without debug routes)');
   }
+})();
+
+// --------- MCP endpoint ---------
+app.use('/mcp', requireSecret, createMcpServer());
+console.log('[server] /mcp mounted');
+
+// --------- Legacy asset streaming (local) ---------
+app.get('/api/assets/:rid', (req, res) => {
+  const rid = req.params.rid;
+  const fp = path.join(process.cwd(), 'assets', 'renders', `${rid}.mp3`);
+  if (!fs.existsSync(fp)) return res.status(404).json({ error: 'not found' });
+  res.setHeader('Content-Type', 'audio/mpeg');
+  fs.createReadStream(fp).pipe(res);
 });
+
+const PORT = Number(process.env.PORT || 3010);
+const HOST = process.env.HOST || '0.0.0.0';
 
 app.listen(PORT, HOST, () => {
-  console.log(`🎭 OffBook Server listening on http://${HOST}:${PORT}`);
+  console.log(`[server] listening on http://${HOST}:${PORT}`);
+  if (SHARED_SECRET) console.log('[server] shared-secret auth is ENABLED');
 });
