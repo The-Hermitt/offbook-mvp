@@ -1,103 +1,92 @@
-// src/server.ts
 // @ts-nocheck
-import "dotenv/config";
-import express from "express";
-import cors from "cors";
-import fs from "fs";
-import path from "path";
-import mime from "mime";
+// src/mcp-server.ts
+//
+// HTTP MCP endpoint that proxies to the same REST debug routes.
+// POST /mcp { tool, args } -> { ok, result|error }
 
-import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
-import { randomUUID } from "node:crypto";
+import express from 'express';
+import fetch from 'node-fetch';
+import { z } from 'zod';
 
-import { createMcpServer } from "./mcp-server.js";
-import debugRoutes from "./http-routes.js";
-import { getRender } from "./lib/db.js";
-import { ttsProvider } from "./lib/tts.js";
-
-const app = express();
-const PORT = Number(process.env.PORT || 3010);
-const HOST = process.env.HOST || "0.0.0.0";
-
-app.use(cors({ origin: "*", exposedHeaders: ["Mcp-Session-Id"], allowedHeaders: ["Content-Type", "mcp-session-id"] }));
-app.use(express.json());
-
-// REST debug routes
-app.use("/debug", debugRoutes);
-
-// MCP endpoint
-const sessions = {};
-
-app.post("/mcp", async (req, res) => {
-  const sessionId = (req.headers["mcp-session-id"] as string) || "";
-  let transport = sessionId && sessions[sessionId];
-
-  if (!transport && isInitializeRequest(req.body)) {
-    transport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: () => randomUUID(),
-      onsessioninitialized: (sid) => { sessions[sid] = transport; console.log(`✓ MCP session initialized: ${sid}`); },
-      enableDnsRebindingProtection: true,
-      allowedHosts: ["127.0.0.1", "localhost"],
-    });
-
-    const mcp = createMcpServer();
-    await mcp.connect(transport);
-
-    transport.onclose = () => {
-      if (transport?.sessionId) { delete sessions[transport.sessionId]; console.log(`✗ MCP session closed: ${transport.sessionId}`); }
-    };
-  }
-
-  if (!transport) {
-    res.status(400).json({ jsonrpc: "2.0", error: { code: -32000, message: "No valid session/initialize" }, id: null });
-    return;
-  }
-
-  await transport.handleRequest(req, res, req.body);
+// ---------- Validation ----------
+const UploadSchema = z.object({
+  pdf_url: z.string().url(),
+  title: z.string().min(1).max(200),
 });
+const ScenesSchema = z.object({ script_id: z.string().min(1) });
+const NonEmptyRecord = <T extends z.ZodTypeAny>(schema: T) =>
+  z.record(schema).refine((obj) => Object.keys(obj).length > 0, {
+    message: 'voice_map must have at least one entry',
+  });
+const SetVoiceSchema = z.object({
+  script_id: z.string().min(1),
+  voice_map: NonEmptyRecord(z.string().min(1)),
+});
+const RenderSchema = z.object({
+  script_id: z.string().min(1),
+  scene_id: z.string().min(1),
+  role: z.string().min(1),
+  pace: z.enum(['slow', 'normal', 'fast']).default('normal'),
+});
+const StatusSchema = z.object({ render_id: z.string().min(1) });
 
-app.get("/mcp", async (req, res) => {
-  const sessionId = (req.headers["mcp-session-id"] as string) || "";
-  const transport = sessions[sessionId];
-  if (!transport) return res.status(400).send("Invalid session");
-  await transport.handleRequest(req, res);
-});
+// ---------- Router ----------
+export function createMcpServer() {
+  const router = express.Router();
 
-app.delete("/mcp", async (req, res) => {
-  const sessionId = (req.headers["mcp-session-id"] as string) || "";
-  const transport = sessions[sessionId];
-  if (!transport) return res.status(400).send("Invalid session");
-  await transport.handleRequest(req, res);
-});
+  router.post('/', express.json({ limit: '2mb' }), async (req, res) => {
+    try {
+      const { tool, args } = req.body || {};
+      if (!tool || typeof tool !== 'string') {
+        return res.status(400).json({ ok: false, error: 'missing tool' });
+      }
 
-app.get("/mcp/session", (_req, res) => {
-  const ids = Object.keys(sessions);
-  res.json({ session_id: ids[0] ?? null, sessions: ids });
-});
+      const PORT = process.env.PORT || '3010';
+      const BASE = `http://127.0.0.1:${PORT}/debug`;
 
-// Health & assets
-app.get("/health", (_req, res) => {
-  res.json({ status: "ok", version: "1.0.0", sessions: Object.keys(sessions).length });
-});
-app.get("/health/tts", (_req, res) => {
-  res.json({ provider: ttsProvider(), has_key: !!process.env.OPENAI_API_KEY });
-});
+      const secret = req.get('X-Shared-Secret');
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (secret) headers['X-Shared-Secret'] = secret;
 
-app.get("/api/assets/:assetId", (req, res) => {
-  try {
-    const r = getRender(req.params.assetId);
-    const audioPath = r?.audio_path;
-    if (!audioPath) return res.status(404).json({ error: "Asset not found" });
-    const abs = path.resolve(String(audioPath));
-    if (!fs.existsSync(abs)) return res.status(404).json({ error: "File missing" });
-    res.setHeader("Content-Type", mime.getType(abs) || "application/octet-stream");
-    fs.createReadStream(abs).pipe(res);
-  } catch (e) {
-    res.status(500).json({ error: "Asset serving error", detail: String(e?.message || e) });
-  }
-});
+      switch (tool) {
+        case 'upload_script': {
+          const data = UploadSchema.parse(args || {});
+          const r = await fetch(`${BASE}/upload_script`, { method: 'POST', headers, body: JSON.stringify(data) });
+          return res.json({ ok: true, result: await r.json() });
+        }
+        case 'list_scenes': {
+          const { script_id } = ScenesSchema.parse(args || {});
+          const q = new URLSearchParams({ script_id }).toString();
+          const r = await fetch(`${BASE}/scenes?${q}`, { headers });
+          return res.json({ ok: true, result: await r.json() });
+        }
+        case 'set_voice': {
+          const data = SetVoiceSchema.parse(args || {});
+          const r = await fetch(`${BASE}/set_voice`, { method: 'POST', headers, body: JSON.stringify(data) });
+          return res.json({ ok: true, result: await r.json() });
+        }
+        case 'render_reader': {
+          const data = RenderSchema.parse(args || {});
+          const r = await fetch(`${BASE}/render`, { method: 'POST', headers, body: JSON.stringify(data) });
+          return res.json({ ok: true, result: await r.json() });
+        }
+        case 'render_status': {
+          const { render_id } = StatusSchema.parse(args || {});
+          const q = new URLSearchParams({ render_id }).toString();
+          const r = await fetch(`${BASE}/render_status?${q}`, { headers });
+          return res.json({ ok: true, result: await r.json() });
+        }
+        default:
+          return res.status(400).json({ ok: false, error: `unknown tool: ${tool}` });
+      }
+    } catch (err: any) {
+      return res.status(400).json({ ok: false, error: err?.message || String(err) });
+    }
+  });
 
-app.listen(PORT, HOST, () => {
-  console.log(`🎭 OffBook Server listening on http://${HOST}:${PORT}`);
-});
+  router.get('/tools', (_req, res) => {
+    res.json({ tools: ['upload_script', 'list_scenes', 'set_voice', 'render_reader', 'render_status'] });
+  });
+
+  return router;
+}
