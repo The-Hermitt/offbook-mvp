@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>OffBook – Player</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 2rem; line-height: 1.5; }
+    .card { max-width: 720px; margin: 0 auto; padding: 1rem 1.25rem; border: 1px solid #e5e5e5; border-radius: 12px; box-shadow: 0 1px 8px rgba(0,0,0,0.04); }
+    label { display: block; font-weight: 600; margin-top: 0.75rem; }
+    input, select { width: 100%; padding: 0.6rem 0.75rem; border-radius: 10px; border: 1px solid #ddd; }
+    button { margin-top: 0.75rem; padding: 0.6rem 0.9rem; border: 0; border-radius: 10px; background: #111827; color: white; cursor: pointer; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; }
+    .muted { color: #666; font-size: 0.9rem; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
+    .ok { color: #0a7a2d; font-weight: 600; }
+    .err { color: #a40e0e; font-weight: 600; }
+    audio { width: 100%; margin-top: 0.75rem; }
+    .spacer { height: 0.5rem; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h2>OffBook – Quick Player</h2>
+    <p class="muted">Upload → list scenes → set voice → render → play (uses your server’s debug endpoints).</p>
+
+    <div class="row">
+      <div>
+        <label for="pdf">PDF URL</label>
+        <input id="pdf" value="https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf">
+      </div>
+      <div>
+        <label for="title">Title</label>
+        <input id="title" value="Test Script">
+      </div>
+    </div>
+
+    <div class="row">
+      <div>
+        <label for="voice">Voice</label>
+        <input id="voice" value="alloy">
+      </div>
+      <div>
+        <label for="role">Your Role</label>
+        <input id="role" value="UNKNOWN">
+      </div>
+    </div>
+
+    <div class="row">
+      <div>
+        <label for="pace">Pace</label>
+        <select id="pace">
+          <option value="normal" selected>normal</option>
+          <option value="slow">slow</option>
+          <option value="fast">fast</option>
+        </select>
+      </div>
+      <div>
+        <label for="secret">X-Shared-Secret (optional)</label>
+        <input id="secret" placeholder="super-dev-secret">
+      </div>
+    </div>
+
+    <label for="base">Server Base URL</label>
+    <input id="base" value="https://offbook-mvp.onrender.com">
+
+    <button id="go">Render & Play</button>
+    <div class="spacer"></div>
+    <div id="log" class="mono"></div>
+    <audio id="player" controls></audio>
+  </div>
+
+  <script>
+    const el = (id) => document.getElementById(id);
+
+    async function call(method, url, body, secret) {
+      const headers = { 'Content-Type': 'application/json' };
+      if (secret) headers['X-Shared-Secret'] = secret;
+      const res = await fetch(url, { method, headers, body: body ? JSON.stringify(body) : undefined });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error || res.statusText);
+      return json;
+    }
+
+    function log(text, cls='') {
+      const div = el('log');
+      const p = document.createElement('div');
+      if (cls) p.className = cls;
+      p.textContent = text;
+      div.appendChild(p);
+      div.scrollTop = div.scrollHeight;
+    }
+
+    el('go').onclick = async () => {
+      const base = el('base').value.trim();
+      const secret = el('secret').value.trim();
+      const pdf = el('pdf').value.trim();
+      const title = el('title').value.trim();
+      const voice = el('voice').value.trim() || 'alloy';
+      const role = el('role').value.trim() || 'UNKNOWN';
+      const pace = el('pace').value;
+
+      el('go').disabled = true;
+      el('log').innerHTML = '';
+
+      try {
+        log('Health check…');
+        const tts = await fetch(`${base}/health/tts`).then(r => r.json());
+        log(`TTS: provider=${tts.provider} has_key=${tts.has_key}`, 'ok');
+
+        log('1) Uploading script…');
+        const up = await call('POST', `${base}/debug/upload_script`, { pdf_url: pdf, title }, secret);
+        log(`script_id=${up.script_id}`, 'ok');
+
+        log('2) Listing scenes…');
+        const sc = await fetch(`${base}/debug/scenes?script_id=${encodeURIComponent(up.script_id)}`, {
+          headers: secret ? { 'X-Shared-Secret': secret } : undefined
+        }).then(r => r.json());
+        if (!sc.scenes?.length) throw new Error('No scenes returned');
+        const sceneId = sc.scenes[0].id;
+        log(`scene_id=${sceneId}`, 'ok');
+
+        log('3) Setting voice…');
+        await call('POST', `${base}/debug/set_voice`, { script_id: up.script_id, voice_map: { [role]: voice } }, secret);
+        log('voice set', 'ok');
+
+        log('4) Rendering…');
+        const rend = await call('POST', `${base}/debug/render`, {
+          script_id: up.script_id, scene_id: sceneId, role, pace
+        }, secret);
+        if (!rend.render_id) throw new Error('No render_id');
+
+        log('5) Polling status…');
+        let status = 'pending', download = '';
+        while (status !== 'complete') {
+          const st = await fetch(`${base}/debug/render_status?render_id=${encodeURIComponent(rend.render_id)}`, {
+            headers: secret ? { 'X-Shared-Secret': secret } : undefined
+          }).then(r => r.json());
+          status = st.status;
+          download = st.download_url || '';
+          log(`status=${status}`);
+          if (status !== 'complete') await new Promise(r => setTimeout(r, 1000));
+        }
+        const url = `${base}${download}`;
+        log(`done: ${url}`, 'ok');
+
+        el('player').src = url;
+        el('player').play().catch(()=>{});
+      } catch (e) {
+        log(`Error: ${e.message}`, 'err');
+      } finally {
+        el('go').disabled = false;
+      }
+    };
+  </script>
+</body>
+</html>
