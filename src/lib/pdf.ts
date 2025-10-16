@@ -1,15 +1,11 @@
 // @ts-nocheck
 // src/lib/pdf.ts
 //
-// Robust-ish PDF/text parser with safe fallback.
-// Emits DIALOGUE only; skips scene headings, parentheticals, all-caps action,
-// page numbers, and common footer/header junk.
-//
-// Public API:
-//   - parseScript(pdf_url)
-//   - parseArrayBuffer(arrBuf)
-//   - parseText(text)
-//   - parseStub()
+// PDF/text parser with robust fallbacks.
+// Goal: emit scenes + dialogue lines {speaker,text} that mirror the paste flow.
+// This version improves PDF extraction by reconstructing lines using glyph
+// positions (y/x clustering) instead of naive .str joins, which fixes many
+// "UNKNOWN" role cases from Upload PDF.
 
 export type Scene = {
   id: string;
@@ -17,7 +13,7 @@ export type Scene = {
   lines: Array<{ speaker: string; text: string }>;
 };
 
-// ----------------- Public APIs -----------------
+// ----------------- Public API -----------------
 
 export async function parseScript(pdf_url: string): Promise<Scene[]> {
   try {
@@ -31,8 +27,14 @@ export async function parseScript(pdf_url: string): Promise<Scene[]> {
 
 export async function parseArrayBuffer(arrBuf: ArrayBuffer): Promise<Scene[]> {
   try {
+    // Primary: high-fidelity text with layout-aware grouping
     const raw = await extractTextWithPdfJs(arrBuf);
-    const scenes = analyzeScriptText(raw);
+    let scenes = analyzeScriptText(raw);
+    if (!hasDialogue(scenes)) {
+      // Secondary: ultra-normalize (collapse weird punctuation / unicode)
+      const ultra = ultraNormalize(raw);
+      scenes = analyzeScriptText(ultra);
+    }
     if (!hasDialogue(scenes)) return parseStub('file');
     return scenes;
   } catch (err) {
@@ -64,18 +66,20 @@ export async function parseStub(_hint?: string): Promise<Scene[]> {
   ];
 }
 
-// ----------------- Helpers -----------------
-
-function hasDialogue(scenes: Scene[]): boolean {
-  return Array.isArray(scenes) && scenes.some(s => Array.isArray(s.lines) && s.lines.length > 0);
-}
+// ----------------- Extraction -----------------
 
 async function downloadPdf(url: string): Promise<ArrayBuffer> {
   const res = await fetch(url);
   if (!res.ok) throw new Error(`download failed: ${res.status} ${res.statusText}`);
-  return await res.arrayBuffer();
+  const buf = await res.arrayBuffer();
+  return buf;
 }
 
+/**
+ * Layout-aware text extraction.
+ * Groups text items by page, then by line using y-coordinate buckets, sorts by x,
+ * joins with spaces, and separates lines with \n. Pages separated by \n\n.
+ */
 async function extractTextWithPdfJs(arrBuf: ArrayBuffer): Promise<string> {
   const pdfjs = await import('pdfjs-dist/legacy/build/pdf.js');
   // @ts-ignore worker not needed in Node
@@ -84,26 +88,74 @@ async function extractTextWithPdfJs(arrBuf: ArrayBuffer): Promise<string> {
   const loadingTask = pdfjs.getDocument({ data: arrBuf });
   const pdf = await loadingTask.promise;
 
-  let out = '';
+  let out: string[] = [];
+
   for (let p = 1; p <= pdf.numPages; p++) {
     const page = await pdf.getPage(p);
-    const tc = await page.getTextContent();
-    const pageText = tc.items.map((it: any) => (it?.str ?? '')).join('\n');
-    out += pageText + '\n\n';
+    const tc = await page.getTextContent({ normalizeWhitespace: true, disableCombineTextItems: false });
+
+    type Item = { str: string; transform: number[]; x: number; y: number; w: number; h: number };
+    const items: Item[] = (tc.items as any[])
+      .map((it: any) => {
+        const [a,b,c,d,e,f] = it.transform || [1,0,0,1,0,0];
+        return { str: it.str ?? '', transform: it.transform, x: e, y: f, w: it.width || 0, h: it.height || 0 };
+      })
+      .filter(it => (it.str || '').trim().length > 0);
+
+    // Cluster by Y within tolerance (screenplay PDFs often have tiny drift)
+    const tolY = 2.5;
+    items.sort((A,B) => (B.y - A.y) || (A.x - B.x)); // top→bottom (y desc), then left→right
+    const lines: { y: number; parts: Item[] }[] = [];
+    for (const it of items) {
+      const bucket = lines.find(L => Math.abs(L.y - it.y) <= tolY);
+      if (bucket) bucket.parts.push(it);
+      else lines.push({ y: it.y, parts: [it] });
+    }
+    // Within each line, sort by X and join
+    const lineTexts = lines
+      .map(L => {
+        L.parts.sort((A,B) => A.x - B.x);
+        // Add a space between parts unless the last char already has trailing space
+        let s = '';
+        for (const part of L.parts) {
+          const piece = String(part.str);
+          const needsSpace = s.length && !s.endsWith(' ') && !piece.startsWith(' ');
+          s += (needsSpace ? ' ' : '') + piece;
+        }
+        return s.trimEnd();
+      })
+      .filter(s => s.trim().length > 0);
+
+    out.push(lineTexts.join('\n'));
   }
-  return normalizeWhitespace(out);
+
+  const joined = out.join('\n\n');
+  return normalizeWhitespace(joined);
 }
+
+// ----------------- Heuristics -----------------
 
 function normalizeWhitespace(s: string): string {
   return (s || '')
-    .replace(/\r/g, '\n')
+    .replace(/[\r\t\v\f]/g, '\n')
     .replace(/\u00A0/g, ' ')
     .replace(/[ \t]+\n/g, '\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 }
 
-// ----------------- Heuristics -----------------
+function ultraNormalize(s: string): string {
+  return (s || '')
+    .normalize('NFKC')                 // compatibility normalize unicode
+    .replace(/[“”]/g, '"')
+    .replace(/[‘’]/g, "'")
+    .replace(/[—–]/g, '-')
+    .replace(/·/g, '.')
+    .replace(/◦/g, '-')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
 
 const SCENE_HEAD_RE = /^(?:INT\.|EXT\.|I\/E\.|INT\/EXT\.|SCENE\b|SCENE\s+\d+)/i;
 const ALLCAPS_RE = /^[A-Z0-9 .,'\-]+$/;
@@ -152,29 +204,18 @@ function looksLikeSpeakerName(name: string): boolean {
   const upperish = ALLCAPS_RE.test(base) && !/[a-z]/.test(base) && /[A-Z]/.test(base);
   if (!upperish) return false;
   if (STOP_NAMES.has(base)) return false;
-  if (SCENE_HEAD_RE.test(base)) return false;
   if (ONLY_DIGITS_RE.test(base)) return false; // reject "43" etc.
   return true;
 }
 
-/**
- * Parse raw text into scenes & dialogue lines.
- * Accepts formats like:
- *   JANE: Hello there.
- *   JANE (quietly)
- *   I… uh…
- *   GABE
- *     (with feeling)
- *     Don’t go.
- */
-function analyzeScriptText(rawInput: string): Scene[] {
+export function analyzeScriptText(rawInput: string): Scene[] {
   const raw = normalizeWhitespace(rawInput || '');
   if (!raw) return [];
 
   // Split to lines, drop obvious noise early
   const lines = raw
     .split(/\n+/)
-    .map(l => l.trim())
+    .map(l => l.trimEnd())
     .filter(l => l && !isNoiseLine(l));
 
   // Partition into scenes first
@@ -183,14 +224,12 @@ function analyzeScriptText(rawInput: string): Scene[] {
   for (let i=0;i<lines.length;i++){
     if (isSceneHeading(lines[i])) { sceneStarts.push(i); titles[i] = lines[i]; }
   }
-  if (sceneStarts.length === 0) {
-    return [buildScene('scene-1', 'Scene', lines)];
-  }
+  if (sceneStarts.length===0) { sceneStarts.push(0); titles[0]='Scene 1'; }
 
   const scenes: Scene[] = [];
   for (let s=0; s<sceneStarts.length; s++){
     const start = sceneStarts[s];
-    const end   = s+1 < sceneStarts.length ? sceneStarts[s+1] : lines.length;
+    const end = (s+1 < sceneStarts.length) ? sceneStarts[s+1] : lines.length;
     const chunk = lines.slice(start, end);
     const title = titles[start] || `Scene ${s+1}`;
     scenes.push(buildScene(`scene-${s+1}`, title, chunk));
@@ -221,7 +260,10 @@ function buildScene(id: string, title: string, chunk: string[]): Scene {
     const line = chunk[i] || '';
     if (!line || isNoiseLine(line)) return null;
 
-    // "NAME: Dialogue"
+    // Accept:
+    // 1) NAME: Dialogue
+    // 2) NAME (note)   [dialogue on following lines]
+    // 3) NAME          [dialogue on following lines]
     const colonMatch = line.match(/^([A-Z0-9 .,'\-]{2,30})\s*:?\s*(.*)$/);
     if (colonMatch) {
       const name = cleanName(colonMatch[1]);
@@ -229,7 +271,7 @@ function buildScene(id: string, title: string, chunk: string[]): Scene {
       if (looksLikeSpeakerName(name)) {
         if (rest && hasAnyLower(rest) && !isParenthetical(rest)) return name;
         // Peek next few lines for dialogue signal
-        for (let j=i+1; j<Math.min(i+4, chunk.length); j++){
+        for (let j=i+1; j<Math.min(i+5, chunk.length); j++){
           const nxt = (chunk[j] || '').trim();
           if (!nxt || isNoiseLine(nxt)) continue;
           if (isParenthetical(nxt)) return name; // (beat)
@@ -245,9 +287,6 @@ function buildScene(id: string, title: string, chunk: string[]): Scene {
     const line = (chunk[i] || '').trim();
     if (!line || isNoiseLine(line)) continue;
 
-    // New scene header resets any speaker
-    if (isSceneHeading(line)) { flush(); currentSpeaker = null; continue; }
-
     const maybe = startsNewSpeaker(i);
     if (maybe) {
       // commit previous
@@ -259,24 +298,20 @@ function buildScene(id: string, title: string, chunk: string[]): Scene {
       continue;
     }
 
-    // If we have a speaker, buffer likely dialogue; skip parentheticals & all-caps action
     if (currentSpeaker) {
       if (isParenthetical(line)) continue;
       if (isAllCapsAction(line)) continue;
       if (hasAnyLower(line)) { buf.push(line); continue; }
-      continue; // ignore remaining all-caps action/noise
+      continue;
     }
-
-    // Outside a speech block → ignore (action)
   }
 
   flush();
   return { id, title, lines: out };
 }
 
-function hasAnyLower(s: string): boolean {
-  return /[a-z]/.test(s);
-}
+function hasAnyLower(s: string): boolean { return /[a-z]/.test(s); }
+
 function isAllCapsAction(s: string): boolean {
   const t = s.trim();
   if (!t) return false;
