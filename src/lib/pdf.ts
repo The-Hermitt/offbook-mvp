@@ -48,7 +48,8 @@ export async function parseText(text: string): Promise<Scene[]> {
     const scenes = analyzeScriptText(text || '');
     if (!hasDialogue(scenes)) return parseStub('text');
     return scenes;
-  } catch {
+  } catch (err) {
+    console.warn('[pdf] parseText failed → stub:', err?.message || err);
     return parseStub('text-err');
   }
 }
@@ -97,7 +98,7 @@ async function extractTextWithPdfJs(arrBuf: ArrayBuffer): Promise<string> {
     type Item = { str: string; transform: number[]; x: number; y: number; w: number; h: number };
     const items: Item[] = (tc.items as any[])
       .map((it: any) => {
-        const [a,b,c,d,e,f] = it.transform || [1,0,0,1,0,0];
+        const [, , , , e, f] = it.transform || [1,0,0,1,0,0];
         return { str: it.str ?? '', transform: it.transform, x: e, y: f, w: it.width || 0, h: it.height || 0 };
       })
       .filter(it => (it.str || '').trim().length > 0);
@@ -207,6 +208,20 @@ function looksLikeSpeakerName(name: string): boolean {
   if (ONLY_DIGITS_RE.test(base)) return false; // reject "43" etc.
   return true;
 }
+
+// ---------- NEW: this was missing ----------
+function hasDialogue(scenes: Scene[]): boolean {
+  if (!Array.isArray(scenes)) return false;
+  for (const sc of scenes) {
+    for (const ln of sc?.lines || []) {
+      const speaker = (ln?.speaker || '').trim();
+      const text = (ln?.text || '').trim();
+      if (text.length > 0 && speaker && speaker !== 'UNKNOWN') return true;
+    }
+  }
+  return false;
+}
+// -------------------------------------------
 
 export function analyzeScriptText(rawInput: string): Scene[] {
   const raw = normalizeWhitespace(rawInput || '');
