@@ -1,0 +1,373 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>OffBook – Rehearsal MVP</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+    :root { --bg:#fff; --fg:#111; --muted:#6b7280; --line:#e5e7eb; --accent:#111827; --chip:#f3f4f6; }
+    *{box-sizing:border-box}
+    body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.55 system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif}
+    .wrap{max-width:900px;margin:20px auto;padding:0 16px}
+    .nav{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+    .tabbtn{padding:8px 12px;border:1px solid var(--line);border-radius:12px;background:var(--chip);cursor:pointer}
+    .tabbtn.active{background:var(--accent);color:#fff;border-color:var(--accent)}
+    .card{padding:16px;border:1px solid var(--line);border-radius:14px;box-shadow:0 1px 10px rgba(0,0,0,.04);background:#fff}
+    h1{font-size:22px;margin:0 0 4px}
+    p.muted{margin:0 0 14px;color:var(--muted)}
+    label{display:block;font-weight:600;margin:10px 0 6px}
+    input,select,textarea{width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:12px;background:#fff}
+    .row{display:grid;gap:12px}
+    @media(min-width:760px){.row.two{grid-template-columns:1fr 1fr}}
+    button{margin-top:12px;padding:10px 14px;border:0;border-radius:12px;background:var(--accent);color:#fff;font-weight:600;cursor:pointer}
+    button.secondary{background:#374151}
+    button.ghost{background:#fff;color:#111;border:1px solid var(--line)}
+    button:disabled{opacity:.6;cursor:not-allowed}
+    .log{margin-top:10px;padding:10px;border:1px dashed var(--line);border-radius:12px;height:140px;overflow:auto;background:#fafafa;font:13px/1.5 ui-monospace,Menlo,Consolas,monospace}
+    .ok{color:#0a7a2d}.err{color:#a40e0e}.muted-note{color:var(--muted);font-size:13px}
+    audio,video{width:100%;margin-top:10px}
+    .list{display:grid;gap:10px;margin-top:8px}
+    .item{padding:10px;border:1px solid var(--line);border-radius:12px;background:#fff}
+    .right{display:flex;gap:8px;align-items:center;justify-content:flex-end}
+    .hidden{display:none}
+    .pill{display:inline-block;padding:4px 8px;border-radius:999px;background:var(--chip);font-size:12px;margin-left:6px}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="nav">
+      <button class="tabbtn active" data-tab="upload">1) Upload</button>
+      <button class="tabbtn" data-tab="assign">2) Assign Voices</button>
+      <button class="tabbtn" data-tab="rehearse">3) Rehearse</button>
+      <button class="tabbtn" data-tab="record">4) Record</button>
+      <button class="tabbtn" data-tab="gallery">5) Gallery</button>
+    </div>
+
+    <div class="card" id="tab-upload">
+      <h1>Upload</h1>
+      <p class="muted">Paste a public PDF URL for now. (File uploads coming later.)</p>
+      <div class="row two">
+        <div>
+          <label for="pdf">PDF URL</label>
+          <input id="pdf" value="https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf">
+          <div class="muted-note">We fetch the PDF server-side when you continue.</div>
+        </div>
+        <div>
+          <label for="title">Title</label>
+          <input id="title" value="Test Script">
+        </div>
+      </div>
+      <div class="right">
+        <button id="btn-upload-continue">Continue →</button>
+      </div>
+      <div class="log" id="log-upload"></div>
+    </div>
+
+    <div class="card hidden" id="tab-assign">
+      <h1>Assign Voices <span class="pill" id="scene-pill">scene: —</span></h1>
+      <p class="muted">Choose your role and voices for partners. (Roles auto-detected from the script.)</p>
+
+      <div class="row two">
+        <div>
+          <label for="role">I am… (role)</label>
+          <select id="role"></select>
+        </div>
+        <div>
+          <label for="defaultVoice">Default partner voice</label>
+          <input id="defaultVoice" value="alloy">
+        </div>
+      </div>
+
+      <div id="partnersBox" class="list"></div>
+
+      <div class="right">
+        <button class="ghost" id="btn-assign-back">← Back</button>
+        <button id="btn-assign-continue">Continue →</button>
+      </div>
+      <div class="log" id="log-assign"></div>
+    </div>
+
+    <div class="card hidden" id="tab-rehearse">
+      <h1>Rehearse</h1>
+      <p class="muted">We’ll render the reader track for your scene. Press play to rehearse.</p>
+
+      <div class="right">
+        <button id="btn-render">Render Reader</button>
+      </div>
+      <audio id="player" controls preload="none"></audio>
+      <div class="right">
+        <button class="ghost" id="btn-rehearse-back">← Back</button>
+        <button id="btn-rehearse-next">Next →</button>
+      </div>
+      <div class="log" id="log-rehearse"></div>
+    </div>
+
+    <div class="card hidden" id="tab-record">
+      <h1>Record</h1>
+      <p class="muted">Simple mic capture (local-only for now). Use headphones during playback to avoid echo.</p>
+
+      <div class="right">
+        <button id="btn-rec-start">Start Recording</button>
+        <button id="btn-rec-stop" disabled>Stop</button>
+      </div>
+      <audio id="takePreview" controls preload="none"></audio>
+      <div class="row">
+        <div>
+          <label for="takeLabel">Label this take</label>
+          <input id="takeLabel" placeholder="e.g., Scene 1 – Take 1">
+        </div>
+        <div class="right">
+          <button id="btn-save-take" class="secondary" disabled>Save to Gallery</button>
+        </div>
+      </div>
+      <div class="right">
+        <button class="ghost" id="btn-record-back">← Back</button>
+        <button id="btn-record-next">Next →</button>
+      </div>
+      <div class="log" id="log-record"></div>
+    </div>
+
+    <div class="card hidden" id="tab-gallery">
+      <h1>Gallery</h1>
+      <p class="muted">Your saved takes (local to this device for now).</p>
+      <div id="takesList" class="list"></div>
+      <div class="right">
+        <button class="ghost" id="btn-gallery-back">← Back</button>
+      </div>
+      <div class="log" id="log-gallery"></div>
+    </div>
+  </div>
+
+  <script>
+    // ----- Minimal state -----
+    const state = {
+      base: window.location.origin,
+      secret: new URLSearchParams(location.search).get('secret') || '', // dev-only; hidden from UI
+      scriptId: null,
+      sceneId: null,
+      roles: [],
+      myRole: null,
+      voiceMap: {},
+      renderId: null,
+      readerUrl: null,
+      takes: [] // {label, blobUrl}
+    };
+
+    // ----- Helpers -----
+    const $ = (id) => document.getElementById(id);
+    const on = (id, evt, fn) => $(id).addEventListener(evt, fn);
+    const log = (box, text, cls='') => {
+      const div = $(box);
+      const p = document.createElement('div');
+      p.textContent = text;
+      if (cls) p.className = cls;
+      div.appendChild(p); div.scrollTop = div.scrollHeight;
+    };
+
+    async function api(method, path, body) {
+      const headers = { 'Content-Type': 'application/json' };
+      if (state.secret) headers['X-Shared-Secret'] = state.secret;
+      const res = await fetch(`${state.base}${path}`, {
+        method, headers, body: body ? JSON.stringify(body) : undefined
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error || res.statusText);
+      return json;
+    }
+
+    function setTab(name){
+      ['upload','assign','rehearse','record','gallery'].forEach(t=>{
+        $(`tab-${t}`).classList.toggle('hidden', t!==name);
+        document.querySelector(`.tabbtn[data-tab="${t}"]`).classList.toggle('active', t===name);
+      });
+    }
+
+    function uniq(arr){ return [...new Set(arr)]; }
+
+    function buildPartnersUI() {
+      const box = $('partnersBox'); box.innerHTML = '';
+      const partners = state.roles.filter(r => r !== state.myRole);
+      partners.forEach(name => {
+        const div = document.createElement('div');
+        div.className = 'item';
+        div.innerHTML = `
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+            <div><strong>${name}</strong><span class="pill">voice</span></div>
+            <input id="voice_${name}" value="alloy" style="max-width:240px">
+          </div>`;
+        box.appendChild(div);
+      });
+      if (partners.length === 0) {
+        const div = document.createElement('div');
+        div.className = 'muted-note';
+        div.textContent = 'No partner roles detected (stub parser returns UNKNOWN).';
+        box.appendChild(div);
+      }
+    }
+
+    function collectVoiceMap() {
+      const partners = state.roles.filter(r => r !== state.myRole);
+      const map = {};
+      if (partners.length === 0) { map['UNKNOWN'] = $('defaultVoice').value || 'alloy'; return map; }
+      partners.forEach(name => {
+        const el = document.getElementById(`voice_${name}`);
+        map[name] = (el?.value || $('defaultVoice').value || 'alloy').trim();
+      });
+      return map;
+    }
+
+    // ----- Tabs: Upload -----
+    on('btn-upload-continue','click', async ()=>{
+      $('btn-upload-continue').disabled = true; $('log-upload').innerHTML = '';
+      try{
+        log('log-upload', 'Health…');
+        const tts = await fetch(`${state.base}/health/tts`).then(r=>r.json());
+        log('log-upload', `TTS: provider=${tts.provider} has_key=${tts.has_key}`, 'ok');
+
+        const pdf = $('pdf').value.trim(); const title = $('title').value.trim();
+        log('log-upload','Uploading script…');
+        const up = await api('POST','/debug/upload_script',{ pdf_url: pdf, title });
+        state.scriptId = up.script_id;
+        log('log-upload', `script_id=${state.scriptId}`, 'ok');
+
+        log('log-upload','Fetching scenes…');
+        const sc = await api('GET', `/debug/scenes?script_id=${encodeURIComponent(state.scriptId)}`);
+        const scene = sc.scenes?.[0]; if(!scene) throw new Error('No scenes returned');
+        state.sceneId = scene.id;
+        const speakers = uniq((scene.lines||[]).map(l=>l.speaker).filter(Boolean));
+        state.roles = speakers.length ? speakers : ['UNKNOWN'];
+        $('scene-pill').textContent = `scene: ${state.sceneId}`;
+
+        // Populate role select
+        const sel = $('role'); sel.innerHTML = '';
+        state.roles.forEach(r=>{ const o=document.createElement('option'); o.value=r; o.textContent=r; sel.appendChild(o); });
+        state.myRole = sel.value;
+        buildPartnersUI();
+
+        setTab('assign');
+      }catch(e){ log('log-upload', `Error: ${e.message}`, 'err'); }
+      finally{ $('btn-upload-continue').disabled = false; }
+    });
+
+    // role change updates partner list
+    $('role').addEventListener('change', ()=>{ state.myRole = $('role').value; buildPartnersUI(); });
+
+    // Back/Continue in Assign
+    on('btn-assign-back','click',()=> setTab('upload'));
+    on('btn-assign-continue','click', async ()=>{
+      $('btn-assign-continue').disabled = true; $('log-assign').innerHTML = '';
+      try{
+        state.voiceMap = collectVoiceMap();
+        log('log-assign', 'Setting voices…');
+        await api('POST','/debug/set_voice',{ script_id: state.scriptId, voice_map: state.voiceMap });
+        log('log-assign', 'Voices set.', 'ok');
+        setTab('rehearse');
+      }catch(e){ log('log-assign', `Error: ${e.message}`,'err'); }
+      finally{ $('btn-assign-continue').disabled = false; }
+    });
+
+    // ----- Rehearse -----
+    on('btn-rehearse-back','click',()=> setTab('assign'));
+    on('btn-render','click', async ()=>{
+      $('btn-render').disabled = true; $('log-rehearse').innerHTML = ''; $('player').src='';
+      try{
+        log('log-rehearse','Rendering reader…');
+        const rr = await api('POST','/debug/render',{
+          script_id: state.scriptId, scene_id: state.sceneId, role: state.myRole, pace: 'normal'
+        });
+        if(!rr.render_id) throw new Error('No render_id from server');
+
+        let status='pending', url='';
+        while(status!=='complete'){
+          const st = await api('GET', `/debug/render_status?render_id=${encodeURIComponent(rr.render_id)}`);
+          status = st.status; url = st.download_url||'';
+          log('log-rehearse', `status=${status}`);
+          if(status!=='complete') await new Promise(r=>setTimeout(r,800));
+        }
+        state.readerUrl = `${state.base}${url}`;
+        $('player').src = state.readerUrl;
+        $('player').play().catch(()=>{});
+        log('log-rehearse','Ready to rehearse.','ok');
+      }catch(e){ log('log-rehearse', `Error: ${e.message}`,'err'); }
+      finally{ $('btn-render').disabled = false; }
+    });
+    on('btn-rehearse-next','click',()=> setTab('record'));
+
+    // ----- Record (local) -----
+    let mediaStream = null; let mediaRec = null; let chunks = [];
+    on('btn-record-back','click',()=> setTab('rehearse'));
+    on('btn-record-next','click',()=> setTab('gallery'));
+
+    on('btn-rec-start','click', async ()=>{
+      $('log-record').innerHTML = '';
+      try{
+        mediaStream = await navigator.mediaDevices.getUserMedia({ audio:true });
+        mediaRec = new MediaRecorder(mediaStream);
+        chunks = [];
+        mediaRec.ondataavailable = e => { if(e.data.size>0) chunks.push(e.data); };
+        mediaRec.onstop = ()=>{
+          const blob = new Blob(chunks, { type: 'audio/webm' });
+          const url = URL.createObjectURL(blob);
+          $('takePreview').src = url;
+          $('takePreview').play().catch(()=>{});
+          $('btn-save-take').disabled = false;
+        };
+        mediaRec.start();
+        $('btn-rec-start').disabled = true;
+        $('btn-rec-stop').disabled = false;
+        log('log-record','Recording… Speak your lines along with the reader track.');
+      }catch(e){ log('log-record', `Error: ${e.message}`, 'err'); }
+    });
+
+    on('btn-rec-stop','click', ()=>{
+      try{
+        mediaRec?.stop();
+        mediaStream?.getTracks().forEach(t=>t.stop());
+        $('btn-rec-start').disabled = false;
+        $('btn-rec-stop').disabled = true;
+        log('log-record','Stopped. Preview generated.','ok');
+      }catch{}
+    });
+
+    on('btn-save-take','click', ()=>{
+      const label = $('takeLabel').value.trim() || `Take ${state.takes.length+1}`;
+      const src = $('takePreview').src;
+      if(!src){ log('log-record','No take to save.','err'); return; }
+      state.takes.push({ label, url: src });
+      $('takeLabel').value = '';
+      $('btn-save-take').disabled = true;
+      refreshGallery();
+      setTab('gallery');
+    });
+
+    function refreshGallery(){
+      const list = $('takesList'); list.innerHTML = '';
+      state.takes.forEach((t,i)=>{
+        const div = document.createElement('div');
+        div.className = 'item';
+        div.innerHTML = `
+          <div style="display:flex;gap:10px;align-items:center;justify-content:space-between">
+            <div><strong>${t.label}</strong></div>
+            <div>
+              <a class="tabbtn" href="${t.url}" download="${t.label.replace(/\\s+/g,'_')}.webm">Download</a>
+            </div>
+          </div>
+          <audio controls src="${t.url}"></audio>
+        `;
+        list.appendChild(div);
+      });
+      if(!state.takes.length){
+        const p = document.createElement('div');
+        p.className = 'muted-note';
+        p.textContent = 'No takes yet. Record a take to see it here.';
+        list.appendChild(p);
+      }
+    }
+
+    // Tab buttons
+    document.querySelectorAll('.tabbtn').forEach(b=>{
+      b.addEventListener('click', ()=> setTab(b.dataset.tab));
+    });
+  </script>
+</body>
+</html>
