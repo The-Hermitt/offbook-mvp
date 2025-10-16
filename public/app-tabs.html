@@ -169,11 +169,11 @@ I didn’t go on purpose."></textarea>
   <!-- Bottom Tabs -->
   <div class="tabbar">
     <nav>
-      <a href="javascript:void(0)" class="active tabbtn" data-tab="import"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M20,8H4A2,2,0,0,0,2,10v8a2,2,0,0,0,2,2H20a2,2,0,0,0,2-2V10A2,2,0,0,0,20,8Zm0,10H4V10H20Z"/><rect x="6" y="12" width="6" height="2"/><rect x="14" y="12" width="4" height="2"/></svg><span>Import</span></a>
+      <a href="javascript:void(0)" class="active tabbtn" data-tab="import"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M20,8H4A2,2,0,0,0,2,10v8a2,2,0,0,0,2,2H20a2,2,0,0,0,2-2V10A2,2,0,0,0,20,8Zm0,10H4V10H20Z"/></svg><span>Import</span></a>
       <a href="javascript:void(0)" class="tabbtn" data-tab="assign"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12,12a5,5,0,1,0-5-5A5,5,0,0,0,12,12Zm0,2c-4,0-8,2-8,6v2H20V20C20,16,16,14,12,14Z"/></svg><span>Assign</span></a>
       <a href="javascript:void(0)" class="tabbtn" data-tab="rehearse"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8,5.14V19.14L19,12.14Z"/></svg><span>Rehearse</span></a>
       <a href="javascript:void(0)" class="tabbtn" data-tab="record"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="4"/><path d="M19,10v2a7,7,0,0,1-14,0V10H3v2a9,9,0,0,0,18,0V10Z"/></svg><span>Record</span></a>
-      <a href="javascript:void(0)" class="tabbtn" data-tab="gallery"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M21,3H3A2,2,0,0,0,1,5V19a2,2,0,0,0,2,2H21a2,2,0,0,0,2-2V5A2,2,0,0,0,21,3Zm0,16H3V5H21Z"/><circle cx="8" cy="8" r="1.5"/></svg><span>Gallery</span></a>
+      <a href="javascript:void(0)" class="tabbtn" data-tab="gallery"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M21,3H3A2,2,0,0,0,1,5V19a2,2,0,0,0,2,2H21a2,2,0,0,0,2-2V5A2,2,0,0,0,21,3Zm0,16H3V5H21Z"/></svg><span>Gallery</span></a>
       <a href="javascript:void(0)" class="tabbtn" data-tab="settings"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M19.14,12.94a7.49,7.49,0,0,0,.06-1,7.49,7.49,0,0,0-.06-1l2-1.55-2-3.46-2.35.94a7.43,7.43,0,0,0-1.73-1L15.5,2h-4L10.94,4.87a7.43,7.43,0,0,0-1.73,1L6.86,4.94,4.5,8.4l2,1.55a7.49,7.49,0,0,0-.06,1,7.49,7.49,0,0,0,.06,1L4.5,13.5l2.36,3.46,2.35-.94a7.43,7.43,0,0,0,1.73,1L11.5,22h4l.56-2.87a7.43,7.43,0,0,0,1.73-1l2.35.94,2-3.46Z"/><circle cx="12" cy="12" r="3" fill="#0b0f14"/></svg><span>Settings</span></a>
     </nav>
   </div>
@@ -261,11 +261,18 @@ I didn’t go on purpose."></textarea>
     async function afterImport(up){
       state.scriptId = up.script_id;
       const sc = await api('GET', `/debug/scenes?script_id=${encodeURIComponent(state.scriptId)}`);
-      const scene = sc.scenes?.[0];
+      let scene = sc.scenes?.[0];
       if (!scene) throw new Error('No scenes returned from parser');
 
+      // Primary roles from server
       state.sceneId = scene.id;
-      state.lines = scene.lines || [];
+      state.lines   = Array.isArray(scene.lines) ? scene.lines : [];
+
+      // Repair pass if roles missing or only UNKNOWN
+      const repair = repairSceneIfNeeded(state.lines);
+      if (repair.applied) {
+        state.lines = repair.lines;
+      }
 
       const rawRoles = uniq(state.lines.map(l=>l.speaker).filter(Boolean));
       state.roles = cleanRoles(rawRoles);
@@ -279,6 +286,37 @@ I didn’t go on purpose."></textarea>
 
       buildPartnersUI();
       setTab('assign');
+    }
+
+    // ---------- Client-side repair for UNKNOWN roles ----------
+    function repairSceneIfNeeded(lines){
+      const roles = uniq((lines||[]).map(l => (l?.speaker||'').trim()).filter(Boolean));
+      const onlyUnknown = roles.length===0 || (roles.length===1 && roles[0]==='UNKNOWN');
+
+      if (!onlyUnknown) return { applied:false, lines };
+
+      const repaired = [];
+      const nameRe = /^\s*([A-Z][A-Z0-9 .,'\-]{1,30})(?:\s*\([^)]*\))?\s*:\s*(.+)$/;
+
+      for (const l of (lines||[])) {
+        let speaker = (l?.speaker||'').trim();
+        let text    = String(l?.text||'').trim();
+        if ((speaker==='' || speaker==='UNKNOWN') && nameRe.test(text)) {
+          const m = text.match(nameRe);
+          const name = (m?.[1]||'').trim();
+          const rest = (m?.[2]||'').trim();
+          if (name && /[A-Z]/.test(name) && !/[a-z]/.test(name) && rest) {
+            speaker = name;
+            text = rest;
+          }
+        }
+        repaired.push({ speaker: speaker || 'UNKNOWN', text });
+      }
+
+      // If we still have nothing but UNKNOWN, bail
+      const rRoles = uniq(repaired.map(x=>x.speaker).filter(Boolean));
+      const ok = rRoles.some(r => r !== 'UNKNOWN');
+      return { applied: ok, lines: repaired };
     }
 
     function cleanRoles(rs){
