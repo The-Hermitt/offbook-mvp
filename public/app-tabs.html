@@ -15,8 +15,7 @@
     label{display:block;font-weight:600;margin:10px 0 6px}
     input,select,textarea{
       width:100%; padding:12px; border:1px solid var(--line); border-radius:12px; background:#0e1622; color:var(--fg);
-      min-height:46px; /* make select same height as inputs on iOS */
-      -webkit-appearance:none; appearance:none;
+      min-height:46px; -webkit-appearance:none; appearance:none;
     }
     input::placeholder,textarea::placeholder{color:#6b7280}
     textarea{min-height:160px;resize:vertical}
@@ -221,6 +220,29 @@ I didn’t go on purpose."></textarea>
     const showLog = (box, text, cls='') => { const d=$(box); d.style.display='block'; const p=document.createElement('div'); p.textContent=text; if(cls)p.className=cls; d.appendChild(p); d.scrollTop=d.scrollHeight; };
     const uniq = (a) => [...new Set(a)];
 
+    // server call helper
+    async function api(method, path, body, isFormData=false){
+      const headers = isFormData ? {} : { 'Content-Type': 'application/json' };
+      if (state.secret) headers['X-Shared-Secret'] = state.secret;
+      const res = await fetch(`${state.base}${path}`, { method, headers, body: isFormData ? body : (body ? JSON.stringify(body) : undefined) });
+      const json = await res.json().catch(()=>({}));
+      if (!res.ok) throw new Error(json.error || res.statusText);
+      return json;
+    }
+
+    // role cleaner (client-side safety net)
+    function cleanRoles(rs){
+      return uniq((rs||[])
+        .filter(Boolean)
+        .map(r=>String(r).trim())
+        .filter(r => r !== 'UNKNOWN')
+        .filter(r => /[A-Za-z]/.test(r))                // must contain a letter
+        .filter(r => !/^\d{1,4}$/.test(r))              // no pure page numbers
+        .filter(r => !/^(INT|EXT|SCENE)\b/.test(r))     // not scene heads
+        .filter(r => !/^CONT'?D$/.test(r))              // not CONT'D
+      );
+    }
+
     function setTab(name){
       ['import','assign','rehearse','record','gallery'].forEach(t=>{
         const card = document.getElementById(`tab-${t}`);
@@ -229,14 +251,6 @@ I didn’t go on purpose."></textarea>
         document.querySelectorAll('.tabbtn').forEach(b=> b.classList.toggle('active', b.dataset.tab===name));
       });
       if (name==='rehearse') ensurePrepared();
-    }
-    async function api(method, path, body, isFormData=false){
-      const headers = isFormData ? {} : { 'Content-Type': 'application/json' };
-      if (state.secret) headers['X-Shared-Secret'] = state.secret;
-      const res = await fetch(`${state.base}${path}`, { method, headers, body: isFormData ? body : (body ? JSON.stringify(body) : undefined) });
-      const json = await res.json().catch(()=>({}));
-      if (!res.ok) throw new Error(json.error || res.statusText);
-      return json;
     }
 
     // chips
@@ -281,11 +295,20 @@ I didn’t go on purpose."></textarea>
       state.scriptId = up.script_id;
       const sc = await api('GET', `/debug/scenes?script_id=${encodeURIComponent(state.scriptId)}`);
       const scene = sc.scenes?.[0]; if(!scene) throw new Error('No scenes returned');
-      state.sceneId = scene.id; state.lines = scene.lines || [];
-      state.roles = uniq(state.lines.map(l=>l.speaker).filter(Boolean)); if(!state.roles.length) state.roles=['UNKNOWN'];
+
+      state.sceneId = scene.id;
+      state.lines = scene.lines || [];
+
+      // roles from lines, then clean
+      const rawRoles = uniq(state.lines.map(l=>l.speaker).filter(Boolean));
+      state.roles = cleanRoles(rawRoles);
+      if (!state.roles.length) state.roles = ['UNKNOWN'];
+
       $('scene-pill').textContent = `scene: ${state.sceneId}`;
       const sel = $('role'); sel.innerHTML = ''; state.roles.forEach(r=>{ const o=document.createElement('option'); o.value=r; o.textContent=r; sel.appendChild(o); });
-      state.myRole = sel.value; buildPartnersUI(); setTab('assign');
+      state.myRole = sel.value;
+      buildPartnersUI();
+      setTab('assign');
     }
 
     // ASSIGN
@@ -297,13 +320,15 @@ I didn’t go on purpose."></textarea>
       const defaultVoice=$('defaultVoice').value || 'alloy';
       const partners=(state.roles||[]).filter(r=>r!==state.myRole);
       if(!partners.length){
-        const div=document.createElement('div'); div.className='item'; div.innerHTML='<span class="muted">No partner roles detected. Try a different script format or paste text like:<br><br><code>JANE: Hello there.</code></span>';
+        const div=document.createElement('div');
+        div.className='item';
+        div.innerHTML='<span class="muted">No partner roles detected. Try a script format like:<br><br><code>JANE: Hello there.</code></span>';
         box.appendChild(div);
       } else {
         partners.forEach(name=>{
           const div=document.createElement('div'); div.className='item';
           div.innerHTML=`<div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
-            <div><strong>${name}</strong></div>
+            <div style="font-weight:800">${name}</div>
             <input id="voice_${name}" value="${defaultVoice}" style="max-width:220px">
           </div>`;
           box.appendChild(div);
