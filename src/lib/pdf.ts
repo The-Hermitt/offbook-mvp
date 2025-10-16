@@ -1,9 +1,9 @@
 // @ts-nocheck
 // src/lib/pdf.ts
 //
-// PDF/text parsing with safe fallback.
-// Detects scenes and speakers; returns only DIALOGUE lines.
-// Skips: scene headings (INT./EXT./SCENE...), action blocks, and parentheticals.
+// Robust-ish PDF/text parser with safe fallback.
+// Emits DIALOGUE only; skips scene headings, parentheticals, all-caps action,
+// page numbers, and common footer/header junk.
 //
 // Public API:
 //   - parseScript(pdf_url)
@@ -107,9 +107,11 @@ function normalizeWhitespace(s: string): string {
 
 const SCENE_HEAD_RE = /^(?:INT\.|EXT\.|I\/E\.|INT\/EXT\.|SCENE\b|SCENE\s+\d+)/i;
 const ALLCAPS_RE = /^[A-Z0-9 .,'\-]+$/;
+const ONLY_DIGITS_RE = /^\d{1,4}$/;
+
 const STOP_NAMES = new Set([
   'INT', 'EXT', 'SCENE', 'CUT TO', 'FADE IN', 'FADE OUT', 'DISSOLVE TO',
-  'SMASH CUT', 'ANGLE ON', 'CONT\'D', 'CONT’D', 'CONTINUED'
+  'SMASH CUT', 'ANGLE ON', "CONT'D", 'CONT’D', 'CONTINUED'
 ]);
 
 function isSceneHeading(line: string): boolean {
@@ -119,17 +121,39 @@ function isParenthetical(line: string): boolean {
   const t = line.trim();
   return t.startsWith('(') && t.endsWith(')');
 }
+function isLikelyPageNumber(line: string): boolean {
+  return ONLY_DIGITS_RE.test(line.trim());
+}
+function isFooterHeader(line: string): boolean {
+  const t = line.toLowerCase();
+  return (
+    t.includes('actors access') ||
+    t.includes('breakdown services') ||
+    t.startsWith('page ') ||
+    t.includes('©') ||
+    t.includes('copyright') ||
+    t.includes('www.') ||
+    t.includes('http://') || t.includes('https://')
+  );
+}
+function isNoiseLine(line: string): boolean {
+  const t = line.trim();
+  if (!t) return true;
+  return isLikelyPageNumber(t) || isFooterHeader(t);
+}
 function cleanName(line: string): string {
   return line.replace(/\s*\([^)]*\)\s*/g, '').trim();
 }
 function looksLikeSpeakerName(name: string): boolean {
   if (!name) return false;
-  if (name.length < 2 || name.length > 30) return false;
-  const upperish = ALLCAPS_RE.test(name) && !/[a-z]/.test(name);
-  if (!upperish) return false;
   const base = name.replace(/\s+/g, ' ').trim();
+  if (base.length < 2 || base.length > 30) return false;
+  // must be mostly uppercase and contain at least one letter
+  const upperish = ALLCAPS_RE.test(base) && !/[a-z]/.test(base) && /[A-Z]/.test(base);
+  if (!upperish) return false;
   if (STOP_NAMES.has(base)) return false;
   if (SCENE_HEAD_RE.test(base)) return false;
+  if (ONLY_DIGITS_RE.test(base)) return false; // reject "43" etc.
   return true;
 }
 
@@ -147,8 +171,11 @@ function analyzeScriptText(rawInput: string): Scene[] {
   const raw = normalizeWhitespace(rawInput || '');
   if (!raw) return [];
 
-  // Split to lines and also keep original order
-  const lines = raw.split(/\n+/).map(l => l.trim()).filter(Boolean);
+  // Split to lines, drop obvious noise early
+  const lines = raw
+    .split(/\n+/)
+    .map(l => l.trim())
+    .filter(l => l && !isNoiseLine(l));
 
   // Partition into scenes first
   const sceneStarts: number[] = [];
@@ -179,8 +206,11 @@ function buildScene(id: string, title: string, chunk: string[]): Scene {
 
   const flush = () => {
     if (currentSpeaker && buf.length) {
-      // Drop parenthetical-only lines from buffer
-      const spoken = buf.filter(l => !isParenthetical(l) && !isSceneHeading(l) && hasAnyLower(l));
+      const spoken = buf.filter(l =>
+        !isParenthetical(l) &&
+        !isSceneHeading(l) &&
+        hasAnyLower(l)
+      );
       const text = spoken.join(' ').replace(/\s{2,}/g,' ').trim();
       if (text) out.push({ speaker: currentSpeaker, text });
     }
@@ -189,7 +219,7 @@ function buildScene(id: string, title: string, chunk: string[]): Scene {
 
   function startsNewSpeaker(i: number): string | null {
     const line = chunk[i] || '';
-    if (!line) return null;
+    if (!line || isNoiseLine(line)) return null;
 
     // "NAME: Dialogue"
     const colonMatch = line.match(/^([A-Z0-9 .,'\-]{2,30})\s*:?\s*(.*)$/);
@@ -197,15 +227,14 @@ function buildScene(id: string, title: string, chunk: string[]): Scene {
       const name = cleanName(colonMatch[1]);
       const rest = (colonMatch[2] || '').trim();
       if (looksLikeSpeakerName(name)) {
-        // Either colon form or name alone with dialogue on next line
-        if (rest && hasAnyLower(rest)) return name;
-        // Peek next non-empty line for dialogue signal
+        if (rest && hasAnyLower(rest) && !isParenthetical(rest)) return name;
+        // Peek next few lines for dialogue signal
         for (let j=i+1; j<Math.min(i+4, chunk.length); j++){
           const nxt = (chunk[j] || '').trim();
-          if (!nxt) continue;
+          if (!nxt || isNoiseLine(nxt)) continue;
           if (isParenthetical(nxt)) return name; // (beat)
           if (hasAnyLower(nxt)) return name;     // actual dialogue
-          break;
+          if (isSceneHeading(nxt)) break;
         }
       }
     }
@@ -214,7 +243,7 @@ function buildScene(id: string, title: string, chunk: string[]): Scene {
 
   for (let i=0;i<chunk.length;i++){
     const line = (chunk[i] || '').trim();
-    if (!line) continue;
+    if (!line || isNoiseLine(line)) continue;
 
     // New scene header resets any speaker
     if (isSceneHeading(line)) { flush(); currentSpeaker = null; continue; }
@@ -224,19 +253,18 @@ function buildScene(id: string, title: string, chunk: string[]): Scene {
       // commit previous
       flush();
       currentSpeaker = maybe;
-      // If the same line contains text after "NAME:" capture it
+      // capture text after "NAME:" on the same line
       const after = line.replace(/^([A-Z0-9 .,'\-]{2,30})(?:\s*\([^)]*\))?\s*:?\s*/, '').trim();
       if (after && hasAnyLower(after) && !isParenthetical(after)) buf.push(after);
       continue;
     }
 
-    // If we have a speaker, buffer likely dialogue; skip parentheticals & all-caps actions
+    // If we have a speaker, buffer likely dialogue; skip parentheticals & all-caps action
     if (currentSpeaker) {
       if (isParenthetical(line)) continue;
       if (isAllCapsAction(line)) continue;
       if (hasAnyLower(line)) { buf.push(line); continue; }
-      // If it's another all-caps line without lowercase and not a header, it's probably action → skip
-      continue;
+      continue; // ignore remaining all-caps action/noise
     }
 
     // Outside a speech block → ignore (action)
@@ -254,6 +282,5 @@ function isAllCapsAction(s: string): boolean {
   if (!t) return false;
   if (isSceneHeading(t)) return false;
   if (isParenthetical(t)) return false;
-  // All caps and reasonably long → likely action or slug
   return ALLCAPS_RE.test(t) && !/[a-z]/.test(t);
 }
