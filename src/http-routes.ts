@@ -14,6 +14,7 @@ import path from 'path';
 import fs from 'fs';
 import { nanoid } from 'nanoid';
 import { z } from 'zod';
+import { parseScript, parseStub } from './lib/pdf';
 
 type Scene = { id: string; title: string; lines: Array<{ speaker: string; text: string }> };
 type ScriptRec = { id: string; title: string; scenes: Scene[]; voice_map: Record<string, string> };
@@ -37,20 +38,6 @@ const RenderSchema = z.object({
   pace: z.enum(['slow', 'normal', 'fast']).default('normal'),
 });
 const StatusSchema = z.object({ render_id: z.string().min(1) });
-
-// --- Stub parser (stable for MVP)
-async function parseStub(_pdf_url: string): Promise<Scene[]> {
-  return [
-    {
-      id: 'scene-1',
-      title: 'Stub Scene',
-      lines: [
-        { speaker: 'UNKNOWN', text: 'Hello there.' },
-        { speaker: 'UNKNOWN', text: 'This is a stub line for MVP.' },
-      ],
-    },
-  ];
-}
 
 // --- TTS (OpenAI if key present; tiny stub otherwise)
 async function synthesizeMp3(text: string, voice: string): Promise<Buffer> {
@@ -81,7 +68,15 @@ const router = Router();
 router.post('/upload_script', async (req, res) => {
   try {
     const { pdf_url, title } = UploadSchema.parse(req.body || {});
-    const scenes = await parseStub(pdf_url);
+
+    // Try real parser, fallback to stub
+    let scenes: Scene[];
+    try {
+      scenes = await parseScript(pdf_url);
+    } catch {
+      scenes = await parseStub(pdf_url);
+    }
+
     const id = nanoid();
     mem.scripts.set(id, { id, title, scenes, voice_map: {} });
     res.json({ script_id: id, title, scene_count: scenes.length });
@@ -125,8 +120,13 @@ router.post('/render', async (req, res) => {
     const render: RenderRec = { id: render_id, script_id, scene_id, status: 'pending' };
     mem.renders.set(render_id, render);
 
-    const partnerLines = scene.lines.filter((l) => l.speaker !== role).map((l) => l.text).join(' ');
-    const voice = rec.voice_map['UNKNOWN'] || 'alloy';
+    const partnerLines = scene.lines
+      .filter((l) => l.speaker !== role)
+      .map((l) => l.text)
+      .join(' ');
+
+    // pick a voice: prefer the speaker-specific, else UNKNOWN, else alloy
+    const voice = rec.voice_map[role] || rec.voice_map['UNKNOWN'] || 'alloy';
     const buf = await synthesizeMp3(partnerLines || 'Partner lines are empty.', voice);
 
     const dir = ensureRenderDir();
