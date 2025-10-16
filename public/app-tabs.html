@@ -5,7 +5,7 @@
   <title>OffBook – Rehearsal MVP</title>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <style>
-    :root { --bg:#0b0f14; --card:#111826; --fg:#f5f7fb; --muted:#98a2b3; --line:#1f2a37; --accent:#3b82f6; --good:#22c55e; --chip:#1b2430; }
+    :root { --bg:#0b0f14; --card:#111826; --fg:#f5f7fb; --muted:#98a2b3; --line:#1f2a37; --accent:#3b82f6; }
     *{box-sizing:border-box}
     body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.55 system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif}
     .wrap{max-width:900px;margin:12px auto 84px;padding:0 16px}
@@ -13,10 +13,7 @@
     h1{font-size:24px;margin:6px 0 8px}
     p.muted{margin:0 0 14px;color:var(--muted)}
     label{display:block;font-weight:600;margin:10px 0 6px}
-    input,select,textarea{
-      width:100%; padding:12px; border:1px solid var(--line); border-radius:12px; background:#0e1622; color:var(--fg);
-      min-height:46px; -webkit-appearance:none; appearance:none;
-    }
+    input,select,textarea{width:100%;padding:12px;border:1px solid var(--line);border-radius:12px;background:#0e1622;color:var(--fg);min-height:46px}
     input::placeholder,textarea::placeholder{color:#6b7280}
     textarea{min-height:160px;resize:vertical}
     .row{display:grid;gap:12px}
@@ -27,7 +24,7 @@
     .topbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
     .list{display:grid;gap:10px;margin-top:8px}
     .item{padding:10px;border:1px solid var(--line);border-radius:12px;background:#0e1622}
-    audio,video{width:100%;margin-top:10px}
+    audio{width:100%;margin-top:10px}
     .chips{display:flex;gap:8px;flex-wrap:wrap;margin:6px 0 2px}
     .chip{padding:8px 10px;border:1px solid var(--line);border-radius:999px;background:#0e1622;cursor:pointer}
     .chip.active{background:var(--accent);border-color:var(--accent);color:#fff}
@@ -110,8 +107,8 @@ I didn’t go on purpose."></textarea>
       <div class="topbar">
         <h1>Rehearse</h1>
         <div>
-          <span style="margin-right:8px;color:var(--muted);font-weight:600">Auto-cue</span>
-          <label style="display:inline-flex;gap:8px;align-items:center;user-select:none"><input id="uiOnly" type="checkbox" checked> <span class="pill">UI only</span></label>
+          <span class="pill" id="role-pill">Role: —</span>
+          <span class="pill" id="line-pill">Line —/—</span>
         </div>
       </div>
 
@@ -172,66 +169,116 @@ I didn’t go on purpose."></textarea>
   <!-- Bottom Tabs -->
   <div class="tabbar">
     <nav>
-      <a href="javascript:void(0)" class="active tabbtn" data-tab="import" aria-label="Import">
-        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M20,8H4A2,2,0,0,0,2,10v8a2,2,0,0,0,2,2H20a2,2,0,0,0,2-2V10A2,2,0,0,0,20,8Zm0,10H4V10H20Z"/><rect x="6" y="12" width="6" height="2"/><rect x="14" y="12" width="4" height="2"/></svg>
-        <span>Import</span>
-      </a>
-      <a href="javascript:void(0)" class="tabbtn" data-tab="assign" aria-label="Assign">
-        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12,12a5,5,0,1,0-5-5A5,5,0,0,0,12,12Zm0,2c-4,0-8,2-8,6v2H20V20C20,16,16,14,12,14Z"/></svg>
-        <span>Assign</span>
-      </a>
-      <a href="javascript:void(0)" class="tabbtn" data-tab="rehearse" aria-label="Rehearse">
-        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8,5.14V19.14L19,12.14Z"/></svg>
-        <span>Rehearse</span>
-      </a>
-      <a href="javascript:void(0)" class="tabbtn" data-tab="record" aria-label="Record">
-        <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="4"/><path d="M19,10v2a7,7,0,0,1-14,0V10H3v2a9,9,0,0,0,18,0V10Z"/></svg>
-        <span>Record</span>
-      </a>
-      <a href="javascript:void(0)" class="tabbtn" data-tab="gallery" aria-label="Gallery">
-        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M21,3H3A2,2,0,0,0,1,5V19a2,2,0,0,0,2,2H21a2,2,0,0,0,2-2V5A2,2,0,0,0,21,3Zm0,16H3V5H21Z"/><circle cx="8" cy="8" r="1.5"/></svg>
-        <span>Gallery</span>
-      </a>
-      <a href="javascript:void(0)" class="tabbtn" data-tab="settings" aria-label="Settings">
-        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M19.14,12.94a7.49,7.49,0,0,0,.06-1,7.49,7.49,0,0,0-.06-1l2-1.55-2-3.46-2.35.94a7.43,7.43,0,0,0-1.73-1L15.5,2h-4L10.94,4.87a7.43,7.43,0,0,0-1.73,1L6.86,4.94,4.5,8.4l2,1.55a7.49,7.49,0,0,0-.06,1,7.49,7.49,0,0,0,.06,1L4.5,13.5l2.36,3.46,2.35-.94a7.43,7.43,0,0,0,1.73,1L11.5,22h4l.56-2.87a7.43,7.43,0,0,0,1.73-1l2.35.94,2-3.46Z"/><circle cx="12" cy="12" r="3" fill="#0b0f14"/></svg>
-        <span>Settings</span>
-      </a>
+      <a href="javascript:void(0)" class="active tabbtn" data-tab="import"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M20,8H4A2,2,0,0,0,2,10v8a2,2,0,0,0,2,2H20a2,2,0,0,0,2-2V10A2,2,0,0,0,20,8Zm0,10H4V10H20Z"/><rect x="6" y="12" width="6" height="2"/><rect x="14" y="12" width="4" height="2"/></svg><span>Import</span></a>
+      <a href="javascript:void(0)" class="tabbtn" data-tab="assign"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12,12a5,5,0,1,0-5-5A5,5,0,0,0,12,12Zm0,2c-4,0-8,2-8,6v2H20V20C20,16,16,14,12,14Z"/></svg><span>Assign</span></a>
+      <a href="javascript:void(0)" class="tabbtn" data-tab="rehearse"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8,5.14V19.14L19,12.14Z"/></svg><span>Rehearse</span></a>
+      <a href="javascript:void(0)" class="tabbtn" data-tab="record"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="4"/><path d="M19,10v2a7,7,0,0,1-14,0V10H3v2a9,9,0,0,0,18,0V10Z"/></svg><span>Record</span></a>
+      <a href="javascript:void(0)" class="tabbtn" data-tab="gallery"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M21,3H3A2,2,0,0,0,1,5V19a2,2,0,0,0,2,2H21a2,2,0,0,0,2-2V5A2,2,0,0,0,21,3Zm0,16H3V5H21Z"/><circle cx="8" cy="8" r="1.5"/></svg><span>Gallery</span></a>
+      <a href="javascript:void(0)" class="tabbtn" data-tab="settings"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M19.14,12.94a7.49,7.49,0,0,0,.06-1,7.49,7.49,0,0,0-.06-1l2-1.55-2-3.46-2.35.94a7.43,7.43,0,0,0-1.73-1L15.5,2h-4L10.94,4.87a7.43,7.43,0,0,0-1.73,1L6.86,4.94,4.5,8.4l2,1.55a7.49,7.49,0,0,0-.06,1,7.49,7.49,0,0,0,.06,1L4.5,13.5l2.36,3.46,2.35-.94a7.43,7.43,0,0,0,1.73,1L11.5,22h4l.56-2.87a7.43,7.43,0,0,0,1.73-1l2.35.94,2-3.46Z"/><circle cx="12" cy="12" r="3" fill="#0b0f14"/></svg><span>Settings</span></a>
     </nav>
   </div>
 
   <script>
+    // ---------- State ----------
+    const params = new URLSearchParams(location.search);
     const state = {
-      base: window.location.origin,
-      secret: new URLSearchParams(location.search).get('secret') || '',
-      scriptId: null, sceneId: null, roles: [], myRole: null,
-      voiceMap: {}, readerUrl: null, lines: [], currentLine: 1,
-      takes: []
+      base: location.origin,
+      secret: params.get('secret') || '',
+      scriptId: '', sceneId: '',
+      roles: [], myRole: '',
+      lines: [], currentLine: 1,
+      voiceMap: {}, takes: []
     };
-
     const $ = (id) => document.getElementById(id);
+    const uniq = (a)=>[...new Set(a)];
+    const showLog=(box,msg,cls='')=>{const d=$(box);d.style.display='block';const p=document.createElement('div');p.textContent=msg;p.className=cls;d.appendChild(p);d.scrollTop=d.scrollHeight;};
 
-    // Available AI voice presets
-    const VOICE_PRESETS = [
-      { id: 'alloy', label: 'Alloy' },
-      { id: 'verse', label: 'Verse' },
-      { id: 'coral', label: 'Coral' },
-      { id: 'ash', label: 'Ash' },
-      { id: 'lira', label: 'Lira' },
-      { id: 'amber', label: 'Amber' },
-      { id: 'slate', label: 'Slate' }
-    ];
-
-    const showLog = (box, text, cls='') => { const d=$(box); d.style.display='block'; const p=document.createElement('div'); p.textContent=text; p.className=cls; d.appendChild(p); d.scrollTop=d.scrollHeight; };
-    const uniq = (a) => [...new Set(a)];
-
-    // server call helper
+    // ---------- API ----------
     async function api(method, path, body, isFormData=false){
-      const headers = isFormData ? {} : { 'Content-Type': 'application/json' };
-      if (state.secret) headers['X-Shared-Secret'] = state.secret;
-      const res = await fetch(`${state.base}${path}`, { method, headers, body: isFormData ? body : (body ? JSON.stringify(body) : undefined) });
+      const headers = isFormData ? {} : {'Content-Type':'application/json'};
+      if (state.secret) headers['X-Shared-Secret']=state.secret;
+      const res = await fetch(`${state.base}${path}`, { method, headers, body: isFormData?body:(body?JSON.stringify(body):undefined) });
       const json = await res.json().catch(()=>({}));
       if (!res.ok) throw new Error(json.error || res.statusText);
       return json;
+    }
+
+    // ---------- Tabs ----------
+    function setTab(name){
+      ['import','assign','rehearse','record','gallery'].forEach(t=>{
+        const card=$(`tab-${t}`); if(!card) return;
+        card.classList.toggle('hidden', t!==name);
+        document.querySelectorAll('.tabbtn').forEach(b=>b.classList.toggle('active', b.dataset.tab===name));
+      });
+      if (name==='rehearse') ensurePrepared();
+    }
+    document.querySelectorAll('.tabbtn').forEach(b=>{
+      b.addEventListener('click', ()=>{
+        const t=b.dataset.tab;
+        if (t==='settings') { alert('Settings coming soon'); return; }
+        setTab(t);
+      });
+    });
+
+    // ---------- Import chips ----------
+    document.querySelectorAll('.chip').forEach(ch=>{
+      ch.addEventListener('click', ()=>{
+        document.querySelectorAll('.chip').forEach(x=>x.classList.remove('active'));
+        ch.classList.add('active');
+        const mode=ch.dataset.mode;
+        $('import-paste').classList.toggle('hidden', mode!=='paste');
+        $('import-upload').classList.toggle('hidden', mode!=='upload');
+        $('log-import').style.display='none'; $('log-import').innerHTML='';
+      });
+    });
+
+    // ---------- Import: Paste ----------
+    $('btn-import-paste').onclick = async ()=>{
+      $('btn-import-paste').disabled=true; $('log-import').style.display='none'; $('log-import').innerHTML='';
+      try{
+        const text=$('paste').value.trim(), title=$('title-paste').value.trim();
+        if (!text) throw new Error('Please paste your script text first.');
+        const up = await api('POST','/debug/upload_script_text',{ text, title });
+        await afterImport(up);
+      }catch(e){ showLog('log-import',`Error: ${e.message}`,'err'); }
+      finally{ $('btn-import-paste').disabled=false; }
+    };
+
+    // ---------- Import: Upload PDF ----------
+    $('btn-import-upload').onclick = async ()=>{
+      $('btn-import-upload').disabled=true; $('log-import').style.display='none'; $('log-import').innerHTML='';
+      try{
+        const f=$('file').files[0]; if(!f) throw new Error('Choose a PDF file first.');
+        const title=$('title-upload').value.trim();
+        const fd=new FormData(); fd.append('pdf',f); fd.append('title',title);
+        const up = await api('POST','/debug/upload_script_upload', fd, true);
+        await afterImport(up);
+      }catch(e){ showLog('log-import',`Error: ${e.message}`,'err'); }
+      finally{ $('btn-import-upload').disabled=false; }
+    };
+
+    // ---------- After Import → Assign ----------
+    async function afterImport(up){
+      state.scriptId = up.script_id;
+      const sc = await api('GET', `/debug/scenes?script_id=${encodeURIComponent(state.scriptId)}`);
+      const scene = sc.scenes?.[0];
+      if (!scene) throw new Error('No scenes returned from parser');
+
+      state.sceneId = scene.id;
+      state.lines = scene.lines || [];
+
+      const rawRoles = uniq(state.lines.map(l=>l.speaker).filter(Boolean));
+      state.roles = cleanRoles(rawRoles);
+      if (!state.roles.length) state.roles = ['UNKNOWN'];
+
+      $('scene-pill').textContent = `scene: ${state.sceneId}`;
+
+      const sel=$('role'); sel.innerHTML='';
+      state.roles.forEach(r=>{ const o=document.createElement('option'); o.value=r; o.textContent=r; sel.appendChild(o); });
+      state.myRole = sel.value;
+
+      buildPartnersUI();
+      setTab('assign');
     }
 
     function cleanRoles(rs){
@@ -246,93 +293,33 @@ I didn’t go on purpose."></textarea>
       );
     }
 
-    function setTab(name){
-      ['import','assign','rehearse','record','gallery'].forEach(t=>{
-        const card = document.getElementById(`tab-${t}`);
-        if (!card) return;
-        card.classList.toggle('hidden', t!==name);
-        document.querySelectorAll('.tabbtn').forEach(b=> b.classList.toggle('active', b.dataset.tab===name));
-      });
-      if (name==='rehearse') ensurePrepared();
-    }
+    const VOICE_PRESETS = [
+      { id:'alloy', label:'Alloy' },
+      { id:'verse', label:'Verse' },
+      { id:'coral', label:'Coral' },
+      { id:'ash',   label:'Ash' },
+      { id:'lira',  label:'Lira' },
+      { id:'amber', label:'Amber' },
+      { id:'slate', label:'Slate' }
+    ];
 
-    // chips
-    document.querySelectorAll('.chip').forEach(ch=>{
-      ch.addEventListener('click', ()=>{
-        document.querySelectorAll('.chip').forEach(x=>x.classList.remove('active'));
-        ch.classList.add('active');
-        const mode = ch.dataset.mode;
-        $('import-paste').classList.toggle('hidden', mode!=='paste');
-        $('import-upload').classList.toggle('hidden', mode!=='upload');
-        $('log-import').style.display='none'; $('log-import').innerHTML='';
-      });
-    });
-
-    // IMPORT: Paste
-    $('btn-import-paste').onclick = async ()=>{
-      $('btn-import-paste').disabled = true; $('log-import').style.display='none'; $('log-import').innerHTML='';
-      try{
-        const text=$('paste').value.trim(), title=$('title-paste').value.trim();
-        if (!text) throw new Error('Please paste your script text first.');
-        const up = await api('POST','/debug/upload_script_text',{ text, title });
-        await afterImport(up);
-      }catch(e){ showLog('log-import',`Error: ${e.message}`,'err'); }
-      finally{ $('btn-import-paste').disabled = false; }
-    };
-
-    // IMPORT: Upload
-    $('btn-import-upload').onclick = async ()=>{
-      $('btn-import-upload').disabled = true; $('log-import').style.display='none'; $('log-import').innerHTML='';
-      try{
-        const f = $('file').files[0]; if (!f) throw new Error('Choose a PDF file first.');
-        const title = $('title-upload').value.trim();
-        const fd = new FormData(); fd.append('pdf', f); fd.append('title', title);
-        const up = await api('POST','/debug/upload_script_upload', fd, true);
-        await afterImport(up);
-      }catch(e){ showLog('log-import',`Error: ${e.message}`,'err'); }
-      finally{ $('btn-import-upload').disabled = false; }
-    };
-
-    // After import → Assign
-    async function afterImport(up){
-      state.scriptId = up.script_id;
-      const sc = await api('GET', `/debug/scenes?script_id=${encodeURIComponent(state.scriptId)}`);
-      const scene = sc.scenes?.[0]; if(!scene) throw new Error('No scenes returned');
-
-      state.sceneId = scene.id;
-      state.lines = scene.lines || [];
-
-      const rawRoles = uniq(state.lines.map(l=>l.speaker).filter(Boolean));
-      state.roles = cleanRoles(rawRoles);
-      if (!state.roles.length) state.roles = ['UNKNOWN'];
-
-      $('scene-pill').textContent = `scene: ${state.sceneId}`;
-      const sel = $('role'); sel.innerHTML = '';
-      state.roles.forEach(r=>{ const o=document.createElement('option'); o.value=r; o.textContent=r; sel.appendChild(o); });
-      state.myRole = sel.value;
-      buildPartnersUI();
-      setTab('assign');
-    }
-
-    // ASSIGN
     $('role').addEventListener('change', ()=>{ state.myRole=$('role').value; buildPartnersUI(); });
 
     function buildPartnersUI(){
       const box=$('partnersBox'); box.innerHTML='';
       const partners=(state.roles||[]).filter(r=>r!==state.myRole);
       if(!partners.length){
-        const div=document.createElement('div');
-        div.className='item';
+        const div=document.createElement('div'); div.className='item';
         div.innerHTML='<span class="muted">No partner roles detected. Try a script format like:<br><br><code>JANE: Hello there.</code></span>';
         box.appendChild(div);
       } else {
         partners.forEach(name=>{
           const div=document.createElement('div'); div.className='item';
-          const current = (state.voiceMap && state.voiceMap[name]) || 'alloy';
-          const options = VOICE_PRESETS.map(v=>`<option value="${v.id}" ${v.id===current?'selected':''}>${v.label}</option>`).join('');
-          div.innerHTML = `<div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+          const current=(state.voiceMap && state.voiceMap[name]) || 'alloy';
+          const opts=VOICE_PRESETS.map(v=>`<option value="${v.id}" ${v.id===current?'selected':''}>${v.label}</option>`).join('');
+          div.innerHTML=`<div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
             <div style="font-weight:800">${name}</div>
-            <select id="voice_${name}" style="max-width:220px">${options}</select>
+            <select id="voice_${name}" style="max-width:220px">${opts}</select>
           </div>`;
           box.appendChild(div);
         });
@@ -343,9 +330,11 @@ I didn’t go on purpose."></textarea>
     $('btn-assign-next').onclick = async ()=>{
       $('btn-assign-next').disabled=true; $('log-assign').style.display='none'; $('log-assign').innerHTML='';
       try{
-        const defaultVoice='alloy';
         const partners=(state.roles||[]).filter(r=>r!==state.myRole);
-        const map={}; if(!partners.length) map['UNKNOWN']=defaultVoice; else partners.forEach(n=>{ map[n] = (document.getElementById(`voice_${n}`)?.value||defaultVoice).trim(); });
+        const map={};
+        if(!partners.length){ map['UNKNOWN']='alloy'; } else {
+          partners.forEach(n=>{ map[n] = (document.getElementById(`voice_${n}`)?.value || 'alloy').trim(); });
+        }
         state.voiceMap = map;
         await api('POST','/debug/set_voice',{ script_id: state.scriptId, voice_map: map });
         setTab('rehearse');
@@ -353,81 +342,61 @@ I didn’t go on purpose."></textarea>
       finally{ $('btn-assign-next').disabled=false; }
     };
 
-    // REHEARSE
+    // ---------- Rehearse ----------
     function updateLineUI(){
-      document.getElementById('role-label').textContent = `Role: ${state.myRole || '—'}`;
-      document.getElementById('line-count').textContent = `Line ${state.currentLine}/${state.lines.length||'—'}`;
-      const you = (state.lines[state.currentLine-1]?.speaker===state.myRole);
-      document.getElementById('line-box').innerHTML = you
-        ? `<div style="color:#86efac"><strong>${state.myRole} (You)</strong></div><div style="margin-top:6px">${state.lines[state.currentLine-1]?.text||''}</div>`
-        : `<div style="color:#93c5fd"><strong>Partner</strong></div><div style="margin-top:6px">${state.lines[state.currentLine-1]?.text||''}</div>`;
+      $('role-pill').textContent = `Role: ${state.myRole || '—'}`;
+      $('line-pill').textContent = `Line ${state.currentLine}/${state.lines.length||'—'}`;
+      const cur = state.lines[state.currentLine-1] || {};
+      const you = cur.speaker === state.myRole;
+      $('line-box').innerHTML = you
+        ? `<div style="color:#86efac"><strong>${state.myRole} (You)</strong></div><div style="margin-top:6px">${cur.text||''}</div>`
+        : `<div style="color:#93c5fd"><strong>${cur.speaker||'Partner'}</strong></div><div style="margin-top:6px">${cur.text||''}</div>`;
     }
-    document.getElementById('btn-prev').onclick = ()=>{ if(state.currentLine>1){ state.currentLine--; updateLineUI(); } };
-    document.getElementById('btn-next').onclick = ()=>{ if(state.currentLine<(state.lines.length||1)){ state.currentLine++; updateLineUI(); } };
+    $('btn-prev').onclick = ()=>{ if(state.currentLine>1){ state.currentLine--; updateLineUI(); } };
+    $('btn-next').onclick = ()=>{ if(state.currentLine<(state.lines.length||1)){ state.currentLine++; updateLineUI(); } };
 
     async function ensurePrepared(){
       if (!state.scriptId || !state.sceneId || !state.myRole) {
-        document.getElementById('prep').textContent = 'Import a script and assign roles first.';
-        return;
+        $('prep').textContent='Import a script and assign roles first.'; return;
       }
-      document.getElementById('prep').classList.remove('hidden');
-      document.getElementById('rehearse-ui').classList.add('hidden');
-      const player = document.getElementById('reader'); player.src=''; document.getElementById('btn-play').textContent='Play';
+      $('prep').classList.remove('hidden');
+      $('rehearse-ui').classList.add('hidden');
+      const player=$('reader'); player.src=''; $('btn-play').textContent='Play';
+
       try{
         const rr = await api('POST','/debug/render',{ script_id: state.scriptId, scene_id: state.sceneId, role: state.myRole, pace: 'normal' });
         if(!rr.render_id) throw new Error('No render_id');
         let status='pending', url='';
-        while(status!=='complete'){ const st=await api('GET',`/debug/render_status?render_id=${encodeURIComponent(rr.render_id)}`); status=st.status; url=st.download_url||''; if(status!=='complete') await new Promise(r=>setTimeout(r,600)); }
-        state.readerUrl = `${state.base}${url}`; player.src=state.readerUrl;
-        document.getElementById('prep').classList.add('hidden');
-        document.getElementById('rehearse-ui').classList.remove('hidden'); state.currentLine=1; updateLineUI();
-      }catch(e){ document.getElementById('prep').textContent = `Error preparing reader: ${e.message}`; }
+        while(status!=='complete'){
+          const st=await api('GET',`/debug/render_status?render_id=${encodeURIComponent(rr.render_id)}`);
+          status=st.status; url=st.download_url||'';
+          if(status!=='complete') await new Promise(r=>setTimeout(r,700));
+        }
+        if (!url) throw new Error('No download_url');
+        player.src = url.startsWith('http') ? url : `${state.base}${url}`;
+        $('prep').classList.add('hidden');
+        $('rehearse-ui').classList.remove('hidden');
+        state.currentLine=1; updateLineUI();
+      }catch(e){ $('prep').textContent=`Error preparing reader: ${e.message}`; }
     }
-    const player = document.getElementById('reader');
-    document.getElementById('btn-play').onclick = ()=>{
-      if (player.paused) { player.play(); document.getElementById('btn-play').textContent='Pause'; }
-      else { player.pause(); document.getElementById('btn-play').textContent='Play'; }
-    };
-    document.getElementById('btn-rehearse-back').onclick = ()=> setTab('assign');
-    document.getElementById('btn-rehearse-next').onclick = ()=> setTab('record');
+    $('btn-play').onclick=()=>{const p=$('reader'); if(p.paused){p.play();$('btn-play').textContent='Pause';} else {p.pause();$('btn-play').textContent='Play';} };
 
-    // RECORD
+    // ---------- Record ----------
     let rec, chunks=[];
-    document.getElementById('btn-rec-start').onclick = async ()=>{
+    $('btn-rec-start').onclick = async ()=>{
       try{
-        const s=await navigator.mediaDevices.getUserMedia({ audio:true });
-        rec=new MediaRecorder(s); chunks=[]; rec.ondataavailable=e=>{ if(e.data.size>0) chunks.push(e.data); }; rec.onstop=()=>{
-          const blob=new Blob(chunks,{type:'audio/webm'}); const url=URL.createObjectURL(blob);
-          const p=$('takePreview'); p.src=url; $('btn-save-take').disabled=false;
-        }; rec.start(); $('btn-rec-start').disabled=true; $('btn-rec-stop').disabled=false;
+        const s=await navigator.mediaDevices.getUserMedia({audio:true});
+        rec=new MediaRecorder(s); chunks=[];
+        rec.ondataavailable=e=>{ if(e.data.size>0) chunks.push(e.data); };
+        rec.onstop=()=>{ const url=URL.createObjectURL(new Blob(chunks,{type:'audio/webm'})); $('takePreview').src=url; $('btn-save-take').disabled=false; };
+        rec.start(); $('btn-rec-start').disabled=true; $('btn-rec-stop').disabled=false;
       }catch(e){ showLog('log-record',`Error: ${e.message}`,'err'); }
     };
-    document.getElementById('btn-rec-stop').onclick = ()=>{
-      try{ rec?.stop(); $('btn-rec-start').disabled=false; $('btn-rec-stop').disabled=true; }catch{}
-    };
-    document.getElementById('btn-save-take').onclick = ()=>{
-      const url=$('takePreview').src; if(!url) return;
-      const label=$('takeLabel').value.trim()||`Take ${state.takes.length+1}`;
-      state.takes.push({ id: String(Date.now()), label, url });
-      renderTakes();
-    };
-    document.getElementById('btn-record-back').onclick = ()=> setTab('rehearse');
-    document.getElementById('btn-record-next').onclick = ()=> setTab('gallery');
-
-    function renderTakes(){
-      const list=$('takesList'); list.innerHTML='';
-      if(!state.takes.length){ const div=document.createElement('div'); div.className='item'; div.innerHTML='<span class="muted">No saved takes yet.</span>'; list.appendChild(div); return; }
-      state.takes.forEach(t=>{ const div=document.createElement('div'); div.className='item'; div.innerHTML=`<div style="font-weight:800">${t.label}</div><audio controls src="${t.url}"></audio>`; list.appendChild(div); });
-    }
-
-    // bottom nav
-    document.querySelectorAll('.tabbtn').forEach(btn=>{
-      btn.addEventListener('click', ()=>{
-        const tab = btn.dataset.tab;
-        if (tab==='settings') { alert('Settings coming soon'); return; }
-        setTab(tab);
-      });
-    });
+    $('btn-rec-stop').onclick=()=>{ try{rec?.stop();$('btn-rec-start').disabled=false;$('btn-rec-stop').disabled=true;}catch{} };
+    $('btn-save-take').onclick=()=>{ const url=$('takePreview').src; if(!url) return; const label=$('takeLabel').value.trim()||`Take ${state.takes.length+1}`; state.takes.push({id:String(Date.now()),label,url}); renderTakes(); };
+    $('btn-record-back').onclick=()=>setTab('rehearse');
+    $('btn-record-next').onclick=()=>setTab('gallery');
+    function renderTakes(){ const list=$('takesList'); list.innerHTML=''; if(!state.takes.length){ const div=document.createElement('div'); div.className='item'; div.innerHTML='<span class="muted">No saved takes yet.</span>'; list.appendChild(div); return; } state.takes.forEach(t=>{ const div=document.createElement('div'); div.className='item'; div.innerHTML=`<div style="font-weight:800">${t.label}</div><audio controls src="${t.url}"></audio>`; list.appendChild(div); }); }
   </script>
 </body>
 </html>
