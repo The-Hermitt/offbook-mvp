@@ -1,10 +1,13 @@
 // @ts-nocheck
 // src/lib/pdf.ts
 //
-// "Real" PDF parser with safe fallback.
-// - Tries to parse with pdfjs-dist (Node-only).
-// - Heuristics to detect SCENES + SPEAKERS and lines.
-// - On any error or low-confidence parse, falls back to STUB.
+// PDF/text parsing with safe fallback.
+//
+// Exports:
+//   - parseScript(pdf_url)
+//   - parseArrayBuffer(arrBuf)
+//   - parseText(text)
+//   - parseStub()
 
 export type Scene = {
   id: string;
@@ -12,20 +15,42 @@ export type Scene = {
   lines: Array<{ speaker: string; text: string }>;
 };
 
+// Public APIs ---------------------------------------------------------------
+
 export async function parseScript(pdf_url: string): Promise<Scene[]> {
   try {
     const arrBuf = await downloadPdf(pdf_url);
-    const text = await extractTextWithPdfJs(arrBuf);
-    const scenes = analyzeScriptText(text);
-    if (!scenes.length || !scenes[0]?.lines?.length) return parseStub(pdf_url);
-    return scenes;
+    return await parseArrayBuffer(arrBuf);
   } catch (err) {
-    console.warn('[pdf] parse failed, falling back to stub:', err?.message || err);
+    console.warn('[pdf] parseScript failed, using stub:', err?.message || err);
     return parseStub(pdf_url);
   }
 }
 
-export async function parseStub(_pdf_url: string): Promise<Scene[]> {
+export async function parseArrayBuffer(arrBuf: ArrayBuffer): Promise<Scene[]> {
+  try {
+    const text = await extractTextWithPdfJs(arrBuf);
+    const scenes = analyzeScriptText(text);
+    if (!scenes.length || !scenes[0]?.lines?.length) return [{ id: 'scene-1', title: 'Scene', lines: [{ speaker: 'UNKNOWN', text }] }];
+    return scenes;
+  } catch (err) {
+    console.warn('[pdf] parseArrayBuffer failed, using stub:', err?.message || err);
+    return [{ id: 'scene-1', title: 'Stub Scene', lines: [{ speaker: 'UNKNOWN', text: 'Hello there.' }, { speaker: 'UNKNOWN', text: 'This is a stub line for MVP.' }] }];
+  }
+}
+
+export async function parseText(raw: string): Promise<Scene[]> {
+  try {
+    const text = normalizeWhitespace(raw || '');
+    const scenes = analyzeScriptText(text);
+    if (!scenes.length || !scenes[0]?.lines?.length) return parseStub('text:empty');
+    return scenes;
+  } catch {
+    return parseStub('text:error');
+  }
+}
+
+export async function parseStub(_hint?: string): Promise<Scene[]> {
   return [
     {
       id: 'scene-1',
@@ -38,6 +63,8 @@ export async function parseStub(_pdf_url: string): Promise<Scene[]> {
   ];
 }
 
+// Helpers ------------------------------------------------------------------
+
 async function downloadPdf(url: string): Promise<ArrayBuffer> {
   const res = await fetch(url);
   if (!res.ok) throw new Error(`download failed: ${res.status} ${res.statusText}`);
@@ -48,6 +75,7 @@ async function extractTextWithPdfJs(arrBuf: ArrayBuffer): Promise<string> {
   const pdfjsLib = await import('pdfjs-dist/legacy/build/pdf.js');
   // @ts-ignore
   pdfjsLib.GlobalWorkerOptions.workerSrc = undefined;
+
   const loadingTask = pdfjsLib.getDocument({ data: arrBuf });
   const pdf = await loadingTask.promise;
 
@@ -62,7 +90,7 @@ async function extractTextWithPdfJs(arrBuf: ArrayBuffer): Promise<string> {
 }
 
 function normalizeWhitespace(s: string): string {
-  return s
+  return (s || '')
     .replace(/\r/g, '\n')
     .replace(/\u00A0/g, ' ')
     .replace(/[ \t]+\n/g, '\n')
@@ -70,12 +98,12 @@ function normalizeWhitespace(s: string): string {
     .trim();
 }
 
-// Heuristic parser: scene headings + speaker lines.
+// Heuristic scene + dialogue parser
 function analyzeScriptText(raw: string): Scene[] {
   if (!raw) return [];
   const lines = raw.split(/\n+/).map((l) => l.trim()).filter(Boolean);
 
-  // find scene starts
+  // Scene boundaries
   const sceneIdxs: number[] = [];
   const sceneTitleAt: Record<number, string> = {};
   for (let i = 0; i < lines.length; i++) {
@@ -123,7 +151,7 @@ function buildScene(id: string, title: string, chunk: string[]): Scene {
       continue;
     }
     if (currentSpeaker) {
-      if (/^[A-Z0-9 \-]{4,}$/.test(line)) continue; // likely stage direction
+      if (/^[A-Z0-9 \-]{4,}$/.test(line)) continue;
       buffer.push(line);
       continue;
     }
