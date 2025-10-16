@@ -19,6 +19,7 @@
     label{display:block;font-weight:600;margin:10px 0 6px}
     input,select,textarea{width:100%;padding:12px;border:1px solid var(--line);border-radius:12px;background:#0e1622;color:var(--fg)}
     input::placeholder,textarea::placeholder{color:#6b7280}
+    textarea{min-height:160px;resize:vertical}
     .row{display:grid;gap:12px}
     @media(min-width:760px){.row.two{grid-template-columns:1fr 1fr}}
     button{appearance:none;margin-top:12px;padding:12px 14px;border:0;border-radius:12px;background:var(--accent);color:#fff;font-weight:700;cursor:pointer}
@@ -43,29 +44,66 @@
     .list{display:grid;gap:10px;margin-top:8px}
     .item{padding:10px;border:1px solid var(--line);border-radius:12px;background:#0e1622}
     audio,video{width:100%;margin-top:10px}
+    /* import mode chips */
+    .chips{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 4px}
+    .chip{padding:8px 10px;border:1px solid var(--line);border-radius:999px;background:#0e1622;cursor:pointer}
+    .chip.active{background:var(--accent);border-color:var(--accent);color:#fff}
   </style>
 </head>
 <body>
   <div class="wrap">
     <!-- IMPORT -->
     <div class="card" id="tab-import">
-      <div class="topbar">
-        <h1>Import</h1>
+      <div class="topbar"><h1>Import</h1></div>
+      <p class="muted">Choose a method to bring in your script.</p>
+
+      <div class="chips">
+        <span class="chip active" data-mode="url">PDF URL</span>
+        <span class="chip" data-mode="paste">Paste Script Text</span>
+        <span class="chip" data-mode="upload">Upload PDF</span>
       </div>
-      <p class="muted">Paste a public PDF URL (file upload coming later).</p>
-      <div class="row two">
-        <div>
-          <label for="pdf">PDF URL</label>
-          <input id="pdf" value="https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf">
+
+      <div id="import-url">
+        <div class="row two">
+          <div>
+            <label for="pdf">Upload PDF (URL)</label>
+            <input id="pdf" placeholder="https://example.com/your-script.pdf" value="https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf">
+          </div>
+          <div>
+            <label for="title-url">Title</label>
+            <input id="title-url" value="Test Script">
+          </div>
         </div>
-        <div>
-          <label for="title">Title</label>
-          <input id="title" value="Test Script">
+        <div class="btnrow"><button id="btn-import-url">Continue</button></div>
+      </div>
+
+      <div id="import-paste" class="hidden">
+        <label for="paste">Paste script here</label>
+        <textarea id="paste" placeholder="JANE: Hello there.
+JOHN: Hey."></textarea>
+        <div class="row two">
+          <div>
+            <label for="title-paste">Title</label>
+            <input id="title-paste" value="Pasted Script">
+          </div>
+          <div></div>
         </div>
+        <div class="btnrow"><button id="btn-import-paste">Continue</button></div>
       </div>
-      <div class="btnrow">
-        <button id="btn-import">Continue</button>
+
+      <div id="import-upload" class="hidden">
+        <label for="file">Upload PDF</label>
+        <input id="file" type="file" accept="application/pdf">
+        <div class="row two">
+          <div>
+            <label for="title-upload">Title</label>
+            <input id="title-upload" value="Uploaded Script">
+          </div>
+          <div></div>
+        </div>
+        <div class="btnrow"><button id="btn-import-upload">Continue</button></div>
       </div>
+
       <div id="log-import" class="log"></div>
     </div>
 
@@ -215,42 +253,88 @@
       });
       if (name==='rehearse') ensurePrepared();
     }
-    async function api(method, path, body){
-      const headers = { 'Content-Type': 'application/json' };
+    async function api(method, path, body, isFormData=false){
+      const headers = isFormData ? {} : { 'Content-Type': 'application/json' };
       if (state.secret) headers['X-Shared-Secret'] = state.secret;
-      const res = await fetch(`${state.base}${path}`, { method, headers, body: body?JSON.stringify(body):undefined });
+      const res = await fetch(`${state.base}${path}`, {
+        method,
+        headers,
+        body: isFormData ? body : (body ? JSON.stringify(body) : undefined)
+      });
       const json = await res.json().catch(()=>({}));
       if (!res.ok) throw new Error(json.error || res.statusText);
       return json;
     }
 
-    // ---------- IMPORT ----------
-    $('btn-import').onclick = async () => {
-      $('btn-import').disabled=true; $('log-import').innerHTML='';
-      try {
-        const tts = await fetch(`${state.base}/health/tts`).then(r=>r.json());
-        log('log-import', `TTS: provider=${tts.provider} has_key=${tts.has_key}`, 'ok');
+    // ---------- Import chips ----------
+    document.querySelectorAll('.chip').forEach(ch=>{
+      ch.addEventListener('click', ()=>{
+        document.querySelectorAll('.chip').forEach(x=>x.classList.remove('active'));
+        ch.classList.add('active');
+        const mode = ch.dataset.mode;
+        $('import-url').classList.toggle('hidden', mode!=='url');
+        $('import-paste').classList.toggle('hidden', mode!=='paste');
+        $('import-upload').classList.toggle('hidden', mode!=='upload');
+      });
+    });
 
-        const pdf=$('pdf').value.trim(), title=$('title').value.trim();
+    // ---------- IMPORT: URL ----------
+    $('btn-import-url').onclick = async ()=>{
+      $('btn-import-url').disabled = true; $('log-import').innerHTML='';
+      try{
+        const pdf=$('pdf').value.trim(), title=$('title-url').value.trim();
         const up = await api('POST','/debug/upload_script',{ pdf_url: pdf, title });
-        state.scriptId = up.script_id;
-        const sc = await api('GET', `/debug/scenes?script_id=${encodeURIComponent(state.scriptId)}`);
-        const scene = sc.scenes?.[0]; if(!scene) throw new Error('No scenes returned');
-        state.sceneId = scene.id; state.lines = scene.lines || [];
-        state.roles = uniq(state.lines.map(l=>l.speaker).filter(Boolean)); if(!state.roles.length) state.roles=['UNKNOWN'];
-        $('scene-pill').textContent = `scene: ${state.sceneId}`;
-        // populate role select
-        const sel = $('role'); sel.innerHTML = ''; state.roles.forEach(r=>{ const o=document.createElement('option'); o.value=r; o.textContent=r; sel.appendChild(o); });
-        state.myRole = sel.value;
-        buildPartnersUI();
-        setTab('assign');
-      } catch(e) {
-        log('log-import', `Error: ${e.message}`, 'err');
-      } finally { $('btn-import').disabled=false; }
+        await afterImport(up);
+      }catch(e){ log('log-import',`Error: ${e.message}`,'err'); }
+      finally{ $('btn-import-url').disabled = false; }
     };
+
+    // ---------- IMPORT: PASTE ----------
+    $('btn-import-paste').onclick = async ()=>{
+      $('btn-import-paste').disabled = true; $('log-import').innerHTML='';
+      try{
+        const text=$('paste').value.trim(), title=$('title-paste').value.trim();
+        if (!text) throw new Error('Please paste your script text first.');
+        const up = await api('POST','/debug/upload_script_text',{ text, title });
+        await afterImport(up);
+      }catch(e){ log('log-import',`Error: ${e.message}`,'err'); }
+      finally{ $('btn-import-paste').disabled = false; }
+    };
+
+    // ---------- IMPORT: UPLOAD (file) ----------
+    $('btn-import-upload').onclick = async ()=>{
+      $('btn-import-upload').disabled = true; $('log-import').innerHTML='';
+      try{
+        const f = $('file').files[0];
+        if (!f) throw new Error('Choose a PDF file first.');
+        const title = $('title-upload').value.trim();
+        const fd = new FormData();
+        fd.append('pdf', f);
+        fd.append('title', title);
+        const up = await api('POST','/debug/upload_script_upload', fd, true);
+        await afterImport(up);
+      }catch(e){ log('log-import',`Error: ${e.message}`,'err'); }
+      finally{ $('btn-import-upload').disabled = false; }
+    };
+
+    // ---------- Post-import (common) ----------
+    async function afterImport(up){
+      state.scriptId = up.script_id;
+      const sc = await api('GET', `/debug/scenes?script_id=${encodeURIComponent(state.scriptId)}`);
+      const scene = sc.scenes?.[0]; if(!scene) throw new Error('No scenes returned');
+      state.sceneId = scene.id; state.lines = scene.lines || [];
+      state.roles = uniq(state.lines.map(l=>l.speaker).filter(Boolean)); if(!state.roles.length) state.roles=['UNKNOWN'];
+      $('scene-pill').textContent = `scene: ${state.sceneId}`;
+      const sel = $('role'); sel.innerHTML = ''; state.roles.forEach(r=>{ const o=document.createElement('option'); o.value=r; o.textContent=r; sel.appendChild(o); });
+      state.myRole = sel.value;
+      buildPartnersUI();
+      setTab('assign');
+    }
 
     // ---------- ASSIGN ----------
     $('role').addEventListener('change', ()=>{ state.myRole=$('role').value; buildPartnersUI(); });
+    $('defaultVoice').addEventListener('input', buildPartnersUI);
+
     function buildPartnersUI(){
       const box=$('partnersBox'); box.innerHTML='';
       const defaultVoice=$('defaultVoice').value || 'alloy';
@@ -268,13 +352,11 @@
         });
       }
     }
-    $('defaultVoice').addEventListener('input', buildPartnersUI);
 
     $('btn-assign-back').onclick = ()=> setTab('import');
     $('btn-assign-next').onclick = async ()=>{
       $('btn-assign-next').disabled=true; $('log-assign').innerHTML='';
       try{
-        // collect voice map
         const defaultVoice=$('defaultVoice').value||'alloy';
         const partners=state.roles.filter(r=>r!==state.myRole);
         const map={};
@@ -304,14 +386,12 @@
       $('rehearse-ui').classList.add('hidden');
       $('reader').src=''; $('btn-play').textContent='Play';
       try{
-        // (Re)prepare reader silently
         const rr = await api('POST','/debug/render',{ script_id: state.scriptId, scene_id: state.sceneId, role: state.myRole, pace: 'normal' });
         if(!rr.render_id) throw new Error('No render_id');
         let status='pending', url='';
         while(status!=='complete'){ const st=await api('GET',`/debug/render_status?render_id=${encodeURIComponent(rr.render_id)}`); status=st.status; url=st.download_url||''; if(status!=='complete') await new Promise(r=>setTimeout(r,600)); }
         state.readerUrl = `${state.base}${url}`;
         $('reader').src=state.readerUrl;
-        // show UI
         $('prep').classList.add('hidden');
         $('rehearse-ui').classList.remove('hidden');
         updateLineUI();
@@ -377,7 +457,7 @@
     }
     $('btn-gallery-back').onclick = ()=> setTab('record');
 
-    // ---------- Bottom nav handlers ----------
+    // ---------- Bottom nav ----------
     document.querySelectorAll('.tabbtn').forEach(btn=>{
       btn.addEventListener('click', ()=>{
         const tab = btn.dataset.tab;
