@@ -1,12 +1,16 @@
 // @ts-nocheck
 // src/http-routes.ts
+//
+// REST debug harness used by curl/Postman and also by the MCP proxy.
+// New: paste-text and file-upload import routes.
 
 import { Router } from 'express';
 import path from 'path';
 import fs from 'fs';
 import { nanoid } from 'nanoid';
 import { z } from 'zod';
-import { parseScript, parseStub } from './lib/pdf';
+import multer from 'multer';
+import { parseScript, parseText, parseArrayBuffer, parseStub } from './lib/pdf';
 
 type Scene = { id: string; title: string; lines: Array<{ speaker: string; text: string }> };
 type ScriptRec = { id: string; title: string; scenes: Scene[]; voice_map: Record<string, string> };
@@ -17,7 +21,9 @@ const mem = {
   renders: new Map<string, RenderRec>(),
 };
 
-const UploadSchema = z.object({ pdf_url: z.string().url(), title: z.string().min(1).max(200) });
+// --- Validation
+const UrlUploadSchema = z.object({ pdf_url: z.string().url(), title: z.string().min(1).max(200) });
+const TextUploadSchema = z.object({ text: z.string().min(1), title: z.string().min(1).max(200) });
 const ScenesSchema = z.object({ script_id: z.string().min(1) });
 const NonEmptyRecord = <T extends z.ZodTypeAny>(schema: T) =>
   z.record(schema).refine((o) => Object.keys(o).length > 0, { message: 'voice_map must have at least one entry' });
@@ -52,14 +58,49 @@ function ensureRenderDir() {
   return dir;
 }
 
+// --- Multer (in-memory)
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } });
+
 const router = Router();
 
+// URL import
 router.post('/upload_script', async (req, res) => {
   try {
-    const { pdf_url, title } = UploadSchema.parse(req.body || {});
+    const { pdf_url, title } = UrlUploadSchema.parse(req.body || {});
     let scenes: Scene[];
-    try { scenes = await parseScript(pdf_url); }
-    catch { scenes = await parseStub(pdf_url); }
+    try { scenes = await parseScript(pdf_url); } catch { scenes = await parseStub(pdf_url); }
+    const id = nanoid();
+    mem.scripts.set(id, { id, title, scenes, voice_map: {} });
+    res.json({ script_id: id, title, scene_count: scenes.length });
+  } catch (e: any) {
+    res.status(400).json({ error: e?.message || String(e) });
+  }
+});
+
+// Paste-text import
+router.post('/upload_script_text', async (req, res) => {
+  try {
+    const { text, title } = TextUploadSchema.parse(req.body || {});
+    let scenes: Scene[];
+    try { scenes = await parseText(text); } catch { scenes = await parseStub('text'); }
+    const id = nanoid();
+    mem.scripts.set(id, { id, title, scenes, voice_map: {} });
+    res.json({ script_id: id, title, scene_count: scenes.length });
+  } catch (e: any) {
+    res.status(400).json({ error: e?.message || String(e) });
+  }
+});
+
+// File upload import (multipart/form-data; field name: "pdf")
+router.post('/upload_script_upload', upload.single('pdf'), async (req, res) => {
+  try {
+    const title = String(req.body?.title || 'Uploaded Script');
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+    if (!/pdf/i.test(req.file.mimetype)) return res.status(400).json({ error: 'File must be a PDF' });
+
+    let scenes: Scene[];
+    try { scenes = await parseArrayBuffer(req.file.buffer); } catch { scenes = await parseStub('file'); }
+
     const id = nanoid();
     mem.scripts.set(id, { id, title, scenes, voice_map: {} });
     res.json({ script_id: id, title, scene_count: scenes.length });
