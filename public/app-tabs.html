@@ -13,7 +13,11 @@
     h1{font-size:24px;margin:6px 0 8px}
     p.muted{margin:0 0 14px;color:var(--muted)}
     label{display:block;font-weight:600;margin:10px 0 6px}
-    input,select,textarea{width:100%;padding:12px;border:1px solid var(--line);border-radius:12px;background:#0e1622;color:var(--fg)}
+    input,select,textarea{
+      width:100%; padding:12px; border:1px solid var(--line); border-radius:12px; background:#0e1622; color:var(--fg);
+      min-height:46px; /* make select same height as inputs on iOS */
+      -webkit-appearance:none; appearance:none;
+    }
     input::placeholder,textarea::placeholder{color:#6b7280}
     textarea{min-height:160px;resize:vertical}
     .row{display:grid;gap:12px}
@@ -25,7 +29,6 @@
     .ok{color:var(--good)} .err{color:#ef4444}
     .log{display:none;margin-top:10px;padding:10px;border:1px dashed var(--line);border-radius:12px;max-height:140px;overflow:auto;background:#0e1622;font:13px/1.5 ui-monospace,Menlo,Consolas,monospace;color:#d1d5db}
     .hidden{display:none}
-    /* bottom nav */
     .tabbar{position:fixed;left:0;right:0;bottom:0;height:72px;background:#0e1622;border-top:1px solid var(--line);display:grid;grid-template-columns:repeat(6,1fr);z-index:50}
     .tabbtn{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;color:#9aa5b1;text-decoration:none;font-size:11px}
     .tabbtn.active{color:#fff}
@@ -34,7 +37,6 @@
     .list{display:grid;gap:10px;margin-top:8px}
     .item{padding:10px;border:1px solid var(--line);border-radius:12px;background:#0e1622}
     audio,video{width:100%;margin-top:10px}
-    /* import chips */
     .chips{display:flex;gap:8px;flex-wrap:wrap;margin:6px 0 2px}
     .chip{padding:8px 10px;border:1px solid var(--line);border-radius:999px;background:#0e1622;cursor:pointer}
     .chip.active{background:var(--accent);border-color:var(--accent);color:#fff}
@@ -55,7 +57,8 @@
       <div id="import-paste">
         <label for="paste">Paste script here</label>
         <textarea id="paste" placeholder="JANE: Hello there.
-JOHN: Hey."></textarea>
+GABE (with feeling)
+I didn’t go on purpose."></textarea>
         <div class="row two">
           <div>
             <label for="title-paste">Title</label>
@@ -215,11 +218,7 @@ JOHN: Hey."></textarea>
     };
 
     const $ = (id) => document.getElementById(id);
-    const showLog = (box, text, cls='') => {
-      const d=$(box); d.style.display='block';
-      const p=document.createElement('div'); p.textContent=text; if(cls)p.className=cls;
-      d.appendChild(p); d.scrollTop=d.scrollHeight;
-    };
+    const showLog = (box, text, cls='') => { const d=$(box); d.style.display='block'; const p=document.createElement('div'); p.textContent=text; if(cls)p.className=cls; d.appendChild(p); d.scrollTop=d.scrollHeight; };
     const uniq = (a) => [...new Set(a)];
 
     function setTab(name){
@@ -234,9 +233,7 @@ JOHN: Hey."></textarea>
     async function api(method, path, body, isFormData=false){
       const headers = isFormData ? {} : { 'Content-Type': 'application/json' };
       if (state.secret) headers['X-Shared-Secret'] = state.secret;
-      const res = await fetch(`${state.base}${path}`, {
-        method, headers, body: isFormData ? body : (body ? JSON.stringify(body) : undefined)
-      });
+      const res = await fetch(`${state.base}${path}`, { method, headers, body: isFormData ? body : (body ? JSON.stringify(body) : undefined) });
       const json = await res.json().catch(()=>({}));
       if (!res.ok) throw new Error(json.error || res.statusText);
       return json;
@@ -294,13 +291,26 @@ JOHN: Hey."></textarea>
     // ASSIGN
     $('role').addEventListener('change', ()=>{ state.myRole=$('role').value; buildPartnersUI(); });
     $('defaultVoice').addEventListener('input', buildPartnersUI);
+
     function buildPartnersUI(){
       const box=$('partnersBox'); box.innerHTML='';
       const defaultVoice=$('defaultVoice').value || 'alloy';
       const partners=(state.roles||[]).filter(r=>r!==state.myRole);
-      if(!partners.length){ const div=document.createElement('div'); div.className='item'; div.innerHTML='<span class="muted">No partner roles detected (stub parser returns UNKNOWN).</span>'; box.appendChild(div); }
-      else { partners.forEach(name=>{ const div=document.createElement('div'); div.className='item'; div.innerHTML=`<div style="display:flex;align-items:center;justify-content:space-between;gap:10px"><div><strong>${name}</strong></div><input id="voice_${name}" value="${defaultVoice}" style="max-width:220px"></div>`; box.appendChild(div); }); }
+      if(!partners.length){
+        const div=document.createElement('div'); div.className='item'; div.innerHTML='<span class="muted">No partner roles detected. Try a different script format or paste text like:<br><br><code>JANE: Hello there.</code></span>';
+        box.appendChild(div);
+      } else {
+        partners.forEach(name=>{
+          const div=document.createElement('div'); div.className='item';
+          div.innerHTML=`<div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+            <div><strong>${name}</strong></div>
+            <input id="voice_${name}" value="${defaultVoice}" style="max-width:220px">
+          </div>`;
+          box.appendChild(div);
+        });
+      }
     }
+
     $('btn-assign-back').onclick = ()=> setTab('import');
     $('btn-assign-next').onclick = async ()=>{
       $('btn-assign-next').disabled=true; $('log-assign').style.display='none'; $('log-assign').innerHTML='';
@@ -313,7 +323,7 @@ JOHN: Hey."></textarea>
       finally{ $('btn-assign-next').disabled=false; }
     };
 
-    // REHEARSE (auto-prepare on entry)
+    // REHEARSE
     function updateLineUI(){
       document.getElementById('role-label').textContent = `Role: ${state.myRole || '—'}`;
       document.getElementById('line-count').textContent = `Line ${state.currentLine}/${state.lines.length||'—'}`;
