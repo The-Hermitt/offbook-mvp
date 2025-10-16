@@ -1,11 +1,11 @@
 // @ts-nocheck
 // src/lib/pdf.ts
 //
-// PDF/text parser with robust fallbacks.
-// Goal: emit scenes + dialogue lines {speaker,text} that mirror the paste flow.
-// This version improves PDF extraction by reconstructing lines using glyph
-// positions (y/x clustering) instead of naive .str joins, which fixes many
-// "UNKNOWN" role cases from Upload PDF.
+// Robust parser for PDF/Text → scenes with {speaker, text} lines.
+// Order of extraction attempts for PDFs:
+//  1) pdfjs-dist (layout-aware y/x grouping)
+//  2) naive buffer→text guess (latin1/utf8 sweep)  ← NEW fallback
+//  3) stub
 
 export type Scene = {
   id: string;
@@ -27,18 +27,33 @@ export async function parseScript(pdf_url: string): Promise<Scene[]> {
 
 export async function parseArrayBuffer(arrBuf: ArrayBuffer): Promise<Scene[]> {
   try {
-    // Primary: high-fidelity text with layout-aware grouping
-    const raw = await extractTextWithPdfJs(arrBuf);
-    let scenes = analyzeScriptText(raw);
-    if (!hasDialogue(scenes)) {
-      // Secondary: ultra-normalize (collapse weird punctuation / unicode)
-      const ultra = ultraNormalize(raw);
-      scenes = analyzeScriptText(ultra);
+    // 1) Preferred: pdfjs-dist layout-aware extraction
+    try {
+      const raw = await extractTextWithPdfJs(arrBuf);
+      let scenes = analyzeScriptText(raw);
+      if (!hasDialogue(scenes)) {
+        const ultra = ultraNormalize(raw);
+        scenes = analyzeScriptText(ultra);
+      }
+      if (hasDialogue(scenes)) return scenes;
+      console.warn('[pdf] pdfjs extracted but no dialogue → trying naive buffer sweep');
+    } catch (e) {
+      console.warn('[pdf] pdfjs path failed →', e?.message || e);
     }
-    if (!hasDialogue(scenes)) return parseStub('file');
-    return scenes;
+
+    // 2) NEW fallback: naive buffer→text sweep (handles text-based PDFs w/o pdfjs)
+    const guess = extractTextFromBufferNaive(arrBuf);
+    if (guess) {
+      let scenes = analyzeScriptText(guess);
+      if (!hasDialogue(scenes)) scenes = analyzeScriptText(ultraNormalize(guess));
+      if (hasDialogue(scenes)) return scenes;
+      console.warn('[pdf] naive buffer sweep produced no dialogue');
+    }
+
+    // 3) Stub fallback (last resort)
+    return parseStub('file');
   } catch (err) {
-    console.warn('[pdf] parseArrayBuffer failed → stub:', err?.message || err);
+    console.warn('[pdf] parseArrayBuffer catch → stub:', err?.message || err);
     return parseStub('file-err');
   }
 }
@@ -72,16 +87,15 @@ export async function parseStub(_hint?: string): Promise<Scene[]> {
 async function downloadPdf(url: string): Promise<ArrayBuffer> {
   const res = await fetch(url);
   if (!res.ok) throw new Error(`download failed: ${res.status} ${res.statusText}`);
-  const buf = await res.arrayBuffer();
-  return buf;
+  return await res.arrayBuffer();
 }
 
 /**
- * Layout-aware text extraction.
- * Groups text items by page, then by line using y-coordinate buckets, sorts by x,
- * joins with spaces, and separates lines with \n. Pages separated by \n\n.
+ * Layout-aware text extraction using pdfjs-dist.
+ * If pdfjs-dist isn’t installed/available, this function will throw and we’ll fallback.
  */
 async function extractTextWithPdfJs(arrBuf: ArrayBuffer): Promise<string> {
+  // Dynamic import so the app still runs without pdfjs-dist installed
   const pdfjs = await import('pdfjs-dist/legacy/build/pdf.js');
   // @ts-ignore worker not needed in Node
   pdfjs.GlobalWorkerOptions.workerSrc = undefined;
@@ -103,7 +117,7 @@ async function extractTextWithPdfJs(arrBuf: ArrayBuffer): Promise<string> {
       })
       .filter(it => (it.str || '').trim().length > 0);
 
-    // Cluster by Y within tolerance (screenplay PDFs often have tiny drift)
+    // Cluster by Y within tolerance (screenplays often have tiny drift)
     const tolY = 2.5;
     items.sort((A,B) => (B.y - A.y) || (A.x - B.x)); // top→bottom (y desc), then left→right
     const lines: { y: number; parts: Item[] }[] = [];
@@ -112,11 +126,9 @@ async function extractTextWithPdfJs(arrBuf: ArrayBuffer): Promise<string> {
       if (bucket) bucket.parts.push(it);
       else lines.push({ y: it.y, parts: [it] });
     }
-    // Within each line, sort by X and join
     const lineTexts = lines
       .map(L => {
         L.parts.sort((A,B) => A.x - B.x);
-        // Add a space between parts unless the last char already has trailing space
         let s = '';
         for (const part of L.parts) {
           const piece = String(part.str);
@@ -130,8 +142,38 @@ async function extractTextWithPdfJs(arrBuf: ArrayBuffer): Promise<string> {
     out.push(lineTexts.join('\n'));
   }
 
-  const joined = out.join('\n\n');
-  return normalizeWhitespace(joined);
+  return normalizeWhitespace(out.join('\n\n'));
+}
+
+/**
+ * NEW: Extremely lightweight “best effort” text rip directly from PDF bytes.
+ * Tries latin1 and utf8 decoders, drops obvious binary noise, collapses whitespace.
+ * This won’t fix scanned-image PDFs, but helps many text-based PDFs when pdfjs isn’t present.
+ */
+function extractTextFromBufferNaive(arrBuf: ArrayBuffer): string {
+  try {
+    const tryDecode = (enc: string) => {
+      const td = new TextDecoder(enc as any, { fatal: false });
+      return td.decode(new Uint8Array(arrBuf));
+    };
+    let s = tryDecode('latin1');
+    if (!s || s.replace(/\W/g,'').length < 20) s = tryDecode('utf-8');
+
+    s = (s || '')
+      .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]+/g, '\n') // control chars → newlines
+      .replace(/\u0000/g, '')                           // NUL
+      .replace(/\r/g, '\n')
+      .replace(/[ \t]+\n/g, '\n')
+      .replace(/\n{3,}/g, '\n\n');
+
+    // Many PDFs interleave words like "J A N E : H e l l o"
+    // Heal obvious spaced-caps name patterns like "J A N E" → "JANE"
+    s = s.replace(/\b(?:[A-Z]\s)+[A-Z]\b/g, (m) => m.replace(/\s+/g, ''));
+
+    return s.trim();
+  } catch {
+    return '';
+  }
 }
 
 // ----------------- Heuristics -----------------
@@ -147,7 +189,7 @@ function normalizeWhitespace(s: string): string {
 
 function ultraNormalize(s: string): string {
   return (s || '')
-    .normalize('NFKC')                 // compatibility normalize unicode
+    .normalize('NFKC')
     .replace(/[“”]/g, '"')
     .replace(/[‘’]/g, "'")
     .replace(/[—–]/g, '-')
@@ -201,15 +243,13 @@ function looksLikeSpeakerName(name: string): boolean {
   if (!name) return false;
   const base = name.replace(/\s+/g, ' ').trim();
   if (base.length < 2 || base.length > 30) return false;
-  // must be mostly uppercase and contain at least one letter
   const upperish = ALLCAPS_RE.test(base) && !/[a-z]/.test(base) && /[A-Z]/.test(base);
   if (!upperish) return false;
   if (STOP_NAMES.has(base)) return false;
-  if (ONLY_DIGITS_RE.test(base)) return false; // reject "43" etc.
+  if (ONLY_DIGITS_RE.test(base)) return false;
   return true;
 }
 
-// ---------- REQUIRED: was missing in your file ----------
 function hasDialogue(scenes: Scene[]): boolean {
   if (!Array.isArray(scenes)) return false;
   for (const sc of scenes) {
@@ -221,19 +261,17 @@ function hasDialogue(scenes: Scene[]): boolean {
   }
   return false;
 }
-// -------------------------------------------------------
 
 export function analyzeScriptText(rawInput: string): Scene[] {
   const raw = normalizeWhitespace(rawInput || '');
   if (!raw) return [];
 
-  // Split to lines, drop obvious noise early
   const lines = raw
     .split(/\n+/)
     .map(l => l.trimEnd())
     .filter(l => l && !isNoiseLine(l));
 
-  // Partition into scenes first
+  // Scenes
   const sceneStarts: number[] = [];
   const titles: Record<number,string> = {};
   for (let i=0;i<lines.length;i++){
@@ -275,22 +313,18 @@ function buildScene(id: string, title: string, chunk: string[]): Scene {
     const line = chunk[i] || '';
     if (!line || isNoiseLine(line)) return null;
 
-    // Accept:
-    // 1) NAME: Dialogue
-    // 2) NAME (note)   [dialogue on following lines]
-    // 3) NAME          [dialogue on following lines]
     const colonMatch = line.match(/^([A-Z0-9 .,'\-]{2,30})\s*:?\s*(.*)$/);
     if (colonMatch) {
       const name = cleanName(colonMatch[1]);
       const rest = (colonMatch[2] || '').trim();
       if (looksLikeSpeakerName(name)) {
         if (rest && hasAnyLower(rest) && !isParenthetical(rest)) return name;
-        // Peek next few lines for dialogue signal
+        // Peek next lines for dialogue signal
         for (let j=i+1; j<Math.min(i+5, chunk.length); j++){
           const nxt = (chunk[j] || '').trim();
           if (!nxt || isNoiseLine(nxt)) continue;
-          if (isParenthetical(nxt)) return name; // (beat)
-          if (hasAnyLower(nxt)) return name;     // actual dialogue
+          if (isParenthetical(nxt)) return name;
+          if (hasAnyLower(nxt)) return name;
           if (isSceneHeading(nxt)) break;
         }
       }
@@ -304,10 +338,8 @@ function buildScene(id: string, title: string, chunk: string[]): Scene {
 
     const maybe = startsNewSpeaker(i);
     if (maybe) {
-      // commit previous
       flush();
       currentSpeaker = maybe;
-      // capture text after "NAME:" on the same line
       const after = line.replace(/^([A-Z0-9 .,'\-]{2,30})(?:\s*\([^)]*\))?\s*:?\s*/, '').trim();
       if (after && hasAnyLower(after) && !isParenthetical(after)) buf.push(after);
       continue;
