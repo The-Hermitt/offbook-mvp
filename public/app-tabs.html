@@ -5,16 +5,12 @@
   <title>OffBook – Rehearsal MVP</title>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <style>
-    :root {
-      --bg:#0b0f14; --card:#111826; --fg:#f5f7fb; --muted:#9aa5b1; --line:#1f2a37;
-      --accent:#3b82f6; --accent-2:#2563eb; --good:#22c55e; --chip:#1b2430;
-    }
+    :root { --bg:#0b0f14; --card:#111826; --fg:#f5f7fb; --muted:#9aa5b1; --line:#1f2a37; --accent:#3b82f6; --good:#22c55e; --chip:#1b2430; }
     *{box-sizing:border-box}
     body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.55 system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif}
     .wrap{max-width:900px;margin:12px auto 84px;padding:0 16px}
     .card{padding:16px;border:1px solid var(--line);border-radius:16px;background:var(--card);box-shadow:0 1px 8px rgba(0,0,0,.25)}
     h1{font-size:24px;margin:6px 0 8px}
-    h2{font-size:18px;margin:0 0 8px}
     p.muted{margin:0 0 14px;color:var(--muted)}
     label{display:block;font-weight:600;margin:10px 0 6px}
     input,select,textarea{width:100%;padding:12px;border:1px solid var(--line);border-radius:12px;background:#0e1622;color:var(--fg)}
@@ -24,11 +20,10 @@
     @media(min-width:760px){.row.two{grid-template-columns:1fr 1fr}}
     button{appearance:none;margin-top:12px;padding:12px 14px;border:0;border-radius:12px;background:var(--accent);color:#fff;font-weight:700;cursor:pointer}
     button:disabled{opacity:.6;cursor:not-allowed}
-    button.secondary{background:#374151}
     button.ghost{background:transparent;border:1px solid var(--line)}
     .pill{display:inline-block;padding:4px 8px;border-radius:999px;background:var(--chip);font-size:12px;margin-left:6px}
     .ok{color:var(--good)} .err{color:#ef4444}
-    .log{margin-top:10px;padding:10px;border:1px dashed var(--line);border-radius:12px;height:140px;overflow:auto;background:#0e1622;font:13px/1.5 ui-monospace,Menlo,Consolas,monospace;color:#d1d5db}
+    .log{display:none;margin-top:10px;padding:10px;border:1px dashed var(--line);border-radius:12px;max-height:140px;overflow:auto;background:#0e1622;font:13px/1.5 ui-monospace,Menlo,Consolas,monospace;color:#d1d5db}
     .hidden{display:none}
     /* bottom nav */
     .tabbar{position:fixed;left:0;right:0;bottom:0;height:72px;background:#0e1622;border-top:1px solid var(--line);display:grid;grid-template-columns:repeat(6,1fr);z-index:50}
@@ -36,16 +31,11 @@
     .tabbtn.active{color:#fff}
     .tabbtn svg{width:22px;height:22px;opacity:.9}
     .topbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
-    .switch{position:relative;width:44px;height:24px;background:#1f2a37;border-radius:999px;display:inline-block;vertical-align:middle}
-    .switch input{display:none}
-    .knob{position:absolute;top:3px;left:3px;width:18px;height:18px;background:#fff;border-radius:50%;transition:left .2s}
-    .switch input:checked + .knob{left:23px;background:#a7f3d0}
-    .btnrow{display:flex;gap:8px;justify-content:flex-end}
     .list{display:grid;gap:10px;margin-top:8px}
     .item{padding:10px;border:1px solid var(--line);border-radius:12px;background:#0e1622}
     audio,video{width:100%;margin-top:10px}
-    /* import mode chips */
-    .chips{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 4px}
+    /* import chips */
+    .chips{display:flex;gap:8px;flex-wrap:wrap;margin:6px 0 2px}
     .chip{padding:8px 10px;border:1px solid var(--line);border-radius:999px;background:#0e1622;cursor:pointer}
     .chip.active{background:var(--accent);border-color:var(--accent);color:#fff}
   </style>
@@ -55,29 +45,14 @@
     <!-- IMPORT -->
     <div class="card" id="tab-import">
       <div class="topbar"><h1>Import</h1></div>
-      <p class="muted">Choose a method to bring in your script.</p>
+      <p class="muted">Bring in your script via paste or PDF upload.</p>
 
       <div class="chips">
-        <span class="chip active" data-mode="url">PDF URL</span>
-        <span class="chip" data-mode="paste">Paste Script Text</span>
+        <span class="chip active" data-mode="paste">Paste Script Text</span>
         <span class="chip" data-mode="upload">Upload PDF</span>
       </div>
 
-      <div id="import-url">
-        <div class="row two">
-          <div>
-            <label for="pdf">Upload PDF (URL)</label>
-            <input id="pdf" placeholder="https://example.com/your-script.pdf" value="https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf">
-          </div>
-          <div>
-            <label for="title-url">Title</label>
-            <input id="title-url" value="Test Script">
-          </div>
-        </div>
-        <div class="btnrow"><button id="btn-import-url">Continue</button></div>
-      </div>
-
-      <div id="import-paste" class="hidden">
+      <div id="import-paste">
         <label for="paste">Paste script here</label>
         <textarea id="paste" placeholder="JANE: Hello there.
 JOHN: Hey."></textarea>
@@ -88,7 +63,7 @@ JOHN: Hey."></textarea>
           </div>
           <div></div>
         </div>
-        <div class="btnrow"><button id="btn-import-paste">Continue</button></div>
+        <div class="row"><button id="btn-import-paste">Continue</button></div>
       </div>
 
       <div id="import-upload" class="hidden">
@@ -101,7 +76,7 @@ JOHN: Hey."></textarea>
           </div>
           <div></div>
         </div>
-        <div class="btnrow"><button id="btn-import-upload">Continue</button></div>
+        <div class="row"><button id="btn-import-upload">Continue</button></div>
       </div>
 
       <div id="log-import" class="log"></div>
@@ -124,7 +99,7 @@ JOHN: Hey."></textarea>
         </div>
       </div>
       <div id="partnersBox" class="list"></div>
-      <div class="btnrow">
+      <div class="row" style="justify-content:flex-end;display:flex;gap:8px">
         <button class="ghost" id="btn-assign-back">Back</button>
         <button id="btn-assign-next">Continue</button>
       </div>
@@ -137,7 +112,7 @@ JOHN: Hey."></textarea>
         <h1>Rehearse</h1>
         <div>
           <span style="margin-right:8px;color:var(--muted);font-weight:600">Auto-cue</span>
-          <label class="switch"><input id="autocue" type="checkbox" checked><span class="knob"></span></label>
+          <label style="display:inline-flex;gap:8px;align-items:center"><input id="autocue" type="checkbox" checked> <span class="pill">UI only</span></label>
         </div>
       </div>
 
@@ -150,7 +125,7 @@ JOHN: Hey."></textarea>
             <div id="line-count" class="pill">Line —/—</div>
           </div>
           <div id="line-box" style="margin-top:10px;min-height:80px"></div>
-          <div class="btnrow">
+          <div style="display:flex;gap:8px;justify-content:flex-end">
             <button class="ghost" id="btn-prev">Prev</button>
             <button id="btn-play">Play</button>
             <button class="ghost" id="btn-next">Next</button>
@@ -160,7 +135,7 @@ JOHN: Hey."></textarea>
 
       <audio id="reader" preload="none" class="hidden"></audio>
       <div id="log-rehearse" class="log"></div>
-      <div class="btnrow" style="margin-top:8px">
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px">
         <button class="ghost" id="btn-rehearse-back">Back</button>
         <button id="btn-rehearse-next">Next</button>
       </div>
@@ -170,7 +145,7 @@ JOHN: Hey."></textarea>
     <div class="card hidden" id="tab-record">
       <div class="topbar"><h1>Record</h1></div>
       <p class="muted">Headphones recommended to avoid echo.</p>
-      <div class="btnrow">
+      <div style="display:flex;gap:8px;justify-content:flex-end">
         <button id="btn-rec-start">Start</button>
         <button id="btn-rec-stop" disabled>Stop</button>
       </div>
@@ -180,12 +155,12 @@ JOHN: Hey."></textarea>
           <label for="takeLabel">Label</label>
           <input id="takeLabel" placeholder="e.g., Scene 1 – Take 1">
         </div>
-        <div class="btnrow">
-          <button id="btn-save-take" class="secondary" disabled>Save to Gallery</button>
+        <div style="display:flex;gap:8px;justify-content:flex-end">
+          <button id="btn-save-take" class="ghost" disabled>Save to Gallery</button>
         </div>
       </div>
       <div id="log-record" class="log"></div>
-      <div class="btnrow">
+      <div style="display:flex;gap:8px;justify-content:flex-end">
         <button class="ghost" id="btn-record-back">Back</button>
         <button id="btn-record-next">Next</button>
       </div>
@@ -195,7 +170,7 @@ JOHN: Hey."></textarea>
     <div class="card hidden" id="tab-gallery">
       <div class="topbar"><h1>Gallery</h1></div>
       <div id="takesList" class="list"></div>
-      <div class="btnrow">
+      <div style="display:flex;gap:8px;justify-content:flex-end">
         <button class="ghost" id="btn-gallery-back">Back</button>
       </div>
       <div id="log-gallery" class="log"></div>
@@ -225,13 +200,12 @@ JOHN: Hey."></textarea>
       <span>Gallery</span>
     </a>
     <a class="tabbtn" data-tab="settings" title="Settings" id="go-settings">
-      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M19.14,12.94a7.43,7.43,0,0,0,.05-1l2-1.55-2-3.46-2.35.49a7.42,7.42,0,0,0-.86-.5L14.5,3H9.5L8,6.92a7.42,7.42,0,0,0-.86.5L4.79,6.93,2.79,10.39,4.79,12a7.43,7.43,0,0,0,0,1l-2,1.55,2,3.46,2.35-.49a7.42,7.42,0,0,0,.86.5L9.5,21h5l1.5-3.92a7.42,7.42,0,0,0,.86-.5l2.35.49,2-3.46Z"/><circle cx="12" cy="12" r="3" fill="#0b0f14"/></svg>
+      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M19.14,12.94a7.43,7.43,0,0,0,.05-1l2-1.55-2-3.46-2.35.49a7.42,7.42,0,0,0-.86-.5L14.5,3H9.5L8,6.92a7.42,7.42,0,0,0-.86.5L4.79,6.93,2.79,10.39,4.79,12a7.43,7.43,0,0,0,0,1l-2,1.55,2,3.46,2.35-.49,2-3.46Z"/><circle cx="12" cy="12" r="3" fill="#0b0f14"/></svg>
       <span>Settings</span>
     </a>
   </nav>
 
   <script>
-    // ---------- Minimal state ----------
     const state = {
       base: window.location.origin,
       secret: new URLSearchParams(location.search).get('secret') || '',
@@ -240,10 +214,14 @@ JOHN: Hey."></textarea>
       takes: []
     };
 
-    // ---------- Helpers ----------
     const $ = (id) => document.getElementById(id);
-    const log = (box, t, cls='') => { const d=$(box); const p=document.createElement('div'); p.textContent=t; if(cls)p.className=cls; d.appendChild(p); d.scrollTop=d.scrollHeight; };
+    const showLog = (box, text, cls='') => {
+      const d=$(box); d.style.display='block';
+      const p=document.createElement('div'); p.textContent=text; if(cls)p.className=cls;
+      d.appendChild(p); d.scrollTop=d.scrollHeight;
+    };
     const uniq = (a) => [...new Set(a)];
+
     function setTab(name){
       ['import','assign','rehearse','record','gallery'].forEach(t=>{
         const card = document.getElementById(`tab-${t}`);
@@ -257,67 +235,51 @@ JOHN: Hey."></textarea>
       const headers = isFormData ? {} : { 'Content-Type': 'application/json' };
       if (state.secret) headers['X-Shared-Secret'] = state.secret;
       const res = await fetch(`${state.base}${path}`, {
-        method,
-        headers,
-        body: isFormData ? body : (body ? JSON.stringify(body) : undefined)
+        method, headers, body: isFormData ? body : (body ? JSON.stringify(body) : undefined)
       });
       const json = await res.json().catch(()=>({}));
       if (!res.ok) throw new Error(json.error || res.statusText);
       return json;
     }
 
-    // ---------- Import chips ----------
+    // chips
     document.querySelectorAll('.chip').forEach(ch=>{
       ch.addEventListener('click', ()=>{
         document.querySelectorAll('.chip').forEach(x=>x.classList.remove('active'));
         ch.classList.add('active');
         const mode = ch.dataset.mode;
-        $('import-url').classList.toggle('hidden', mode!=='url');
         $('import-paste').classList.toggle('hidden', mode!=='paste');
         $('import-upload').classList.toggle('hidden', mode!=='upload');
+        $('log-import').style.display='none'; $('log-import').innerHTML='';
       });
     });
 
-    // ---------- IMPORT: URL ----------
-    $('btn-import-url').onclick = async ()=>{
-      $('btn-import-url').disabled = true; $('log-import').innerHTML='';
-      try{
-        const pdf=$('pdf').value.trim(), title=$('title-url').value.trim();
-        const up = await api('POST','/debug/upload_script',{ pdf_url: pdf, title });
-        await afterImport(up);
-      }catch(e){ log('log-import',`Error: ${e.message}`,'err'); }
-      finally{ $('btn-import-url').disabled = false; }
-    };
-
-    // ---------- IMPORT: PASTE ----------
+    // IMPORT: Paste
     $('btn-import-paste').onclick = async ()=>{
-      $('btn-import-paste').disabled = true; $('log-import').innerHTML='';
+      $('btn-import-paste').disabled = true; $('log-import').style.display='none'; $('log-import').innerHTML='';
       try{
         const text=$('paste').value.trim(), title=$('title-paste').value.trim();
         if (!text) throw new Error('Please paste your script text first.');
         const up = await api('POST','/debug/upload_script_text',{ text, title });
         await afterImport(up);
-      }catch(e){ log('log-import',`Error: ${e.message}`,'err'); }
+      }catch(e){ showLog('log-import',`Error: ${e.message}`,'err'); }
       finally{ $('btn-import-paste').disabled = false; }
     };
 
-    // ---------- IMPORT: UPLOAD (file) ----------
+    // IMPORT: Upload
     $('btn-import-upload').onclick = async ()=>{
-      $('btn-import-upload').disabled = true; $('log-import').innerHTML='';
+      $('btn-import-upload').disabled = true; $('log-import').style.display='none'; $('log-import').innerHTML='';
       try{
-        const f = $('file').files[0];
-        if (!f) throw new Error('Choose a PDF file first.');
+        const f = $('file').files[0]; if (!f) throw new Error('Choose a PDF file first.');
         const title = $('title-upload').value.trim();
-        const fd = new FormData();
-        fd.append('pdf', f);
-        fd.append('title', title);
+        const fd = new FormData(); fd.append('pdf', f); fd.append('title', title);
         const up = await api('POST','/debug/upload_script_upload', fd, true);
         await afterImport(up);
-      }catch(e){ log('log-import',`Error: ${e.message}`,'err'); }
+      }catch(e){ showLog('log-import',`Error: ${e.message}`,'err'); }
       finally{ $('btn-import-upload').disabled = false; }
     };
 
-    // ---------- Post-import (common) ----------
+    // after import → Assign
     async function afterImport(up){
       state.scriptId = up.script_id;
       const sc = await api('GET', `/debug/scenes?script_id=${encodeURIComponent(state.scriptId)}`);
@@ -326,93 +288,67 @@ JOHN: Hey."></textarea>
       state.roles = uniq(state.lines.map(l=>l.speaker).filter(Boolean)); if(!state.roles.length) state.roles=['UNKNOWN'];
       $('scene-pill').textContent = `scene: ${state.sceneId}`;
       const sel = $('role'); sel.innerHTML = ''; state.roles.forEach(r=>{ const o=document.createElement('option'); o.value=r; o.textContent=r; sel.appendChild(o); });
-      state.myRole = sel.value;
-      buildPartnersUI();
-      setTab('assign');
+      state.myRole = sel.value; buildPartnersUI(); setTab('assign');
     }
 
-    // ---------- ASSIGN ----------
+    // ASSIGN
     $('role').addEventListener('change', ()=>{ state.myRole=$('role').value; buildPartnersUI(); });
     $('defaultVoice').addEventListener('input', buildPartnersUI);
-
     function buildPartnersUI(){
       const box=$('partnersBox'); box.innerHTML='';
       const defaultVoice=$('defaultVoice').value || 'alloy';
-      const partners=state.roles.filter(r=>r!==state.myRole);
-      if(!partners.length){
-        const div=document.createElement('div'); div.className='item'; div.innerHTML='<span class="muted">No partner roles detected (stub parser returns UNKNOWN).</span>'; box.appendChild(div);
-      } else {
-        partners.forEach(name=>{
-          const div=document.createElement('div'); div.className='item';
-          div.innerHTML=`<div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
-            <div><strong>${name}</strong></div>
-            <input id="voice_${name}" value="${defaultVoice}" style="max-width:220px">
-          </div>`;
-          box.appendChild(div);
-        });
-      }
+      const partners=(state.roles||[]).filter(r=>r!==state.myRole);
+      if(!partners.length){ const div=document.createElement('div'); div.className='item'; div.innerHTML='<span class="muted">No partner roles detected (stub parser returns UNKNOWN).</span>'; box.appendChild(div); }
+      else { partners.forEach(name=>{ const div=document.createElement('div'); div.className='item'; div.innerHTML=`<div style="display:flex;align-items:center;justify-content:space-between;gap:10px"><div><strong>${name}</strong></div><input id="voice_${name}" value="${defaultVoice}" style="max-width:220px"></div>`; box.appendChild(div); }); }
     }
-
     $('btn-assign-back').onclick = ()=> setTab('import');
     $('btn-assign-next').onclick = async ()=>{
-      $('btn-assign-next').disabled=true; $('log-assign').innerHTML='';
+      $('btn-assign-next').disabled=true; $('log-assign').style.display='none'; $('log-assign').innerHTML='';
       try{
         const defaultVoice=$('defaultVoice').value||'alloy';
-        const partners=state.roles.filter(r=>r!==state.myRole);
-        const map={};
-        if(!partners.length) map['UNKNOWN']=defaultVoice; else partners.forEach(n=>{ map[n]=(document.getElementById(`voice_${n}`)?.value||defaultVoice).trim(); });
-        state.voiceMap = map;
-        await api('POST','/debug/set_voice',{ script_id: state.scriptId, voice_map: map });
-        log('log-assign','Voices set.','ok');
-        setTab('rehearse');
-      } catch(e){ log('log-assign',`Error: ${e.message}`,'err'); }
+        const partners=(state.roles||[]).filter(r=>r!==state.myRole);
+        const map={}; if(!partners.length) map['UNKNOWN']=defaultVoice; else partners.forEach(n=>{ map[n]=(document.getElementById(`voice_${n}`)?.value||defaultVoice).trim(); });
+        state.voiceMap = map; await api('POST','/debug/set_voice',{ script_id: state.scriptId, voice_map: map }); setTab('rehearse');
+      }catch(e){ showLog('log-assign',`Error: ${e.message}`,'err'); }
       finally{ $('btn-assign-next').disabled=false; }
     };
 
-    // ---------- REHEARSE ----------
+    // REHEARSE (auto-prepare on entry)
     function updateLineUI(){
-      $('role-label').textContent = `Role: ${state.myRole || '—'}`;
-      $('line-count').textContent = `Line ${state.currentLine}/${state.lines.length||'—'}`;
+      document.getElementById('role-label').textContent = `Role: ${state.myRole || '—'}`;
+      document.getElementById('line-count').textContent = `Line ${state.currentLine}/${state.lines.length||'—'}`;
       const you = (state.lines[state.currentLine-1]?.speaker===state.myRole);
-      $('line-box').innerHTML = you
+      document.getElementById('line-box').innerHTML = you
         ? `<div style="color:#86efac"><strong>${state.myRole} (You)</strong></div><div style="margin-top:6px">${state.lines[state.currentLine-1]?.text||''}</div>`
         : `<div style="color:#93c5fd"><strong>Partner</strong></div><div style="margin-top:6px">${state.lines[state.currentLine-1]?.text||''}</div>`;
     }
-    $('btn-prev').onclick = ()=>{ if(state.currentLine>1){ state.currentLine--; updateLineUI(); } };
-    $('btn-next').onclick = ()=>{ if(state.currentLine < (state.lines.length||1)){ state.currentLine++; updateLineUI(); } };
+    document.getElementById('btn-prev').onclick = ()=>{ if(state.currentLine>1){ state.currentLine--; updateLineUI(); } };
+    document.getElementById('btn-next').onclick = ()=>{ if(state.currentLine < (state.lines.length||1)){ state.currentLine++; updateLineUI(); } };
 
     async function ensurePrepared(){
-      $('prep').classList.remove('hidden');
-      $('rehearse-ui').classList.add('hidden');
-      $('reader').src=''; $('btn-play').textContent='Play';
+      document.getElementById('prep').classList.remove('hidden');
+      document.getElementById('rehearse-ui').classList.add('hidden');
+      const player = document.getElementById('reader'); player.src=''; document.getElementById('btn-play').textContent='Play';
       try{
         const rr = await api('POST','/debug/render',{ script_id: state.scriptId, scene_id: state.sceneId, role: state.myRole, pace: 'normal' });
         if(!rr.render_id) throw new Error('No render_id');
         let status='pending', url='';
         while(status!=='complete'){ const st=await api('GET',`/debug/render_status?render_id=${encodeURIComponent(rr.render_id)}`); status=st.status; url=st.download_url||''; if(status!=='complete') await new Promise(r=>setTimeout(r,600)); }
-        state.readerUrl = `${state.base}${url}`;
-        $('reader').src=state.readerUrl;
-        $('prep').classList.add('hidden');
-        $('rehearse-ui').classList.remove('hidden');
-        updateLineUI();
-      }catch(e){ $('prep').textContent = `Error preparing reader: ${e.message}`; }
+        state.readerUrl = `${state.base}${url}`; player.src=state.readerUrl;
+        document.getElementById('prep').classList.add('hidden'); document.getElementById('rehearse-ui').classList.remove('hidden'); updateLineUI();
+      }catch(e){ document.getElementById('prep').textContent = `Error preparing reader: ${e.message}`; }
     }
+    const player = document.getElementById('reader');
+    document.getElementById('btn-play').onclick = ()=>{ if(!player.src) return; if(player.paused){ player.play().catch(()=>{}); document.getElementById('btn-play').textContent='Pause'; } else { player.pause(); document.getElementById('btn-play').textContent='Play'; } };
+    document.getElementById('btn-rehearse-back').onclick = ()=> setTab('assign');
+    document.getElementById('btn-rehearse-next').onclick = ()=> setTab('record');
 
-    const player = $('reader');
-    $('btn-play').onclick = ()=>{
-      if(!player.src) return;
-      if(player.paused){ player.play().catch(()=>{}); $('btn-play').textContent='Pause'; }
-      else { player.pause(); $('btn-play').textContent='Play'; }
-    };
-    $('btn-rehearse-back').onclick = ()=> setTab('assign');
-    $('btn-rehearse-next').onclick = ()=> setTab('record');
-
-    // ---------- RECORD (local) ----------
+    // RECORD (local only)
     let mediaStream=null, mediaRec=null, chunks=[];
-    $('btn-record-back').onclick = ()=> setTab('rehearse');
-    $('btn-record-next').onclick = ()=> setTab('gallery');
-    $('btn-rec-start').onclick = async ()=>{
-      $('log-record').innerHTML='';
+    document.getElementById('btn-record-back').onclick = ()=> setTab('rehearse');
+    document.getElementById('btn-record-next').onclick = ()=> setTab('gallery');
+    document.getElementById('btn-rec-start').onclick = async ()=>{
+      document.getElementById('log-record').style.display='none'; document.getElementById('log-record').innerHTML='';
       try{
         mediaStream = await navigator.mediaDevices.getUserMedia({ audio:true });
         mediaRec = new MediaRecorder(mediaStream); chunks=[];
@@ -420,44 +356,32 @@ JOHN: Hey."></textarea>
         mediaRec.onstop = ()=>{
           const blob = new Blob(chunks, { type:'audio/webm' });
           const url = URL.createObjectURL(blob);
-          $('takePreview').src = url; $('takePreview').play().catch(()=>{});
-          $('btn-save-take').disabled=false;
+          document.getElementById('takePreview').src = url; document.getElementById('takePreview').play().catch(()=>{});
+          document.getElementById('btn-save-take').disabled=false;
         };
-        mediaRec.start(); $('btn-rec-start').disabled=true; $('btn-rec-stop').disabled=false;
-      }catch(e){ log('log-record',`Error: ${e.message}`,'err'); }
+        mediaRec.start(); document.getElementById('btn-rec-start').disabled=true; document.getElementById('btn-rec-stop').disabled=false;
+      }catch(e){ showLog('log-record',`Error: ${e.message}`,'err'); }
     };
-    $('btn-rec-stop').onclick = ()=>{
+    document.getElementById('btn-rec-stop').onclick = ()=>{
       try{
         mediaRec?.stop(); mediaStream?.getTracks().forEach(t=>t.stop());
-        $('btn-rec-start').disabled=false; $('btn-rec-stop').disabled=true;
+        document.getElementById('btn-rec-start').disabled=false; document.getElementById('btn-rec-stop').disabled=true;
       }catch{}
     };
-    $('btn-save-take').onclick = ()=>{
-      const label = $('takeLabel').value.trim() || `Take ${state.takes.length+1}`;
-      const src = $('takePreview').src; if(!src) return;
-      state.takes.push({ label, url: src }); $('takeLabel').value=''; $('btn-save-take').disabled=true;
+    document.getElementById('btn-save-take').onclick = ()=>{
+      const label = (document.getElementById('takeLabel').value||'').trim() || `Take ${state.takes.length+1}`;
+      const src = document.getElementById('takePreview').src; if(!src) return;
+      state.takes.push({ label, url: src }); document.getElementById('takeLabel').value=''; document.getElementById('btn-save-take').disabled=true;
       refreshGallery(); setTab('gallery');
     };
 
-    // ---------- GALLERY ----------
     function refreshGallery(){
-      const list=$('takesList'); list.innerHTML='';
-      if(!state.takes.length){
-        const p=document.createElement('div'); p.className='item muted'; p.textContent='No takes yet. Record a take to see it here.'; list.appendChild(p); return;
-      }
-      state.takes.forEach(t=>{
-        const div=document.createElement('div'); div.className='item';
-        div.innerHTML = `<div style="display:flex;gap:10px;align-items:center;justify-content:space-between">
-            <div><strong>${t.label}</strong></div>
-            <div><a class="ghost" style="padding:8px 10px;border-radius:10px" href="${t.url}" download="${t.label.replace(/\s+/g,'_')}.webm">Download</a></div>
-          </div>
-          <audio controls src="${t.url}"></audio>`;
-        list.appendChild(div);
-      });
+      const list=document.getElementById('takesList'); list.innerHTML='';
+      if(!state.takes.length){ const p=document.createElement('div'); p.className='item'; p.textContent='No takes yet. Record a take to see it here.'; list.appendChild(p); return; }
+      state.takes.forEach(t=>{ const div=document.createElement('div'); div.className='item'; div.innerHTML=`<div style="display:flex;gap:10px;align-items:center;justify-content:space-between"><div><strong>${t.label}</strong></div><div><a class="ghost" style="padding:8px 10px;border-radius:10px" href="${t.url}" download="${t.label.replace(/\s+/g,'_')}.webm">Download</a></div></div><audio controls src="${t.url}"></audio>`; list.appendChild(div); });
     }
-    $('btn-gallery-back').onclick = ()=> setTab('record');
 
-    // ---------- Bottom nav ----------
+    // bottom nav
     document.querySelectorAll('.tabbtn').forEach(btn=>{
       btn.addEventListener('click', ()=>{
         const tab = btn.dataset.tab;
