@@ -32,12 +32,14 @@
     .chip{padding:8px 10px;border:1px solid var(--line);border-radius:999px;background:#0e1622;cursor:pointer}
     .chip.active{background:var(--accent);border-color:var(--accent);color:#fff}
     .pill{background:#0e1622;border:1px solid var(--line);border-radius:999px;padding:6px 10px;color:#cbd5e1;font-weight:700}
-    .log{display:none;margin-top:12px;padding:10px;border:1px solid var(--line);border-radius:12px;background:#0e1622;white-space:pre-wrap}
+    .log{display:none;margin-top:12px;padding:10px;border:1px solid var(--line);border-radius:12px;background:#0e1622;white-space:pre-wrap;font:13px/1.5 ui-monospace,Menlo,Consolas,monospace;color:#d1d5db}
     .log.err{border-color:#ef4444;color:#fecaca}
-    .tabs{position:fixed;left:0;right:0;bottom:0;background:rgba(11,15,20,.9);backdrop-filter:blur(8px);border-top:1px solid var(--line)}
-    .tabs-inner{max-width:900px;margin:0 auto;display:grid;grid-template-columns:repeat(6,1fr);gap:6px;padding:10px 16px}
-    .tabbtn{padding:8px;border:1px solid transparent;border-radius:10px;text-align:center;color:#cbd5e1;background:transparent}
-    .tabbtn.active{border-color:var(--accent);color:#fff}
+    .hidden{display:none}
+    .tabbar{position:fixed;left:0;right:0;bottom:0;height:64px;background:rgba(11,15,20,.92);backdrop-filter:blur(8px);border-top:1px solid var(--line)}
+    .tabbar nav{max-width:900px;margin:0 auto;height:64px;display:grid;grid-template-columns:repeat(6,1fr);gap:6px;padding:10px 16px}
+    .tabbar a{display:flex;flex-direction:column;justify-content:center;align-items:center;gap:2px;text-decoration:none;border:1px solid transparent;border-radius:10px;color:#cbd5e1}
+    .tabbar a.active{border-color:var(--accent);color:#fff}
+    .tabbar svg{width:22px;height:22px}
   </style>
 </head>
 <body>
@@ -109,15 +111,11 @@ I didn’t go on purpose."></textarea>
         <h1>Rehearse</h1>
         <div>
           <span style="margin-right:8px;color:var(--muted);font-weight:600">Auto-cue</span>
-          <span class="pill" id="role-label"></span>
-          <span class="pill" id="line-count"></span>
+          <label style="display:inline-flex;gap:8px;align-items:center;user-select:none"><input id="uiOnly" type="checkbox" checked> <span class="pill">UI only</span></label>
         </div>
       </div>
 
-      <div id="prep" class="item">
-        <strong>Preparing reader track…</strong>
-        <div class="muted" style="margin-top:6px">We’ll speak your partners’ lines; your lines are silent.</div>
-      </div>
+      <div id="prep" class="item">Preparing reader…</div>
 
       <div id="rehearse-ui" class="hidden">
         <div id="line-box" class="item"></div>
@@ -171,22 +169,59 @@ I didn’t go on purpose."></textarea>
     </div>
   </div>
 
-  <!-- Bottom tabs -->
-  <div class="tabs">
-    <div class="tabs-inner">
-      <button class="tabbtn active" data-tab="import">Import</button>
-      <button class="tabbtn" data-tab="assign">Assign</button>
-      <button class="tabbtn" data-tab="rehearse">Rehearse</button>
-      <button class="tabbtn" data-tab="record">Record</button>
-      <button class="tabbtn" data-tab="gallery">Gallery</button>
-      <button class="tabbtn" data-tab="settings">Settings</button>
-    </div>
+  <!-- Bottom Tabs -->
+  <div class="tabbar">
+    <nav>
+      <a href="javascript:void(0)" class="active tabbtn" data-tab="import" aria-label="Import">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M20,8H4A2,2,0,0,0,2,10v8a2,2,0,0,0,2,2H20a2,2,0,0,0,2-2V10A2,2,0,0,0,20,8Zm0,10H4V10H20Z"/><rect x="6" y="12" width="6" height="2"/><rect x="14" y="12" width="4" height="2"/></svg>
+        <span>Import</span>
+      </a>
+      <a href="javascript:void(0)" class="tabbtn" data-tab="assign" aria-label="Assign">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12,12a5,5,0,1,0-5-5A5,5,0,0,0,12,12Zm0,2c-4,0-8,2-8,6v2H20V20C20,16,16,14,12,14Z"/></svg>
+        <span>Assign</span>
+      </a>
+      <a href="javascript:void(0)" class="tabbtn" data-tab="rehearse" aria-label="Rehearse">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8,5.14V19.14L19,12.14Z"/></svg>
+        <span>Rehearse</span>
+      </a>
+      <a href="javascript:void(0)" class="tabbtn" data-tab="record" aria-label="Record">
+        <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="4"/><path d="M19,10v2a7,7,0,0,1-14,0V10H3v2a9,9,0,0,0,18,0V10Z"/></svg>
+        <span>Record</span>
+      </a>
+      <a href="javascript:void(0)" class="tabbtn" data-tab="gallery" aria-label="Gallery">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M21,3H3A2,2,0,0,0,1,5V19a2,2,0,0,0,2,2H21a2,2,0,0,0,2-2V5A2,2,0,0,0,21,3Zm0,16H3V5H21Z"/><circle cx="8" cy="8" r="1.5"/></svg>
+        <span>Gallery</span>
+      </a>
+      <a href="javascript:void(0)" class="tabbtn" data-tab="settings" aria-label="Settings">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M19.14,12.94a7.49,7.49,0,0,0,.06-1,7.49,7.49,0,0,0-.06-1l2-1.55-2-3.46-2.35.94a7.43,7.43,0,0,0-1.73-1L15.5,2h-4L10.94,4.87a7.43,7.43,0,0,0-1.73,1L6.86,4.94,4.5,8.4l2,1.55a7.49,7.49,0,0,0-.06,1,7.49,7.49,0,0,0,.06,1L4.5,13.5l2.36,3.46,2.35-.94a7.43,7.43,0,0,0,1.73,1L11.5,22h4l.56-2.87a7.43,7.43,0,0,0,1.73-1l2.35.94,2-3.46Z"/><circle cx="12" cy="12" r="3" fill="#0b0f14"/></svg>
+        <span>Settings</span>
+      </a>
+    </nav>
   </div>
 
   <script>
-    // tiny helpers
-    const $ = (id)=>document.getElementById(id);
-    const log = (box, msg, cls='') => { const d=$(box); d.style.display='block'; const p=document.createElement('div'); p.textContent=msg; p.className=cls; d.appendChild(p); d.scrollTop=d.scrollHeight; };
+    const state = {
+      base: window.location.origin,
+      secret: new URLSearchParams(location.search).get('secret') || '',
+      scriptId: null, sceneId: null, roles: [], myRole: null,
+      voiceMap: {}, readerUrl: null, lines: [], currentLine: 1,
+      takes: []
+    };
+
+    const $ = (id) => document.getElementById(id);
+
+    // Available AI voice presets
+    const VOICE_PRESETS = [
+      { id: 'alloy', label: 'Alloy' },
+      { id: 'verse', label: 'Verse' },
+      { id: 'coral', label: 'Coral' },
+      { id: 'ash', label: 'Ash' },
+      { id: 'lira', label: 'Lira' },
+      { id: 'amber', label: 'Amber' },
+      { id: 'slate', label: 'Slate' }
+    ];
+
+    const showLog = (box, text, cls='') => { const d=$(box); d.style.display='block'; const p=document.createElement('div'); p.textContent=text; p.className=cls; d.appendChild(p); d.scrollTop=d.scrollHeight; };
     const uniq = (a) => [...new Set(a)];
 
     // server call helper
@@ -199,16 +234,15 @@ I didn’t go on purpose."></textarea>
       return json;
     }
 
-    // role cleaner (client-side safety net)
     function cleanRoles(rs){
       return uniq((rs||[])
         .filter(Boolean)
         .map(r=>String(r).trim())
         .filter(r => r !== 'UNKNOWN')
-        .filter(r => /[A-Za-z]/.test(r))                // must contain a letter
-        .filter(r => !/^\d{1,4}$/.test(r))              // no pure page numbers
-        .filter(r => !/^(INT|EXT|SCENE)\b/.test(r))     // not scene heads
-        .filter(r => !/^CONT'?D$/.test(r))              // not CONT'D
+        .filter(r => /[A-Za-z]/.test(r))
+        .filter(r => !/^\d{1,4}$/.test(r))
+        .filter(r => !/^(INT|EXT|SCENE)\b/.test(r))
+        .filter(r => !/^CONT'?D$/.test(r))
       );
     }
 
@@ -222,26 +256,12 @@ I didn’t go on purpose."></textarea>
       if (name==='rehearse') ensurePrepared();
     }
 
-    // global state
-    const params = new URLSearchParams(location.search);
-    const state = {
-      base: location.origin || '',
-      secret: params.get('secret') || '',
-      scriptId: '',
-      sceneId: '',
-      lines: [],
-      roles: [],
-      myRole: '',
-      currentLine: 1,
-      voiceMap: {},
-      takes: [],
-    };
-
-    // chip toggle
-    document.querySelectorAll('.chip').forEach(chip=>{
-      chip.addEventListener('click', ()=>{
-        document.querySelectorAll('.chip').forEach(c=>c.classList.toggle('active', c===chip));
-        const mode = chip.dataset.mode;
+    // chips
+    document.querySelectorAll('.chip').forEach(ch=>{
+      ch.addEventListener('click', ()=>{
+        document.querySelectorAll('.chip').forEach(x=>x.classList.remove('active'));
+        ch.classList.add('active');
+        const mode = ch.dataset.mode;
         $('import-paste').classList.toggle('hidden', mode!=='paste');
         $('import-upload').classList.toggle('hidden', mode!=='upload');
         $('log-import').style.display='none'; $('log-import').innerHTML='';
@@ -256,24 +276,24 @@ I didn’t go on purpose."></textarea>
         if (!text) throw new Error('Please paste your script text first.');
         const up = await api('POST','/debug/upload_script_text',{ text, title });
         await afterImport(up);
-      }catch(e){ log('log-import',`Error: ${e.message}`,'err'); }
+      }catch(e){ showLog('log-import',`Error: ${e.message}`,'err'); }
       finally{ $('btn-import-paste').disabled = false; }
     };
 
-    // IMPORT: Upload PDF
+    // IMPORT: Upload
     $('btn-import-upload').onclick = async ()=>{
       $('btn-import-upload').disabled = true; $('log-import').style.display='none'; $('log-import').innerHTML='';
       try{
-        const f=$('file').files[0]; if (!f) throw new Error('Choose a PDF file first.');
+        const f = $('file').files[0]; if (!f) throw new Error('Choose a PDF file first.');
         const title = $('title-upload').value.trim();
         const fd = new FormData(); fd.append('pdf', f); fd.append('title', title);
         const up = await api('POST','/debug/upload_script_upload', fd, true);
         await afterImport(up);
-      }catch(e){ log('log-import',`Error: ${e.message}`,'err'); }
+      }catch(e){ showLog('log-import',`Error: ${e.message}`,'err'); }
       finally{ $('btn-import-upload').disabled = false; }
     };
 
-    // after import → Assign
+    // After import → Assign
     async function afterImport(up){
       state.scriptId = up.script_id;
       const sc = await api('GET', `/debug/scenes?script_id=${encodeURIComponent(state.scriptId)}`);
@@ -282,28 +302,17 @@ I didn’t go on purpose."></textarea>
       state.sceneId = scene.id;
       state.lines = scene.lines || [];
 
-      // roles from lines, then clean
       const rawRoles = uniq(state.lines.map(l=>l.speaker).filter(Boolean));
       state.roles = cleanRoles(rawRoles);
       if (!state.roles.length) state.roles = ['UNKNOWN'];
 
       $('scene-pill').textContent = `scene: ${state.sceneId}`;
-      const sel = $('role'); sel.innerHTML = ''; state.roles.forEach(r=>{ const o=document.createElement('option'); o.value=r; o.textContent=r; sel.appendChild(o); });
+      const sel = $('role'); sel.innerHTML = '';
+      state.roles.forEach(r=>{ const o=document.createElement('option'); o.value=r; o.textContent=r; sel.appendChild(o); });
       state.myRole = sel.value;
       buildPartnersUI();
       setTab('assign');
     }
-
-    // Available AI voice presets
-    const VOICE_PRESETS = [
-      { id: 'alloy', label: 'Alloy' },
-      { id: 'verse', label: 'Verse' },
-      { id: 'coral', label: 'Coral' },
-      { id: 'ash', label: 'Ash' },
-      { id: 'lira', label: 'Lira' },
-      { id: 'amber', label: 'Amber' },
-      { id: 'slate', label: 'Slate' }
-    ];
 
     // ASSIGN
     $('role').addEventListener('change', ()=>{ state.myRole=$('role').value; buildPartnersUI(); });
@@ -319,12 +328,11 @@ I didn’t go on purpose."></textarea>
       } else {
         partners.forEach(name=>{
           const div=document.createElement('div'); div.className='item';
-          const selectId = `voice_${name}`;
           const current = (state.voiceMap && state.voiceMap[name]) || 'alloy';
           const options = VOICE_PRESETS.map(v=>`<option value="${v.id}" ${v.id===current?'selected':''}>${v.label}</option>`).join('');
           div.innerHTML = `<div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
             <div style="font-weight:800">${name}</div>
-            <select id="${selectId}" style="max-width:220px">${options}</select>
+            <select id="voice_${name}" style="max-width:220px">${options}</select>
           </div>`;
           box.appendChild(div);
         });
@@ -335,19 +343,13 @@ I didn’t go on purpose."></textarea>
     $('btn-assign-next').onclick = async ()=>{
       $('btn-assign-next').disabled=true; $('log-assign').style.display='none'; $('log-assign').innerHTML='';
       try{
+        const defaultVoice='alloy';
         const partners=(state.roles||[]).filter(r=>r!==state.myRole);
-        const map={}; 
-        if(!partners.length){ map['UNKNOWN']='alloy'; }
-        else {
-          partners.forEach(n=>{ 
-            const sel = document.getElementById(`voice_${n}`);
-            map[n] = (sel ? sel.value : 'alloy').trim();
-          });
-        }
-        state.voiceMap = map; 
+        const map={}; if(!partners.length) map['UNKNOWN']=defaultVoice; else partners.forEach(n=>{ map[n] = (document.getElementById(`voice_${n}`)?.value||defaultVoice).trim(); });
+        state.voiceMap = map;
         await api('POST','/debug/set_voice',{ script_id: state.scriptId, voice_map: map });
         setTab('rehearse');
-      }catch(e){ log('log-assign',`Error: ${e.message}`,'err'); }
+      }catch(e){ showLog('log-assign',`Error: ${e.message}`,'err'); }
       finally{ $('btn-assign-next').disabled=false; }
     };
 
@@ -364,6 +366,10 @@ I didn’t go on purpose."></textarea>
     document.getElementById('btn-next').onclick = ()=>{ if(state.currentLine<(state.lines.length||1)){ state.currentLine++; updateLineUI(); } };
 
     async function ensurePrepared(){
+      if (!state.scriptId || !state.sceneId || !state.myRole) {
+        document.getElementById('prep').textContent = 'Import a script and assign roles first.';
+        return;
+      }
       document.getElementById('prep').classList.remove('hidden');
       document.getElementById('rehearse-ui').classList.add('hidden');
       const player = document.getElementById('reader'); player.src=''; document.getElementById('btn-play').textContent='Play';
@@ -371,19 +377,16 @@ I didn’t go on purpose."></textarea>
         const rr = await api('POST','/debug/render',{ script_id: state.scriptId, scene_id: state.sceneId, role: state.myRole, pace: 'normal' });
         if(!rr.render_id) throw new Error('No render_id');
         let status='pending', url='';
-        while(status!=='complete'){ const st=await api('GET',`/debug/render_status?render_id=${encodeURIComponent(rr.render_id)}`); status=st.status; url=st.download_url||''; if(status!=='complete') await new Promise(r=>setTimeout(r, 800)); }
-        if(!url) throw new Error('No download_url');
-        player.src=url;
+        while(status!=='complete'){ const st=await api('GET',`/debug/render_status?render_id=${encodeURIComponent(rr.render_id)}`); status=st.status; url=st.download_url||''; if(status!=='complete') await new Promise(r=>setTimeout(r,600)); }
+        state.readerUrl = `${state.base}${url}`; player.src=state.readerUrl;
         document.getElementById('prep').classList.add('hidden');
-        document.getElementById('rehearse-ui').classList.remove('hidden');
-        state.currentLine=1; updateLineUI();
-      }catch(e){ log('log-rehearse',`Error: ${e.message}`,'err'); }
+        document.getElementById('rehearse-ui').classList.remove('hidden'); state.currentLine=1; updateLineUI();
+      }catch(e){ document.getElementById('prep').textContent = `Error preparing reader: ${e.message}`; }
     }
-
+    const player = document.getElementById('reader');
     document.getElementById('btn-play').onclick = ()=>{
-      const p=document.getElementById('reader');
-      if (p.paused) { p.play(); document.getElementById('btn-play').textContent='Pause'; }
-      else { p.pause(); document.getElementById('btn-play').textContent='Play'; }
+      if (player.paused) { player.play(); document.getElementById('btn-play').textContent='Pause'; }
+      else { player.pause(); document.getElementById('btn-play').textContent='Play'; }
     };
     document.getElementById('btn-rehearse-back').onclick = ()=> setTab('assign');
     document.getElementById('btn-rehearse-next').onclick = ()=> setTab('record');
@@ -397,7 +400,7 @@ I didn’t go on purpose."></textarea>
           const blob=new Blob(chunks,{type:'audio/webm'}); const url=URL.createObjectURL(blob);
           const p=$('takePreview'); p.src=url; $('btn-save-take').disabled=false;
         }; rec.start(); $('btn-rec-start').disabled=true; $('btn-rec-stop').disabled=false;
-      }catch(e){ log('log-record',`Error: ${e.message}`,'err'); }
+      }catch(e){ showLog('log-record',`Error: ${e.message}`,'err'); }
     };
     document.getElementById('btn-rec-stop').onclick = ()=>{
       try{ rec?.stop(); $('btn-rec-start').disabled=false; $('btn-rec-stop').disabled=true; }catch{}
