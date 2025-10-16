@@ -209,7 +209,7 @@ function looksLikeSpeakerName(name: string): boolean {
   return true;
 }
 
-// ---------- NEW: this was missing ----------
+// ---------- REQUIRED: was missing in your file ----------
 function hasDialogue(scenes: Scene[]): boolean {
   if (!Array.isArray(scenes)) return false;
   for (const sc of scenes) {
@@ -221,7 +221,7 @@ function hasDialogue(scenes: Scene[]): boolean {
   }
   return false;
 }
-// -------------------------------------------
+// -------------------------------------------------------
 
 export function analyzeScriptText(rawInput: string): Scene[] {
   const raw = normalizeWhitespace(rawInput || '');
