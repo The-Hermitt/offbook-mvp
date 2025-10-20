@@ -10,6 +10,9 @@
 //   OCR_MAX_PAGES=10    page cap for OCR (default: 10)
 //   OCR_LANG=eng        tesseract language (default: 'eng')
 
+import path from 'path';
+import { fileURLToPath } from 'url';
+
 export type Line = { speaker: string; text: string };
 export type Scene = { id: string; title: string; lines: Line[] };
 
@@ -34,6 +37,12 @@ const OCR_ENABLED = process.env.OCR_ENABLED === '1' || process.env.OCR_ENABLED =
 const OCR_MAX_PAGES = Math.max(1, Number(process.env.OCR_MAX_PAGES || 10));
 const OCR_LANG = process.env.OCR_LANG || 'eng';
 
+// ----- pdf.js standard fonts path (needed when rendering pages in Node) -----
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const STANDARD_FONTS_DIR = path.join(__dirname, '../../node_modules/pdfjs-dist/standard_fonts');
+
+// ----- Utils -----
 function normalizeWhitespace(s: string): string {
   return (s || '')
     .normalize('NFKC')
@@ -47,7 +56,6 @@ function normalizeWhitespace(s: string): string {
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 }
-
 function isSceneHeading(line: string): boolean { return SCENE_HEAD_RE.test((line || '').trim()); }
 function isParenthetical(line: string): boolean { const t = (line || '').trim(); return t.startsWith('(') && t.endsWith(')'); }
 function isLikelyPageNumber(line: string): boolean { return ONLY_DIGITS_RE.test((line || '').trim()); }
@@ -70,7 +78,7 @@ function cleanName(line: string): string {
   return (line || '').replace(/\s*\([^)]*\)\s*/g, '').replace(/\s{2,}/g, ' ').trim();
 }
 
-// ——— Speaker heuristics ————————————————————————————————————————————————
+// ----- Speaker heuristics -----
 function looksLikeSpeakerName(name: string): boolean {
   if (!name) return false;
   const base = cleanName(name).replace(/\s{2,}/g, ' ');
@@ -88,7 +96,7 @@ function looksLikeSpeakerName(name: string): boolean {
   return true;
 }
 
-// ——— Scoring / quality ————————————————————————————————————————————————
+// ----- Role scoring / quality -----
 function rolesFromScenes(scenes: Scene[]): string[] {
   const set = new Set<string>();
   for (const sc of scenes) for (const ln of sc.lines || []) if (ln.speaker) set.add(ln.speaker);
@@ -120,7 +128,7 @@ function hasDialogue(scenes: Scene[]): boolean {
   return false;
 }
 
-// ——— Core text analyzer ————————————————————————————————————————————————
+// ----- Core text analyzer -----
 export function analyzeScriptText(rawInput: string, strictColon = false): Scene[] {
   const raw = normalizeWhitespace(rawInput || '');
   if (!raw) return [];
@@ -197,141 +205,4 @@ export function analyzeScriptText(rawInput: string, strictColon = false): Scene[
   for (const sc of scenes) {
     sc.lines = sc.lines
       .map(l => ({ speaker: cleanName(l.speaker), text: (l.text || '').trim() }))
-      .filter(l => l.text.length > 0 && l.speaker);
-  }
-  return scenes.filter(sc => sc.lines.length > 0);
-}
-
-// ——— PDF text extraction (fast path) ————————————————————————————————————
-async function extractTextWithPdfJs(bytes: Uint8Array): Promise<{ text: string; numPages: number }> {
-  const pdfjs = await import('pdfjs-dist/legacy/build/pdf.js');
-  const loadingTask = pdfjs.getDocument({ data: bytes });
-  const pdf = await loadingTask.promise;
-
-  const parts: string[] = [];
-  const pageCount = pdf.numPages;
-  for (let p = 1; p <= Math.min(pageCount, 100); p++) {
-    const page = await pdf.getPage(p);
-    const content = await page.getTextContent();
-    const strs = content.items.map((it: any) => (it?.str ?? '')).filter(Boolean);
-    parts.push(strs.join('\n'));
-  }
-  return { text: normalizeWhitespace(parts.join('\n')), numPages: pageCount };
-}
-
-// ——— OCR fallback (tesseract.js via @napi-rs/canvas) ————————————————————
-async function ocrPdfFirstPages(bytes: Uint8Array, maxPages: number, lang: string): Promise<{ text: string; pages: number }> {
-  const pdfjs = await import('pdfjs-dist/legacy/build/pdf.js');
-  const { createCanvas } = await import('@napi-rs/canvas');
-  // tesseract.js is heavy; lazy-load
-  const { createWorker } = await import('tesseract.js');
-
-  const loadingTask = pdfjs.getDocument({ data: bytes });
-  const pdf = await loadingTask.promise;
-
-  const pagesToDo = Math.min(pdf.numPages, Math.max(1, maxPages));
-  const worker = await createWorker(lang);
-
-  try {
-    let acc = '';
-    for (let p = 1; p <= pagesToDo; p++) {
-      const page = await pdf.getPage(p);
-      const viewport = page.getViewport({ scale: 2.0 }); // upsample for better OCR
-      const canvas = createCanvas(Math.ceil(viewport.width), Math.ceil(viewport.height));
-      const ctx = canvas.getContext('2d');
-
-      // Render page to canvas — pdfjs expects a Canvas-like 2D context
-      await page.render({ canvasContext: ctx as any, viewport }).promise;
-
-      const png = canvas.toBuffer('image/png');
-
-      const { data: { text } } = await worker.recognize(png);
-      if (text) acc += '\n' + text;
-    }
-    const cleaned = normalizeWhitespace(acc);
-    return { text: cleaned, pages: pagesToDo };
-  } finally {
-    await (worker as any).terminate?.();
-  }
-}
-
-// ——— Reparse guard ————————————————————————————————————————————————
-function maybeReparseStrictIfNoisy(scenes: Scene[], raw: string): Scene[] {
-  const stats = scoreRoles(scenes);
-  if (!stats.total) return scenes;
-  const tooManyBad = stats.badCount > 20 || stats.badRatio > 0.5;
-  if (!tooManyBad) return scenes;
-  const strict = analyzeScriptText(raw, /*strictColon*/ true);
-  const sStats = scoreRoles(strict);
-  const strictBetter =
-    (hasDialogue(strict) && !hasDialogue(scenes)) ||
-    (sStats.total && sStats.badCount < stats.badCount) ||
-    (hasDialogue(strict) && sStats.badRatio <= stats.badRatio);
-  return strictBetter ? strict : scenes;
-}
-
-// ——— Public API with diagnostics ————————————————————————————————————————
-export async function parseArrayBufferWithMeta(input: ArrayBuffer | Buffer): Promise<{ scenes: Scene[]; meta: ParserMeta }> {
-  const bytes = input instanceof Buffer ? new Uint8Array(input) : new Uint8Array(input);
-
-  // 1) pdfjs text
-  try {
-    const { text, numPages } = await extractTextWithPdfJs(bytes);
-    if (text && text.length > 0) {
-      let scenes = analyzeScriptText(text, false);
-      scenes = maybeReparseStrictIfNoisy(scenes, text);
-      if (hasDialogue(scenes)) {
-        return { scenes, meta: { pathUsed: 'pdfjs', roleStats: scoreRoles(scenes), rawLength: text.length, pagesTried: Math.min(numPages, 100) } };
-      }
-    }
-  } catch (err) {
-    console.warn('[pdf] pdfjs extract failed:', (err as Error)?.message);
-  }
-
-  // 2) naive buffer as UTF-8 (sometimes PDFs have hidden text streams)
-  try {
-    const raw = Buffer.isBuffer(input) ? input.toString('utf8') : Buffer.from(bytes).toString('utf8');
-    if (raw && raw.length > 0) {
-      let scenes = analyzeScriptText(raw, false);
-      scenes = maybeReparseStrictIfNoisy(scenes, raw);
-      if (hasDialogue(scenes)) {
-        return { scenes, meta: { pathUsed: 'naive', roleStats: scoreRoles(scenes), rawLength: raw.length } };
-      }
-      const strict = analyzeScriptText(raw, true);
-      if (hasDialogue(strict)) {
-        return { scenes: strict, meta: { pathUsed: 'strict', roleStats: scoreRoles(strict), rawLength: raw.length } };
-      }
-    }
-  } catch (err) {
-    console.warn('[pdf] naive buffer parse failed:', (err as Error)?.message);
-  }
-
-  // 3) OCR fallback (flagged, capped pages)
-  if (OCR_ENABLED) {
-    try {
-      const { text, pages } = await ocrPdfFirstPages(bytes, OCR_MAX_PAGES, OCR_LANG);
-      if (text && text.length > 0) {
-        let scenes = analyzeScriptText(text, false);
-        scenes = maybeReparseStrictIfNoisy(scenes, text);
-        if (hasDialogue(scenes)) {
-          return { scenes, meta: { pathUsed: 'ocr', roleStats: scoreRoles(scenes), rawLength: text.length, pagesTried: pages } };
-        }
-        const strict = analyzeScriptText(text, true);
-        if (hasDialogue(strict)) {
-          return { scenes: strict, meta: { pathUsed: 'ocr', roleStats: scoreRoles(strict), rawLength: text.length, pagesTried: pages } };
-        }
-      }
-    } catch (err) {
-      console.warn('[pdf] ocr failed:', (err as Error)?.message);
-    }
-  }
-
-  // 4) stub
-  const stub: Scene[] = [{ id: 'scene-1', title: 'Scene 1', lines: [] }];
-  return { scenes: stub, meta: { pathUsed: 'stub', roleStats: { total: 0, badCount: 0, badRatio: 0 }, rawLength: 0 } };
-}
-
-export async function parseArrayBuffer(input: ArrayBuffer | Buffer): Promise<Scene[]> {
-  const { scenes } = await parseArrayBufferWithMeta(input);
-  return scenes;
-}
+      .filter(l => l.text.length > 0 && l.sp
