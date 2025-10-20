@@ -9,7 +9,7 @@
 //   OCR_ENABLED=1         enable OCR fallback (default: off)
 //   OCR_MAX_PAGES=10      page cap for OCR (default: 10)
 //   OCR_LANG=eng          tesseract language (default: 'eng')
-//   OCR_SCALE=1.6         rasterization scale for OCR images (default: 1.6)
+//   OCR_SCALE=1.8         rasterization scale for OCR images (default: 1.8)
 //   OCR_TIMEOUT_MS=25000  hard timeout for the entire OCR pass (default: 25000)
 
 import path from 'path';
@@ -27,7 +27,6 @@ export type ParserMeta = {
   timedOut?: boolean;
 };
 
-// ---------- Config / Env ----------
 const SCENE_HEAD_RE = /^(?:INT\.|EXT\.|I\/E\.|INT\/EXT\.|SCENE\b|SCENE\s+\d+)/i;
 const ONLY_DIGITS_RE = /^\d{1,4}$/;
 const ALLCAPS_NAME_RE = /^[A-Z .,'\-&]+$/;
@@ -40,15 +39,15 @@ const STOP_NAMES = new Set([
 const OCR_ENABLED = process.env.OCR_ENABLED === '1' || process.env.OCR_ENABLED === 'true';
 const OCR_MAX_PAGES = Math.max(1, Number(process.env.OCR_MAX_PAGES || 10));
 const OCR_LANG = process.env.OCR_LANG || 'eng';
-const OCR_SCALE = Math.max(1, Number(process.env.OCR_SCALE || 1.6));
+const OCR_SCALE = Math.max(1, Number(process.env.OCR_SCALE || 1.8));
 const OCR_TIMEOUT_MS = Math.max(5000, Number(process.env.OCR_TIMEOUT_MS || 25000));
 
-// pdf.js standard fonts path (required in Node when rendering pages)
+// pdf.js standard fonts path for Node rendering
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const STANDARD_FONTS_DIR = path.join(__dirname, '../../node_modules/pdfjs-dist/standard_fonts');
 
-// ---------- Utils ----------
+// ---------- helpers ----------
 function normalizeWhitespace(s: string): string {
   return (s || '')
     .normalize('NFKC')
@@ -84,7 +83,7 @@ function cleanName(line: string): string {
   return (line || '').replace(/\s*\([^)]*\)\s*/g, '').replace(/\s{2,}/g, ' ').trim();
 }
 
-// ---------- Speaker heuristics ----------
+// speaker heuristics
 function looksLikeSpeakerName(name: string): boolean {
   if (!name) return false;
   const base = cleanName(name).replace(/\s{2,}/g, ' ');
@@ -102,7 +101,6 @@ function looksLikeSpeakerName(name: string): boolean {
   return true;
 }
 
-// ---------- Role scoring / quality ----------
 function rolesFromScenes(scenes: Scene[]): string[] {
   const set = new Set<string>();
   for (const sc of scenes) for (const ln of sc.lines || []) if (ln.speaker) set.add(ln.speaker);
@@ -134,7 +132,7 @@ function hasDialogue(scenes: Scene[]): boolean {
   return false;
 }
 
-// ---------- Core text analyzer ----------
+// ---- analyzer ----
 export function analyzeScriptText(rawInput: string, strictColon = false): Scene[] {
   const raw = normalizeWhitespace(rawInput || '');
   if (!raw) return [];
@@ -200,14 +198,13 @@ export function analyzeScriptText(rawInput: string, strictColon = false): Scene[
       }
     }
 
-    // Continuation
+    // continuation
     if (current.lines.length > 0 && !isParenthetical(line)) {
       const last = current.lines[current.lines.length - 1];
       last.text = (last.text ? last.text + ' ' : '') + line.trim();
     }
   }
 
-  // Cleanup
   for (const sc of scenes) {
     sc.lines = sc.lines
       .map(l => ({ speaker: cleanName(l.speaker), text: (l.text || '').trim() }))
@@ -216,7 +213,7 @@ export function analyzeScriptText(rawInput: string, strictColon = false): Scene[
   return scenes.filter(sc => sc.lines.length > 0);
 }
 
-// ---------- pdf.js CanvasFactory for @napi-rs/canvas ----------
+// ---- pdf.js CanvasFactory for @napi-rs/canvas ----
 type CanvasAndContext = { canvas: any; context: any };
 function makeCanvasFactory(createCanvas: (w:number,h:number)=>any) {
   return {
@@ -232,16 +229,14 @@ function makeCanvasFactory(createCanvas: (w:number,h:number)=>any) {
     },
     destroy: (target: CanvasAndContext) => {
       if (!target) return;
-      try {
-        if (target.canvas) { target.canvas.width = 0; target.canvas.height = 0; }
-      } catch {}
+      try { if (target.canvas) { target.canvas.width = 0; target.canvas.height = 0; } } catch {}
       (target as any).canvas = null;
       (target as any).context = null;
     }
   };
 }
 
-// ---------- PDF text extraction (fast path) ----------
+// ---- PDF text extraction (fast path) ----
 async function extractTextWithPdfJs(bytes: Uint8Array): Promise<{ text: string; numPages: number }> {
   const pdfjs = await import('pdfjs-dist/legacy/build/pdf.js');
   const loadingTask = pdfjs.getDocument({
@@ -261,7 +256,7 @@ async function extractTextWithPdfJs(bytes: Uint8Array): Promise<{ text: string; 
   return { text: normalizeWhitespace(parts.join('\n')), numPages: pageCount };
 }
 
-// ---------- OCR fallback (tesseract.js) ----------
+// ---- OCR fallback (tesseract.js) ----
 async function ocrPdfFirstPages(bytes: Uint8Array, maxPages: number, lang: string, scale: number): Promise<{ text: string; pages: number }> {
   const pdfjs = await import('pdfjs-dist/legacy/build/pdf.js');
   const { createCanvas } = await import('@napi-rs/canvas');
@@ -275,12 +270,17 @@ async function ocrPdfFirstPages(bytes: Uint8Array, maxPages: number, lang: strin
 
   const pagesToDo = Math.min(pdf.numPages, Math.max(1, maxPages));
 
-  // Init worker explicitly (load + initialize) and pin language data CDN
-  const worker = await createWorker({
-    langPath: 'https://tessdata.projectnaptha.com/4.0.0'
-  });
+  const worker = await createWorker({ langPath: 'https://tessdata.projectnaptha.com/4.0.0' });
   await worker.loadLanguage(lang);
   await worker.initialize(lang);
+
+  // OCR hints tuned for screenplay pages
+  await worker.setParameters({
+    tessedit_pageseg_mode: '6',             // Assume a uniform block of text
+    preserve_interword_spaces: '1',         // Keep spaces
+    user_defined_dpi: '300',                // Pretend raster is 300dpi
+    tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 .,'-&:;?!()"
+  });
 
   const canvasFactory = makeCanvasFactory(createCanvas);
 
@@ -288,23 +288,16 @@ async function ocrPdfFirstPages(bytes: Uint8Array, maxPages: number, lang: strin
     let acc = '';
     for (let p = 1; p <= pagesToDo; p++) {
       const page = await pdf.getPage(p);
-      const viewport = page.getViewport({ scale });
+      const viewport = page.getViewport({ scale }); // e.g., 1.8–2.2
 
       const cc = canvasFactory.create(viewport.width, viewport.height);
-      await page.render({
-        canvasContext: cc.context,
-        viewport,
-        canvasFactory
-      }).promise;
+      await page.render({ canvasContext: cc.context, viewport, canvasFactory }).promise;
 
       const png = cc.canvas.toBuffer('image/png');
       const { data: { text } } = await worker.recognize(png);
-
       if (text) acc += '\n' + text;
 
-      // free memory between pages
       canvasFactory.destroy(cc);
-      // yield back to loop to avoid event loop starvation
       await new Promise(r => setTimeout(r, 0));
     }
     await worker.terminate();
@@ -315,7 +308,6 @@ async function ocrPdfFirstPages(bytes: Uint8Array, maxPages: number, lang: strin
   }
 }
 
-// ---------- helpers ----------
 function maybeReparseStrictIfNoisy(scenes: Scene[], raw: string): Scene[] {
   const stats = scoreRoles(scenes);
   if (!stats.total) return scenes;
@@ -346,7 +338,7 @@ async function withTimeout<T>(p: Promise<T>, ms: number): Promise<{ ok: true; va
   }
 }
 
-// ---------- Public API with diagnostics ----------
+// ---- Public API with diagnostics ----
 export async function parseArrayBufferWithMeta(input: ArrayBuffer | Buffer): Promise<{ scenes: Scene[]; meta: ParserMeta }> {
   const bytes = input instanceof Buffer ? new Uint8Array(input) : new Uint8Array(input);
 
@@ -370,13 +362,9 @@ export async function parseArrayBufferWithMeta(input: ArrayBuffer | Buffer): Pro
     if (raw && raw.length > 0) {
       let scenes = analyzeScriptText(raw, false);
       scenes = maybeReparseStrictIfNoisy(scenes, raw);
-      if (hasDialogue(scenes)) {
-        return { scenes, meta: { pathUsed: 'naive', roleStats: scoreRoles(scenes), rawLength: raw.length } };
-      }
+      if (hasDialogue(scenes)) return { scenes, meta: { pathUsed: 'naive', roleStats: scoreRoles(scenes), rawLength: raw.length } };
       const strict = analyzeScriptText(raw, true);
-      if (hasDialogue(strict)) {
-        return { scenes: strict, meta: { pathUsed: 'strict', roleStats: scoreRoles(strict), rawLength: raw.length } };
-      }
+      if (hasDialogue(strict)) return { scenes: strict, meta: { pathUsed: 'strict', roleStats: scoreRoles(strict), rawLength: raw.length } };
     }
   } catch (err) {
     console.warn('[pdf] naive buffer parse failed:', (err as Error)?.message);
@@ -384,28 +372,22 @@ export async function parseArrayBufferWithMeta(input: ArrayBuffer | Buffer): Pro
 
   // 3) OCR fallback (flagged, capped pages, timeout-protected)
   if (OCR_ENABLED) {
-    const ocrRun = withTimeout(ocrPdfFirstPages(bytes, OCR_MAX_PAGES, OCR_LANG, OCR_SCALE), OCR_TIMEOUT_MS);
-    const result = await ocrRun;
+    const result = await withTimeout(ocrPdfFirstPages(bytes, OCR_MAX_PAGES, OCR_LANG, OCR_SCALE), OCR_TIMEOUT_MS);
     if (result.ok) {
       try {
         const { text, pages } = result.value as any;
         if (text && text.length > 0) {
           let scenes = analyzeScriptText(text, false);
           scenes = maybeReparseStrictIfNoisy(scenes, text);
-          if (hasDialogue(scenes)) {
-            return { scenes, meta: { pathUsed: 'ocr', roleStats: scoreRoles(scenes), rawLength: text.length, pagesTried: pages } };
-          }
+          if (hasDialogue(scenes)) return { scenes, meta: { pathUsed: 'ocr', roleStats: scoreRoles(scenes), rawLength: text.length, pagesTried: pages } };
           const strict = analyzeScriptText(text, true);
-          if (hasDialogue(strict)) {
-            return { scenes: strict, meta: { pathUsed: 'ocr', roleStats: scoreRoles(strict), rawLength: text.length, pagesTried: pages } };
-          }
+          if (hasDialogue(strict)) return { scenes: strict, meta: { pathUsed: 'ocr', roleStats: scoreRoles(strict), rawLength: text.length, pagesTried: pages } };
         }
       } catch (err) {
         console.warn('[pdf] ocr parse failed:', (err as Error)?.message);
       }
     } else {
       console.warn('[pdf] ocr timed out or failed:', (result as any).error?.message || (result as any).error);
-      // fall through to stub but report timeout
       const stub: Scene[] = [{ id: 'scene-1', title: 'Scene 1', lines: [] }];
       return { scenes: stub, meta: { pathUsed: 'stub', roleStats: { total: 0, badCount: 0, badRatio: 0 }, rawLength: 0, timedOut: true } };
     }
