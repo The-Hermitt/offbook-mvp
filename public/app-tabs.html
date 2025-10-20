@@ -1,105 +1,309 @@
 <!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>OffBook — MVP</title>
-<style>
-  :root { --bg:#0b0c10; --card:#151822; --ink:#e8ecf1; --muted:#aab1c4; --line:#22283a; --hi:#6b8cff; }
-  * { box-sizing:border-box }
-  body { margin:0; background:var(--bg); color:var(--ink); font:14px/1.45 system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif }
-  .tabs { position:sticky; top:0; display:flex; gap:6px; padding:8px; background:var(--bg); border-bottom:1px solid #232735; z-index:10 }
-  .tabbtn { flex:1; padding:10px 8px; border-radius:10px; border:1px solid #232735; background:#111523; color:#cfd6e6; cursor:pointer }
-  .tabbtn.active { background:linear-gradient(180deg,#1a1f33,#101426); color:#fff; border-color:#2d3552; outline:1px solid #2d3e7a }
-  .page { display:none; padding:16px }
-  .page.active { display:block }
-  .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:14px; margin:12px 0 }
-  .label { font-weight:600; color:#cfd6e6; margin-bottom:6px }
-  .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center }
-  .input, textarea, select { width:100%; background:#0f1320; color:var(--ink); border:1px solid #283052; border-radius:10px; padding:10px }
-  .btn { padding:10px 14px; border-radius:10px; border:1px solid #2a3450; background:#141a2b; color:var(--ink); cursor:pointer }
-  .btn.primary { background:#1a2450; border-color:#2b3a7a }
-  .btn.ok { background:#12361f; border-color:#1f6f3c; color:#bcf5cf }
-  .btn.warn { background:#34260f; border-color:#6f4b1f; color:#ffe1b3 }
-  .hidden { display:none !important }
-  .hr { height:1px; background:#242a3a; margin:12px 0 }
-  .vrow { display:grid; grid-template-columns: 1fr 180px; gap:10px; margin:8px 0 }
-  .pill { display:inline-block; padding:4px 8px; border-radius:999px; border:1px solid #2a3450; background:#12182a; font-size:12px; color:#cfd6e6 }
-  .banner { border:1px dashed #5c6280; background:#0f1322; padding:12px; border-radius:12px; margin-top:10px }
-</style>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>OffBook — MVP Tabs</title>
+  <style>
+    :root { --accent:#6b8cff; --bg:#0b0c10; --card:#151822; --muted:#aab1c4; --ok:#1db954; --warn:#ffb020; --err:#ff5577; }
+    * { box-sizing:border-box }
+    body { margin:0; background:#0b0c10; color:#e8ecf1; font:14px/1.4 system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif }
+    .tabs { position:sticky; top:0; display:flex; gap:6px; padding:8px; background:#0b0c10; border-bottom:1px solid #232735; z-index:5 }
+    .tabbtn { flex:1; padding:10px 8px; border-radius:10px; border:1px solid #232735; background:#111523; color:#cfd6e6; cursor:pointer }
+    .tabbtn.active { background:linear-gradient(180deg,#1a1f33,#101426); color:#fff; border-color:#2d3552; outline:1px solid #2d3e7a }
+    .page { display:none; padding:14px }
+    .page.active { display:block }
+    .card { background:#151822; border:1px solid #22283a; border-radius:14px; padding:14px; margin:12px 0 }
+    .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap }
+    .btn { padding:10px 14px; border-radius:10px; border:1px solid #2a3450; background:#141a2b; color:#e8ecf1; cursor:pointer }
+    .btn.primary { background:#1a2450; border-color:#2b3a7a }
+    .btn.ok { background:#12361f; border-color:#1f6f3c; color:#bcf5cf }
+    .btn.warn { background:#34260f; border-color:#6f4b1f; color:#ffe1b3 }
+    .btn.err { background:#31121a; border-color:#6f1f3a; color:#ffd0db }
+    .hint { color:#aab1c4 }
+    .label { font-weight:600; color:#cfd6e6 }
+    .input, textarea, select { background:#0f1320; color:#e8ecf1; border:1px solid #283052; border-radius:10px; padding:10px }
+    .input, select { width:100% }
+    .banner { border:1px dashed #5c6280; background:#0f1322; padding:12px; border-radius:12px; margin:10px 0 }
+    .hidden { display:none !important }
+    .kv { display:grid; grid-template-columns: 160px 1fr; gap:6px 10px }
+    .vrow { display:grid; grid-template-columns: 1fr 180px; gap:10px; margin:6px 0 }
+    .hr { height:1px; background:#242a3a; margin:10px 0 }
+  </style>
 
-<!-- pdf.js & worker (browser) -->
-<script src="https://unpkg.com/pdfjs-dist@3.11.174/build/pdf.min.js"></script>
-<script>pdfjsLib.GlobalWorkerOptions.workerSrc="https://unpkg.com/pdfjs-dist@3.11.174/build/pdf.worker.min.js";</script>
-<!-- tesseract.js (browser) -->
-<script src="https://unpkg.com/tesseract.js@5.1.0/dist/tesseract.min.js"></script>
+  <!-- pdf.js (browser) -->
+  <script src="https://unpkg.com/pdfjs-dist@3.11.174/build/pdf.min.js"></script>
+  <script>pdfjsLib.GlobalWorkerOptions.workerSrc="https://unpkg.com/pdfjs-dist@3.11.174/build/pdf.worker.min.js";</script>
+
+  <!-- tesseract.js (browser) -->
+  <script src="https://unpkg.com/tesseract.js@5.1.0/dist/tesseract.min.js"></script>
 </head>
 <body>
 
-<div class="tabs">
-  <button class="tabbtn active" data-tab="import">Import</button>
-  <button class="tabbtn" data-tab="assign">Assign</button>
-  <button class="tabbtn" data-tab="rehearse">Rehearse</button>
-  <button class="tabbtn" data-tab="record">Record</button>
-  <button class="tabbtn" data-tab="gallery">Gallery</button>
-  <button class="tabbtn" data-tab="settings">Settings</button>
-</div>
+  <div class="tabs">
+    <button class="tabbtn active" data-tab="import">Import</button>
+    <button class="tabbtn" data-tab="assign">Assign</button>
+    <button class="tabbtn" data-tab="rehearse">Rehearse</button>
+    <button class="tabbtn" data-tab="record">Record</button>
+    <button class="tabbtn" data-tab="gallery">Gallery</button>
+    <button class="tabbtn" data-tab="settings">Settings</button>
+  </div>
 
-<!-- IMPORT -->
-<div id="import" class="page active">
-  <!-- SECRET (hidden: we read from ?secret=) -->
-  <input id="secret" class="input hidden" placeholder="Secret"/>
-
-  <div class="card">
-    <div class="label">Paste Script Text</div>
-    <textarea id="pasteText" rows="6" placeholder="JANE: Hello.
+  <div id="import" class="page active">
+    <div class="card">
+      <h3>Paste Script Text</h3>
+      <textarea id="pasteText" rows="6" placeholder="JANE: Hello.
 GABE: Hey there.
 JANE: Ready?"></textarea>
-    <div class="row" style="margin-top:8px">
-      <input id="pasteTitle" class="input" placeholder="Title (optional)" value="Pasted Sides"/>
-      <button id="btnPaste" class="btn ok">Import → Assign</button>
-    </div>
-  </div>
-
-  <div class="card">
-    <div class="label">Upload PDF</div>
-    <div class="row">
-      <input id="pdfFile" type="file" accept="application/pdf" class="input"/>
-      <input id="pdfTitle" class="input" placeholder="Title" value="Uploaded PDF"/>
-    </div>
-    <div class="row" style="margin-top:8px">
-      <button id="btnUpload" class="btn primary">Server Parse → Assign</button>
-      <button id="btnClientOCR" class="btn warn hidden">Try Client OCR (Beta)</button>
-    </div>
-    <div id="scanBanner" class="banner hidden">
-      <div style="font-weight:600; margin-bottom:6px">Scanned PDF detected (server couldn’t read it)</div>
-      <div class="muted">Click <b>Try Client OCR (Beta)</b> to OCR 2–3 pages in your browser and continue.</div>
-    </div>
-  </div>
-</div>
-
-<!-- ASSIGN -->
-<div id="assign" class="page">
-  <div class="card">
-    <div class="label">Assign Voices</div>
-    <div id="assignScript" style="color:#aab1c4; margin-bottom:8px">—</div>
-
-    <div class="row" style="max-width:520px">
-      <div style="flex:1">
-        <div class="label">I am…</div>
-        <select id="iamSelect" class="input"></select>
+      <div class="row" style="margin-top:8px">
+        <input id="pasteTitle" class="input" placeholder="Title (optional)" value="Pasted Sides"/>
+        <button id="btnPaste" class="btn ok">Import → Assign</button>
       </div>
-      <div style="flex:1"></div>
+      <div class="hint" style="margin-top:6px">Paste is the most reliable path.</div>
     </div>
 
-    <div class="hr"></div>
-    <div id="voiceRows"></div>
-
-    <div class="row" style="margin-top:10px">
-      <button id="btnAssignContinue" class="btn ok">Continue → Rehearse</button>
+    <div class="card">
+      <h3>Upload PDF</h3>
+      <div class="row">
+        <input id="pdfFile" type="file" accept="application/pdf" class="input"/>
+        <input id="pdfTitle" class="input" placeholder="Title" value="Uploaded PDF"/>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <button id="btnUpload" class="btn primary">Server Parse → Assign</button>
+        <button id="btnClientOCR" class="btn warn hidden">Try Client OCR (Beta)</button>
+      </div>
+      <div id="scanBanner" class="banner hidden">
+        <div style="font-weight:600; margin-bottom:6px">Scanned PDF detected (server couldn’t read it)</div>
+        <div class="hint">Tap <b>Try Client OCR (Beta)</b> to OCR 2–3 pages in your browser and continue. Nothing leaves your device until text is ready to upload.</div>
+      </div>
+      <div class="hint">Tip: if you protect your dev routes with a secret, open this page as <code>?secret=YOUR_VALUE</code>.</div>
     </div>
   </div>
-</div>
 
-<!-- placeholder tabs -->
-<div id="rehearse" class
+  <div id="assign" class="page">
+    <div class="card">
+      <h3>Assign Voices</h3>
+      <div class="kv">
+        <div class="label">Script</div><div id="assignScript" class="hint">—</div>
+        <div class="label">I am…</div>
+        <div><select id="iamSelect" class="input"></select></div>
+      </div>
+      <div class="hr"></div>
+      <div id="voiceRows"></div>
+      <div class="row" style="margin-top:10px">
+        <button id="btnAssignContinue" class="btn ok">Continue → Rehearse</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="rehearse" class="page">
+    <div class="card"><h3>Rehearse</h3><div class="hint">Generate the reader track here (placeholder).</div></div>
+  </div>
+
+  <div id="record" class="page"><div class="card"><h3>Record</h3></div></div>
+  <div id="gallery" class="page"><div class="card"><h3>Gallery</h3></div></div>
+  <div id="settings" class="page"><div class="card"><h3>Settings</h3></div></div>
+
+<script>
+(function(){
+  // Tabs
+  document.querySelectorAll('.tabbtn').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      document.querySelectorAll('.tabbtn').forEach(b=>b.classList.remove('active'));
+      document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
+      btn.classList.add('active');
+      document.getElementById(btn.dataset.tab).classList.add('active');
+    });
+  });
+
+  // Secret (from URL only)
+  const qs = new URLSearchParams(location.search);
+  const SECRET = (qs.get('secret') || '').trim();
+  const BASE = location.origin;
+
+  // Shared state
+  let currentScriptId = null;
+  let currentTitle = '';
+  let currentRoles = [];
+  const VOICES = ['Alloy','Amber','Nova','Verse'];
+
+  async function fetchJSON(url, opts){
+    const headers = Object.assign({ 'Accept':'application/json' }, (opts && opts.headers) || {});
+    const method = (opts && opts.method) || 'GET';
+    const body = (opts && opts.body) || undefined;
+    if (method !== 'GET' && !(body instanceof FormData) && !headers['Content-Type']){
+      headers['Content-Type'] = 'application/json';
+    }
+    if (SECRET && !headers['X-Shared-Secret']) headers['X-Shared-Secret'] = SECRET;
+    const res = await fetch(url, Object.assign({}, opts || {}, { headers }));
+    if (!res.ok){
+      const t = await res.text().catch(()=>res.statusText);
+      throw new Error('HTTP '+res.status+': '+t);
+    }
+    const ct = res.headers.get('content-type') || '';
+    return ct.includes('application/json') ? res.json() : res.text();
+  }
+
+  function renderAssign(script_id, title, roles){
+    currentScriptId = script_id;
+    currentTitle = title;
+    currentRoles = roles.slice();
+
+    document.querySelector('.tabbtn[data-tab="assign"]').click();
+    document.getElementById('assignScript').textContent = title + ' ('+script_id+')';
+
+    // Build "I am" select
+    var iam = document.getElementById('iamSelect');
+    iam.innerHTML = '';
+    if (roles.length === 0){
+      var opt = document.createElement('option'); opt.text = 'UNKNOWN'; iam.appendChild(opt);
+    } else {
+      roles.forEach(function(r){ var o=document.createElement('option'); o.value=r; o.text=r; iam.appendChild(o); });
+    }
+
+    // Build partner voice pickers
+    var me = iam.value || (roles[0] || 'UNKNOWN');
+    var wrap = document.getElementById('voiceRows');
+    wrap.innerHTML = '';
+    roles.filter(function(r){ return r!==me; }).forEach(function(r){
+      var row = document.createElement('div'); row.className='vrow';
+      var left = document.createElement('div'); left.innerHTML = '<div class="label">'+r+'</div>';
+      var right = document.createElement('div');
+      var sel = document.createElement('select'); sel.className='input';
+      VOICES.forEach(function(v){ var o=document.createElement('option'); o.value=v; o.text=v; sel.appendChild(o); });
+      right.appendChild(sel);
+      row.appendChild(left); row.appendChild(right);
+      wrap.appendChild(row);
+    });
+
+    iam.onchange = function(){ renderAssign(script_id, title, roles); };
+  }
+
+  async function loadPreview(script_id, title){
+    const prev = await fetchJSON(BASE+'/debug/preview?script_id='+encodeURIComponent(script_id));
+    const roles = prev.roles || [];
+    const pathUsed = (prev.meta && prev.meta.pathUsed) || '';
+    const timedOut = !!(prev.meta && prev.meta.timedOut);
+
+    var banner = document.getElementById('scanBanner');
+    var btnClientOCR = document.getElementById('btnClientOCR');
+    if ((pathUsed === 'stub' || timedOut) && roles.length === 0){
+      banner.classList.remove('hidden');
+      btnClientOCR.classList.remove('hidden');
+    } else {
+      banner.classList.add('hidden');
+      btnClientOCR.classList.add('hidden');
+    }
+    renderAssign(script_id, title, roles);
+  }
+
+  // Paste → Assign
+  document.getElementById('btnPaste').addEventListener('click', async function(){
+    try{
+      const text = (document.getElementById('pasteText').value || '').trim();
+      const title = (document.getElementById('pasteTitle').value || 'Pasted Sides').trim();
+      if (!text){ alert('Paste some script text first.'); return; }
+      const up = await fetchJSON(BASE+'/debug/upload_script_text', {
+        method:'POST',
+        body: JSON.stringify({ title: title, text: text })
+      });
+      await loadPreview(up.script_id, title);
+    }catch(e){ alert('Upload failed: '+e.message); }
+  });
+
+  // PDF Upload (Server) → Assign
+  document.getElementById('btnUpload').addEventListener('click', async function(){
+    const f = document.getElementById('pdfFile').files && document.getElementById('pdfFile').files[0];
+    const title = (document.getElementById('pdfTitle').value || (f && f.name) || 'Uploaded PDF').trim();
+    if (!f){ alert('Choose a PDF first.'); return; }
+    try{
+      const fd = new FormData();
+      fd.append('pdf', f, f.name);
+      fd.append('title', title);
+      const headers = SECRET ? { 'X-Shared-Secret': SECRET } : undefined;
+      const res = await fetch(BASE+'/debug/upload_script_upload', { method:'POST', headers, body: fd });
+      if (!res.ok) throw new Error(await res.text());
+      const up = await res.json();
+      await loadPreview(up.script_id, title);
+    }catch(e){ alert('Upload failed: '+e.message); }
+  });
+
+  // Client OCR (browser) → Assign
+  document.getElementById('btnClientOCR').addEventListener('click', async function(){
+    const f = document.getElementById('pdfFile').files && document.getElementById('pdfFile').files[0];
+    const title = (document.getElementById('pdfTitle').value || (f && f.name) || 'Scanned PDF (OCR)').trim();
+    if (!f){ alert('Choose the scanned PDF file first.'); return; }
+    const MAXPAGES = Number(qs.get('ocr_pages') || '3');
+    const SCALE = Number(qs.get('ocr_scale') || '2.2');
+
+    try{
+      const buf = await f.arrayBuffer();
+      const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+
+      const pages = Math.min(pdf.numPages, MAXPAGES);
+      let acc = '';
+      for (let p=1; p<=pages; p++){
+        const page = await pdf.getPage(p);
+        const viewport = page.getViewport({ scale: SCALE });
+        canvas.width = Math.ceil(viewport.width);
+        canvas.height = Math.ceil(viewport.height);
+        await page.render({ canvasContext: ctx, viewport }).promise;
+
+        const dataURL = canvas.toDataURL('image/png');
+        const result = await Tesseract.recognize(
+          dataURL,
+          'eng',
+          {
+            preserve_interword_spaces: '1',
+            tessedit_pageseg_mode: '4',
+            user_defined_dpi: '300',
+            tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 .,'-&:;?!():"
+          }
+        );
+        if (result && result.data && result.data.text) acc += '\n' + result.data.text;
+        await new Promise(function(r){ setTimeout(r,0); });
+      }
+
+      const clean = (acc || '').replace(/\r/g,'').trim();
+      if (!clean){ alert("OCR didn't read any text. Try a higher scale: add `?ocr_scale=2.6`."); return; }
+
+      const up = await fetchJSON(BASE+'/debug/upload_script_text', {
+        method:'POST',
+        body: JSON.stringify({ title: title + ' (OCR)', text: clean })
+      });
+      await loadPreview(up.script_id, title + ' (OCR)');
+    }catch(e){ alert('Client OCR failed: '+e.message); }
+  });
+
+  // Save voices and continue
+  document.getElementById('btnAssignContinue').addEventListener('click', async function(){
+    if (!currentScriptId){ alert('No script loaded.'); return; }
+    const iam = document.getElementById('iamSelect');
+    const me = (iam && iam.value) ? iam.value : 'UNKNOWN';
+
+    // Build voice_map for partners only
+    const rows = Array.from(document.querySelectorAll('#voiceRows .vrow'));
+    const voice_map = {};
+    rows.forEach(function(row){
+      const labelEl = row.querySelector('.label');
+      const sel = row.querySelector('select');
+      if (labelEl && sel) voice_map[labelEl.textContent.trim()] = sel.value || 'Alloy';
+    });
+
+    try{
+      await fetchJSON(BASE+'/debug/set_voice', {
+        method:'POST',
+        body: JSON.stringify({ script_id: currentScriptId, voice_map })
+      });
+      alert('Saved voices. You are '+me+'. (Generate reader in Rehearse next.)');
+      document.querySelector('.tabbtn[data-tab="rehearse"]').click();
+    }catch(e){ alert('Save failed: '+e.message); }
+  });
+
+})();
+</script>
+
+</body>
+</html>
