@@ -1,440 +1,225 @@
+<!-- public/app-tabs.html -->
 <!doctype html>
-<html lang="en">
+<html>
 <head>
   <meta charset="utf-8" />
-  <title>OffBook – Rehearsal MVP</title>
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OffBook MVP</title>
   <style>
-    :root { --bg:#0b0f14; --card:#111826; --fg:#f5f7fb; --muted:#98a2b3; --line:#1f2a37; --accent:#3b82f6; }
-    *{box-sizing:border-box}
-    body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.55 system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif}
-    .wrap{max-width:900px;margin:12px auto 84px;padding:0 16px}
-    .card{padding:16px;border:1px solid var(--line);border-radius:16px;background:var(--card);box-shadow:0 1px 8px rgba(0,0,0,.25)}
-    h1{font-size:24px;margin:6px 0 8px}
-    p.muted{margin:0 0 14px;color:var(--muted)}
-    label{display:block;font-weight:600;margin:10px 0 6px}
-    input,select,textarea{width:100%;padding:12px;border:1px solid var(--line);border-radius:12px;background:#0e1622;color:var(--fg);min-height:46px}
-    input::placeholder,textarea::placeholder{color:#6b7280}
-    textarea{min-height:160px;resize:vertical}
-    .row{display:grid;gap:12px}
-    @media(min-width:760px){.row.two{grid-template-columns:1fr 1fr}}
-    button{appearance:none;margin-top:12px;padding:12px 14px;border-radius:12px;border:1px solid var(--accent);background:var(--accent);color:#fff;font-weight:700;cursor:pointer}
-    button:disabled{opacity:.6;cursor:not-allowed}
-    button.ghost{background:transparent;color:var(--fg);border-color:var(--line)}
-    .topbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
-    .list{display:grid;gap:10px;margin-top:8px}
-    .item{padding:10px;border:1px solid var(--line);border-radius:12px;background:#0e1622}
-    audio{width:100%;margin-top:10px}
-    .chips{display:flex;gap:8px;flex-wrap:wrap;margin:6px 0 2px}
-    .chip{padding:8px 10px;border:1px solid var(--line);border-radius:999px;background:#0e1622;cursor:pointer}
-    .chip.active{background:var(--accent);border-color:var(--accent);color:#fff}
-    .pill{background:#0e1622;border:1px solid var(--line);border-radius:999px;padding:6px 10px;color:#cbd5e1;font-weight:700}
-    .log{display:none;margin-top:12px;padding:10px;border:1px solid var(--line);border-radius:12px;background:#0e1622;white-space:pre-wrap;font:13px/1.5 ui-monospace,Menlo,Consolas,monospace;color:#d1d5db}
-    .log.err{border-color:#ef4444;color:#fecaca}
-    .hidden{display:none}
-    .tabbar{position:fixed;left:0;right:0;bottom:0;height:64px;background:rgba(11,15,20,.92);backdrop-filter:blur(8px);border-top:1px solid var(--line)}
-    .tabbar nav{max-width:900px;margin:0 auto;height:64px;display:grid;grid-template-columns:repeat(6,1fr);gap:6px;padding:10px 16px}
-    .tabbar a{display:flex;flex-direction:column;justify-content:center;align-items:center;gap:2px;text-decoration:none;border:1px solid transparent;border-radius:10px;color:#cbd5e1}
-    .tabbar a.active{border-color:var(--accent);color:#fff}
-    .tabbar svg{width:22px;height:22px}
+    body{margin:0;background:#0b1220;color:#eaeef7;font-family:system-ui,Segoe UI,Roboto,Helvetica,Arial}
+    .tabbar{position:fixed;left:0;right:0;bottom:0;display:flex;gap:8px;padding:10px;background:#0d1326;border-top:1px solid #1b2547}
+    .tabbar a{flex:1;text-align:center;padding:10px;border-radius:10px;color:#cfd8f3;text-decoration:none}
+    .tabbar a.active{background:#1a2447;color:#fff}
+    .panel{max-width:720px;margin:20px auto 90px;padding:16px;background:#0d1326;border:1px solid #1b2547;border-radius:12px}
+    .btn{background:#3b82f6;border:none;color:#fff;padding:10px 14px;border-radius:10px;font-weight:600}
+    .field{margin:12px 0}
+    .select, .input, .textarea{width:100%;padding:10px;border-radius:10px;border:1px solid #1b2547;background:#0b1220;color:#eaeef7}
+    .row{display:flex;gap:12px;align-items:center}
+    .banner{padding:10px;border-radius:10px;background:#24110f;border:1px solid #7a2c22;color:#ffd4cc;margin-bottom:12px}
+    .muted{opacity:.75;font-size:.9em}
+    .role{padding:12px;border:1px solid #1b2547;border-radius:12px;margin:8px 0;font-weight:700}
   </style>
 </head>
 <body>
-  <div class="wrap">
-    <!-- IMPORT -->
-    <div class="card" id="tab-import">
-      <div class="topbar"><h1>Import</h1></div>
-      <p class="muted">Paste plain text (most reliable), or upload a PDF. After import we’ll detect roles and move to Assign.</p>
+  <div id="app"></div>
 
-      <div class="chips">
-        <span class="chip active" data-mode="paste">Paste Script Text</span>
-        <span class="chip" data-mode="upload">Upload PDF</span>
-      </div>
+  <nav class="tabbar">
+    <a href="#import" id="t-import">Import</a>
+    <a href="#assign" id="t-assign">Assign</a>
+    <a href="#rehearse" id="t-rehearse">Rehearse</a>
+    <a href="#record" id="t-record">Record</a>
+    <a href="#gallery" id="t-gallery">Gallery</a>
+    <a href="#settings" id="t-settings">Settings</a>
+  </nav>
 
-      <div id="import-paste">
-        <label for="paste">Paste script here</label>
-        <textarea id="paste" placeholder="JANE: Hello there.
-GABE (with feeling)
-I didn’t go on purpose."></textarea>
-        <div class="row two">
-          <div>
-            <label for="title-paste">Title</label>
-            <input id="title-paste" value="Pasted Script">
-          </div>
-          <div></div>
-        </div>
-        <div class="row"><button id="btn-import-paste">Continue</button></div>
-      </div>
+<script>
+const BASE = location.origin;
+const SECRET = new URLSearchParams(location.search).get('secret') || '';
+const H = SECRET ? { 'X-Shared-Secret': SECRET } : {};
+let state = { script_id:null, scenes:[], roles:[], role:'UNKNOWN', voice_map:{}, preview:null };
 
-      <div id="import-upload" class="hidden">
-        <label for="file">Upload PDF</label>
-        <input id="file" type="file" accept="application/pdf">
-        <div class="row two">
-          <div>
-            <label for="title-upload">Title</label>
-            <input id="title-upload" value="Uploaded Script">
-          </div>
-          <div></div>
-        </div>
-        <div class="row"><button id="btn-import-upload">Continue</button></div>
-      </div>
+function el(html){ const t=document.createElement('template'); t.innerHTML=html.trim(); return t.content.firstChild; }
+function setActive(tab){ document.querySelectorAll('.tabbar a').forEach(a=>a.classList.toggle('active',a.getAttribute('href')===tab)); }
+function fmtPreview(p){ if(!p) return ''; return `<div class="muted">parser:<b>${p.meta?.pathUsed||'n/a'}</b> roles:${p.roles.length}</div>`; }
 
-      <div id="log-import" class="log"></div>
-    </div>
+async function postJSON(url, body){
+  const r = await fetch(url,{ method:'POST', headers:{'Content-Type':'application/json', ...H}, body:JSON.stringify(body) });
+  if(!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+async function getJSON(url){
+  const r = await fetch(url,{ headers:{...H} });
+  if(!r.ok) throw new Error(await r.text());
+  return r.json();
+}
 
-    <!-- ASSIGN -->
-    <div class="card hidden" id="tab-assign">
-      <div class="topbar">
-        <h1>Assign</h1>
-        <div class="pill" id="scene-pill">scene: —</div>
-      </div>
-      <div class="row two">
-        <div>
-          <label for="role">I am…</label>
-          <select id="role"></select>
-        </div>
-      </div>
-      <div id="partnersBox" class="list"></div>
-      <div class="row" style="justify-content:flex-end;display:flex;gap:8px">
-        <button class="ghost" id="btn-assign-back">Back</button>
-        <button id="btn-assign-next">Continue</button>
-      </div>
-      <div id="log-assign" class="log"></div>
-    </div>
+function render(){
+  const hash = location.hash || '#import';
+  setActive(hash);
+  const app=document.getElementById('app'); app.innerHTML='';
 
-    <!-- REHEARSE -->
-    <div class="card hidden" id="tab-rehearse">
-      <div class="topbar">
-        <h1>Rehearse</h1>
-        <div>
-          <span class="pill" id="role-pill">Role: —</span>
-          <span class="pill" id="line-pill">Line —/—</span>
-        </div>
-      </div>
-
-      <div id="prep" class="item">Preparing reader…</div>
-
-      <div id="rehearse-ui" class="hidden">
-        <div id="line-box" class="item"></div>
-        <audio id="reader" controls preload="none"></audio>
-        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px">
-          <button class="ghost" id="btn-prev">Prev</button>
-          <button id="btn-play">Play</button>
-          <button class="ghost" id="btn-next">Next</button>
-        </div>
-      </div>
-
-      <div id="log-rehearse" class="log"></div>
-      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px">
-        <button class="ghost" id="btn-rehearse-back">Back</button>
-        <button id="btn-rehearse-next">Next</button>
-      </div>
-    </div>
-
-    <!-- RECORD -->
-    <div class="card hidden" id="tab-record">
-      <div class="topbar"><h1>Record</h1></div>
-      <p class="muted">Headphones recommended to avoid echo.</p>
-      <div style="display:flex;gap:8px;justify-content:flex-end">
-        <button id="btn-rec-start">Start</button>
-        <button id="btn-rec-stop" disabled>Stop</button>
-      </div>
-      <audio id="takePreview" controls preload="none"></audio>
+  if(hash==='#import'){
+    const panel = el(`<div class="panel">
+      <h2>Import</h2>
       <div class="row">
-        <div>
-          <label for="takeLabel">Label</label>
-          <input id="takeLabel" placeholder="e.g., Scene 1 – Take 1">
-        </div>
-        <div style="display:flex;gap:8px;justify-content:flex-end">
-          <button id="btn-save-take" class="ghost" disabled>Save to Gallery</button>
-        </div>
+        <button class="btn" id="tab-paste">Paste Script Text</button>
+        <button class="btn" id="tab-pdf" style="background:#475569">Upload PDF</button>
       </div>
-      <div id="log-record" class="log"></div>
-      <div style="display:flex;gap:8px;justify-content:flex-end">
-        <button class="ghost" id="btn-record-back">Back</button>
-        <button id="btn-record-next">Next</button>
+      <div id="mode"></div>
+      <div class="field"><div id="err" class="muted"></div></div>
+    </div>`);
+    app.append(panel);
+
+    const mode = panel.querySelector('#mode');
+    const btnPaste = panel.querySelector('#tab-paste');
+    const btnPdf = panel.querySelector('#tab-pdf');
+
+    function showPaste(){
+      mode.innerHTML = `
+        <div class="field"><textarea id="txt" class="textarea" rows="8" placeholder="JANE: Hello.\nGABE: Hey."></textarea></div>
+        <div class="row">
+          <input id="title" class="input" placeholder="Title" value="Pasted Script"/>
+          <button class="btn" id="go">Continue</button>
+        </div>`;
+      panel.querySelector('#go').onclick = async () => {
+        try {
+          const text = panel.querySelector('#txt').value || '';
+          const title = panel.querySelector('#title').value || 'Pasted Script';
+          const r = await postJSON(`${BASE}/debug/upload_script_text`, { text, title });
+          state.script_id = r.script_id;
+          const s = await getJSON(`${BASE}/debug/scenes?script_id=${state.script_id}`);
+          state.scenes = s.scenes || [];
+          state.roles = Array.from(new Set(state.scenes.flatMap(sc => sc.lines.map(l=>l.speaker))));
+          location.hash = '#assign'; render();
+        } catch (e) {
+          panel.querySelector('#err').textContent = 'Error: ' + (e.message||e);
+        }
+      };
+    }
+    function showPdf(){
+      mode.innerHTML = `
+        <div class="field"><input id="pdf" type="file" accept="application/pdf" class="input"/></div>
+        <div class="row">
+          <input id="title" class="input" placeholder="Title" value="Uploaded Script"/>
+          <button class="btn" id="go">Continue</button>
+        </div>`;
+      panel.querySelector('#go').onclick = async () => {
+        panel.querySelector('#err').textContent='';
+        try{
+          const f = panel.querySelector('#pdf').files[0];
+          if(!f){ panel.querySelector('#err').textContent='Choose a PDF.'; return; }
+          const fd = new FormData(); fd.append('pdf', f); fd.append('title', panel.querySelector('#title').value || 'Script PDF');
+          const r = await fetch(`${BASE}/debug/upload_script_upload`, { method:'POST', headers:{...H}, body:fd });
+          if(!r.ok) throw new Error(await r.text());
+          const j = await r.json();
+          state.script_id = j.script_id;
+          const s = await getJSON(`${BASE}/debug/scenes?script_id=${state.script_id}`);
+          state.scenes = s.scenes || [];
+          state.roles = Array.from(new Set(state.scenes.flatMap(sc => sc.lines.map(l=>l.speaker))));
+          location.hash = '#assign'; render();
+        }catch(e){
+          panel.querySelector('#err').textContent='Error: '+(e.message||e);
+        }
+      };
+    }
+    btnPaste.onclick=showPaste; btnPdf.onclick=showPdf; showPaste();
+  }
+
+  if(hash==='#assign'){
+    const roles = state.roles||[];
+    const panel = el(`<div class="panel">
+      <div class="row" style="justify-content:space-between;align-items:center">
+        <h2>Assign</h2>
+        <span class="muted">scene: ${state.scenes?.[0]?.id || 'scene-1'}</span>
       </div>
-    </div>
-
-    <!-- GALLERY -->
-    <div class="card hidden" id="tab-gallery">
-      <div class="topbar"><h1>Gallery</h1></div>
-      <div id="takesList" class="list"></div>
-      <div style="display:flex;gap:8px;justify-content:flex-end">
-        <button class="ghost" id="btn-gallery-back">Back</button>
+      <div id="banner"></div>
+      <div class="field">
+        <label>I am…</label>
+        <select id="iam" class="select">
+          ${['UNKNOWN', ...roles].map(r=>`<option value="${r}">${r}</option>`).join('')}
+        </select>
       </div>
-    </div>
-  </div>
+      <div id="roles"></div>
+      <div class="row" style="gap:8px">
+        <button class="btn" id="back" style="background:#334155">Back</button>
+        <button class="btn" id="cont">Continue</button>
+      </div>
+      <div id="diag" class="muted" style="margin-top:10px"></div>
+    </div>`);
+    app.append(panel);
 
-  <!-- Bottom Tabs -->
-  <div class="tabbar">
-    <nav>
-      <a href="javascript:void(0)" class="active tabbtn" data-tab="import"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M20,8H4A2,2,0,0,0,2,10v8a2,2,0,0,0,2,2H20a2,2,0,0,0,2-2V10A2,2,0,0,0,20,8Zm0,10H4V10H20Z"/></svg><span>Import</span></a>
-      <a href="javascript:void(0)" class="tabbtn" data-tab="assign"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12,12a5,5,0,1,0-5-5A5,5,0,0,0,12,12Zm0,2c-4,0-8,2-8,6v2H20V20C20,16,16,14,12,14Z"/></svg><span>Assign</span></a>
-      <a href="javascript:void(0)" class="tabbtn" data-tab="rehearse"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8,5.14V19.14L19,12.14Z"/></svg><span>Rehearse</span></a>
-      <a href="javascript:void(0)" class="tabbtn" data-tab="record"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="4"/><path d="M19,10v2a7,7,0,0,1-14,0V10H3v2a9,9,0,0,0,18,0V10Z"/></svg><span>Record</span></a>
-      <a href="javascript:void(0)" class="tabbtn" data-tab="gallery"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M21,3H3A2,2,0,0,0,1,5V19a2,2,0,0,0,2,2H21a2,2,0,0,0,2-2V5A2,2,0,0,0,21,3Zm0,16H3V5H21Z"/></svg><span>Gallery</span></a>
-      <a href="javascript:void(0)" class="tabbtn" data-tab="settings"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M19.14,12.94a7.49,7.49,0,0,0,.06-1,7.49,7.49,0,0,0-.06-1l2-1.55-2-3.46-2.35.94a7.43,7.43,0,0,0-1.73-1L15.5,2h-4L10.94,4.87a7.43,7.43,0,0,0-1.73,1L6.86,4.94,4.5,8.4l2,1.55a7.49,7.49,0,0,0-.06,1,7.49,7.49,0,0,0,.06,1L4.5,13.5l2.36,3.46,2.35-.94a7.43,7.43,0,0,0,1.73,1L11.5,22h4l.56-2.87a7.43,7.43,0,0,0,1.73-1l2.35.94,2-3.46Z"/><circle cx="12" cy="12" r="3" fill="#0b0f14"/></svg><span>Settings</span></a>
-    </nav>
-  </div>
-
-  <script>
-    // ---------- State ----------
-    const params = new URLSearchParams(location.search);
-    const state = {
-      base: location.origin,
-      secret: params.get('secret') || '',
-      scriptId: '', sceneId: '',
-      roles: [], myRole: '',
-      lines: [], currentLine: 1,
-      voiceMap: {}, takes: []
-    };
-    const $ = (id) => document.getElementById(id);
-    const uniq = (a)=>[...new Set(a)];
-    const showLog=(box,msg,cls='')=>{const d=$(box);d.style.display='block';const p=document.createElement('div');p.textContent=msg;p.className=cls;d.appendChild(p);d.scrollTop=d.scrollHeight;};
-
-    // ---------- API ----------
-    async function api(method, path, body, isFormData=false){
-      const headers = isFormData ? {} : {'Content-Type':'application/json'};
-      if (state.secret) headers['X-Shared-Secret']=state.secret;
-      const res = await fetch(`${state.base}${path}`, { method, headers, body: isFormData?body:(body?JSON.stringify(body):undefined) });
-      const json = await res.json().catch(()=>({}));
-      if (!res.ok) throw new Error(json.error || res.statusText);
-      return json;
-    }
-
-    // ---------- Tabs ----------
-    function setTab(name){
-      ['import','assign','rehearse','record','gallery'].forEach(t=>{
-        const card=$(`tab-${t}`); if(!card) return;
-        card.classList.toggle('hidden', t!==name);
-        document.querySelectorAll('.tabbtn').forEach(b=>b.classList.toggle('active', b.dataset.tab===name));
-      });
-      if (name==='rehearse') ensurePrepared();
-    }
-    document.querySelectorAll('.tabbtn').forEach(b=>{
-      b.addEventListener('click', ()=>{
-        const t=b.dataset.tab;
-        if (t==='settings') { alert('Settings coming soon'); return; }
-        setTab(t);
-      });
-    });
-
-    // ---------- Import chips ----------
-    document.querySelectorAll('.chip').forEach(ch=>{
-      ch.addEventListener('click', ()=>{
-        document.querySelectorAll('.chip').forEach(x=>x.classList.remove('active'));
-        ch.classList.add('active');
-        const mode=ch.dataset.mode;
-        $('import-paste').classList.toggle('hidden', mode!=='paste');
-        $('import-upload').classList.toggle('hidden', mode!=='upload');
-        $('log-import').style.display='none'; $('log-import').innerHTML='';
-      });
-    });
-
-    // ---------- Import: Paste ----------
-    $('btn-import-paste').onclick = async ()=>{
-      $('btn-import-paste').disabled=true; $('log-import').style.display='none'; $('log-import').innerHTML='';
-      try{
-        const text=$('paste').value.trim(), title=$('title-paste').value.trim();
-        if (!text) throw new Error('Please paste your script text first.');
-        const up = await api('POST','/debug/upload_script_text',{ text, title });
-        await afterImport(up);
-      }catch(e){ showLog('log-import',`Error: ${e.message}`,'err'); }
-      finally{ $('btn-import-paste').disabled=false; }
-    };
-
-    // ---------- Import: Upload PDF ----------
-    $('btn-import-upload').onclick = async ()=>{
-      $('btn-import-upload').disabled=true; $('log-import').style.display='none'; $('log-import').innerHTML='';
-      try{
-        const f=$('file').files[0]; if(!f) throw new Error('Choose a PDF file first.');
-        const title=$('title-upload').value.trim();
-        const fd=new FormData(); fd.append('pdf',f); fd.append('title',title);
-        const up = await api('POST','/debug/upload_script_upload', fd, true);
-        await afterImport(up);
-      }catch(e){ showLog('log-import',`Error: ${e.message}`,'err'); }
-      finally{ $('btn-import-upload').disabled=false; }
-    };
-
-    // ---------- After Import → Assign ----------
-    async function afterImport(up){
-      state.scriptId = up.script_id;
-      const sc = await api('GET', `/debug/scenes?script_id=${encodeURIComponent(state.scriptId)}`);
-      let scene = sc.scenes?.[0];
-      if (!scene) throw new Error('No scenes returned from parser');
-
-      // Primary roles from server
-      state.sceneId = scene.id;
-      state.lines   = Array.isArray(scene.lines) ? scene.lines : [];
-
-      // Repair pass if roles missing or only UNKNOWN
-      const repair = repairSceneIfNeeded(state.lines);
-      if (repair.applied) {
-        state.lines = repair.lines;
+    // When no roles, show a friendly banner and a Paste hint
+    (async ()=>{
+      let preview = null;
+      if(state.script_id){
+        try{ preview = await getJSON(`${BASE}/debug/preview?script_id=${state.script_id}`); }catch{}
       }
+      panel.querySelector('#diag').innerHTML = fmtPreview(preview);
 
-      const rawRoles = uniq(state.lines.map(l=>l.speaker).filter(Boolean));
-      state.roles = cleanRoles(rawRoles);
-      if (!state.roles.length) state.roles = ['UNKNOWN'];
-
-      $('scene-pill').textContent = `scene: ${state.sceneId}`;
-
-      const sel=$('role'); sel.innerHTML='';
-      state.roles.forEach(r=>{ const o=document.createElement('option'); o.value=r; o.textContent=r; sel.appendChild(o); });
-      state.myRole = sel.value;
-
-      buildPartnersUI();
-      setTab('assign');
-    }
-
-    // ---------- Client-side repair for UNKNOWN roles ----------
-    function repairSceneIfNeeded(lines){
-      const roles = uniq((lines||[]).map(l => (l?.speaker||'').trim()).filter(Boolean));
-      const onlyUnknown = roles.length===0 || (roles.length===1 && roles[0]==='UNKNOWN');
-
-      if (!onlyUnknown) return { applied:false, lines };
-
-      const repaired = [];
-      const nameRe = /^\s*([A-Z][A-Z0-9 .,'\-]{1,30})(?:\s*\([^)]*\))?\s*:\s*(.+)$/;
-
-      for (const l of (lines||[])) {
-        let speaker = (l?.speaker||'').trim();
-        let text    = String(l?.text||'').trim();
-        if ((speaker==='' || speaker==='UNKNOWN') && nameRe.test(text)) {
-          const m = text.match(nameRe);
-          const name = (m?.[1]||'').trim();
-          const rest = (m?.[2]||'').trim();
-          if (name && /[A-Z]/.test(name) && !/[a-z]/.test(name) && rest) {
-            speaker = name;
-            text = rest;
-          }
-        }
-        repaired.push({ speaker: speaker || 'UNKNOWN', text });
+      if(roles.length===0){
+        panel.querySelector('#banner').innerHTML = `<div class="banner">
+          No partner roles detected. If you uploaded a PDF, it may be a <b>scanned image</b> with no selectable text.
+          Try <b>Import → Paste Script Text</b> for best results. 
+        </div>`;
       }
+    })();
 
-      // If we still have nothing but UNKNOWN, bail
-      const rRoles = uniq(repaired.map(x=>x.speaker).filter(Boolean));
-      const ok = rRoles.some(r => r !== 'UNKNOWN');
-      return { applied: ok, lines: repaired };
-    }
+    const iam = panel.querySelector('#iam');
+    const rolesDiv = panel.querySelector('#roles');
 
-    function cleanRoles(rs){
-      return uniq((rs||[])
-        .filter(Boolean)
-        .map(r=>String(r).trim())
-        .filter(r => r !== 'UNKNOWN')
-        .filter(r => /[A-Za-z]/.test(r))
-        .filter(r => !/^\d{1,4}$/.test(r))
-        .filter(r => !/^(INT|EXT|SCENE)\b/.test(r))
-        .filter(r => !/^CONT'?D$/.test(r))
-      );
-    }
-
-    const VOICE_PRESETS = [
-      { id:'alloy', label:'Alloy' },
-      { id:'verse', label:'Verse' },
-      { id:'coral', label:'Coral' },
-      { id:'ash',   label:'Ash' },
-      { id:'lira',  label:'Lira' },
-      { id:'amber', label:'Amber' },
-      { id:'slate', label:'Slate' }
-    ];
-
-    $('role').addEventListener('change', ()=>{ state.myRole=$('role').value; buildPartnersUI(); });
-
-    function buildPartnersUI(){
-      const box=$('partnersBox'); box.innerHTML='';
-      const partners=(state.roles||[]).filter(r=>r!==state.myRole);
-      if(!partners.length){
-        const div=document.createElement('div'); div.className='item';
-        div.innerHTML='<span class="muted">No partner roles detected. Try a script format like:<br><br><code>JANE: Hello there.</code></span>';
-        box.appendChild(div);
-      } else {
-        partners.forEach(name=>{
-          const div=document.createElement('div'); div.className='item';
-          const current=(state.voiceMap && state.voiceMap[name]) || 'alloy';
-          const opts=VOICE_PRESETS.map(v=>`<option value="${v.id}" ${v.id===current?'selected':''}>${v.label}</option>`).join('');
-          div.innerHTML=`<div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
-            <div style="font-weight:800">${name}</div>
-            <select id="voice_${name}" style="max-width:220px">${opts}</select>
-          </div>`;
-          box.appendChild(div);
-        });
+    function renderVoicePickers(){
+      rolesDiv.innerHTML = '';
+      const me = iam.value;
+      for(const r of roles){
+        if(r===me) continue;
+        rolesDiv.append(el(`<div class="role">
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <div>${r}</div>
+            <select class="select vsel" data-role="${r}">
+              <option>Alloy</option>
+              <option>Verse</option>
+              <option>Narrator</option>
+            </select>
+          </div>
+        </div>`));
       }
     }
+    iam.onchange = renderVoicePickers;
+    renderVoicePickers();
 
-    $('btn-assign-back').onclick = ()=> setTab('import');
-    $('btn-assign-next').onclick = async ()=>{
-      $('btn-assign-next').disabled=true; $('log-assign').style.display='none'; $('log-assign').innerHTML='';
-      try{
-        const partners=(state.roles||[]).filter(r=>r!==state.myRole);
-        const map={};
-        if(!partners.length){ map['UNKNOWN']='alloy'; } else {
-          partners.forEach(n=>{ map[n] = (document.getElementById(`voice_${n}`)?.value || 'alloy').trim(); });
-        }
-        state.voiceMap = map;
-        await api('POST','/debug/set_voice',{ script_id: state.scriptId, voice_map: map });
-        setTab('rehearse');
-      }catch(e){ showLog('log-assign',`Error: ${e.message}`,'err'); }
-      finally{ $('btn-assign-next').disabled=false; }
+    panel.querySelector('#back').onclick=()=>{ location.hash='#import'; render(); };
+    panel.querySelector('#cont').onclick=async ()=>{
+      const me = iam.value || 'UNKNOWN';
+      const vsel = Array.from(panel.querySelectorAll('.vsel'));
+      const vm:any = {};
+      vsel.forEach((s:any)=> vm[s.dataset.role]=s.value.toLowerCase());
+      state.role = me; state.voice_map = vm;
+      await postJSON(`${BASE}/debug/set_voice`, { script_id: state.script_id, voice_map: vm });
+      location.hash='#rehearse'; render();
     };
+  }
 
-    // ---------- Rehearse ----------
-    function updateLineUI(){
-      $('role-pill').textContent = `Role: ${state.myRole || '—'}`;
-      $('line-pill').textContent = `Line ${state.currentLine}/${state.lines.length||'—'}`;
-      const cur = state.lines[state.currentLine-1] || {};
-      const you = cur.speaker === state.myRole;
-      $('line-box').innerHTML = you
-        ? `<div style="color:#86efac"><strong>${state.myRole} (You)</strong></div><div style="margin-top:6px">${cur.text||''}</div>`
-        : `<div style="color:#93c5fd"><strong>${cur.speaker||'Partner'}</strong></div><div style="margin-top:6px">${cur.text||''}</div>`;
-    }
-    $('btn-prev').onclick = ()=>{ if(state.currentLine>1){ state.currentLine--; updateLineUI(); } };
-    $('btn-next').onclick = ()=>{ if(state.currentLine<(state.lines.length||1)){ state.currentLine++; updateLineUI(); } };
+  if(hash==='#rehearse'){
+    const panel = el(`<div class="panel">
+      <h2>Rehearse</h2>
+      <div class="muted">Coming next: playback controls & auto-cue.</div>
+    </div>`);
+    app.append(panel);
+  }
 
-    async function ensurePrepared(){
-      if (!state.scriptId || !state.sceneId || !state.myRole) {
-        $('prep').textContent='Import a script and assign roles first.'; return;
-      }
-      $('prep').classList.remove('hidden');
-      $('rehearse-ui').classList.add('hidden');
-      const player=$('reader'); player.src=''; $('btn-play').textContent='Play';
+  if(hash==='#record'){
+    const panel = el(`<div class="panel"><h2>Record</h2><div class="muted">Mic capture MVP TBD</div></div>`); app.append(panel);
+  }
+  if(hash==='#gallery'){
+    const panel = el(`<div class="panel"><h2>Gallery</h2><div class="muted">Takes will appear here</div></div>`); app.append(panel);
+  }
+  if(hash==='#settings'){
+    const panel = el(`<div class="panel"><h2>Settings</h2><div class="muted">Defaults TBD</div></div>`); app.append(panel);
+  }
+}
 
-      try{
-        const rr = await api('POST','/debug/render',{ script_id: state.scriptId, scene_id: state.sceneId, role: state.myRole, pace: 'normal' });
-        if(!rr.render_id) throw new Error('No render_id');
-        let status='pending', url='';
-        while(status!=='complete'){
-          const st=await api('GET',`/debug/render_status?render_id=${encodeURIComponent(rr.render_id)}`);
-          status=st.status; url=st.download_url||'';
-          if(status!=='complete') await new Promise(r=>setTimeout(r,700));
-        }
-        if (!url) throw new Error('No download_url');
-        player.src = url.startsWith('http') ? url : `${state.base}${url}`;
-        $('prep').classList.add('hidden');
-        $('rehearse-ui').classList.remove('hidden');
-        state.currentLine=1; updateLineUI();
-      }catch(e){ $('prep').textContent=`Error preparing reader: ${e.message}`; }
-    }
-    $('btn-play').onclick=()=>{const p=$('reader'); if(p.paused){p.play();$('btn-play').textContent='Pause';} else {p.pause();$('btn-play').textContent='Play';} };
-
-    // ---------- Record ----------
-    let rec, chunks=[];
-    $('btn-rec-start').onclick = async ()=>{
-      try{
-        const s=await navigator.mediaDevices.getUserMedia({audio:true});
-        rec=new MediaRecorder(s); chunks=[];
-        rec.ondataavailable=e=>{ if(e.data.size>0) chunks.push(e.data); };
-        rec.onstop=()=>{ const url=URL.createObjectURL(new Blob(chunks,{type:'audio/webm'})); $('takePreview').src=url; $('btn-save-take').disabled=false; };
-        rec.start(); $('btn-rec-start').disabled=true; $('btn-rec-stop').disabled=false;
-      }catch(e){ showLog('log-record',`Error: ${e.message}`,'err'); }
-    };
-    $('btn-rec-stop').onclick=()=>{ try{rec?.stop();$('btn-rec-start').disabled=false;$('btn-rec-stop').disabled=true;}catch{} };
-    $('btn-save-take').onclick=()=>{ const url=$('takePreview').src; if(!url) return; const label=$('takeLabel').value.trim()||`Take ${state.takes.length+1}`; state.takes.push({id:String(Date.now()),label,url}); renderTakes(); };
-    $('btn-record-back').onclick=()=>setTab('rehearse');
-    $('btn-record-next').onclick=()=>setTab('gallery');
-    function renderTakes(){ const list=$('takesList'); list.innerHTML=''; if(!state.takes.length){ const div=document.createElement('div'); div.className='item'; div.innerHTML='<span class="muted">No saved takes yet.</span>'; list.appendChild(div); return; } state.takes.forEach(t=>{ const div=document.createElement('div'); div.className='item'; div.innerHTML=`<div style="font-weight:800">${t.label}</div><audio controls src="${t.url}"></audio>`; list.appendChild(div); }); }
-  </script>
+window.addEventListener('hashchange', render);
+render();
+</script>
 </body>
 </html>
