@@ -1,19 +1,20 @@
 // src/lib/pdf.ts
-// PDF/Text parser with optional OCR fallback (tesseract.js), capped pages.
+// PDF/Text parser with optional OCR fallback (tesseract.js), capped pages and timeout.
 // Exports:
 //   analyzeScriptText(raw, strictColon?)
 //   parseArrayBufferWithMeta(buf)  -> { scenes, meta }
 //   parseArrayBuffer(buf)          -> scenes
 //
 // Env flags:
-//   OCR_ENABLED=1       enable OCR fallback (default: off)
-//   OCR_MAX_PAGES=10    page cap for OCR (default: 10)
-//   OCR_LANG=eng        tesseract language (default: 'eng')
+//   OCR_ENABLED=1         enable OCR fallback (default: off)
+//   OCR_MAX_PAGES=10      page cap for OCR (default: 10)
+//   OCR_LANG=eng          tesseract language (default: 'eng')
+//   OCR_SCALE=1.6         rasterization scale for OCR images (default: 1.6)
+//   OCR_TIMEOUT_MS=25000  hard timeout for the entire OCR pass (default: 25000)
 
 import path from 'path';
 import { fileURLToPath } from 'url';
 
-// ---------- Types ----------
 export type Line = { speaker: string; text: string };
 export type Scene = { id: string; title: string; lines: Line[] };
 
@@ -23,6 +24,7 @@ export type ParserMeta = {
   roleStats: RoleStats;
   rawLength: number;
   pagesTried?: number;
+  timedOut?: boolean;
 };
 
 // ---------- Config / Env ----------
@@ -38,6 +40,8 @@ const STOP_NAMES = new Set([
 const OCR_ENABLED = process.env.OCR_ENABLED === '1' || process.env.OCR_ENABLED === 'true';
 const OCR_MAX_PAGES = Math.max(1, Number(process.env.OCR_MAX_PAGES || 10));
 const OCR_LANG = process.env.OCR_LANG || 'eng';
+const OCR_SCALE = Math.max(1, Number(process.env.OCR_SCALE || 1.6));
+const OCR_TIMEOUT_MS = Math.max(5000, Number(process.env.OCR_TIMEOUT_MS || 25000));
 
 // pdf.js standard fonts path (required in Node when rendering pages)
 const __filename = fileURLToPath(import.meta.url);
@@ -258,7 +262,7 @@ async function extractTextWithPdfJs(bytes: Uint8Array): Promise<{ text: string; 
 }
 
 // ---------- OCR fallback (tesseract.js) ----------
-async function ocrPdfFirstPages(bytes: Uint8Array, maxPages: number, lang: string): Promise<{ text: string; pages: number }> {
+async function ocrPdfFirstPages(bytes: Uint8Array, maxPages: number, lang: string, scale: number): Promise<{ text: string; pages: number }> {
   const pdfjs = await import('pdfjs-dist/legacy/build/pdf.js');
   const { createCanvas } = await import('@napi-rs/canvas');
   const { createWorker } = await import('tesseract.js');
@@ -270,8 +274,9 @@ async function ocrPdfFirstPages(bytes: Uint8Array, maxPages: number, lang: strin
   const pdf = await loadingTask.promise;
 
   const pagesToDo = Math.min(pdf.numPages, Math.max(1, maxPages));
+
+  // Init worker explicitly (load + initialize) and pin language data CDN
   const worker = await createWorker({
-    // Reliable CDN for traineddata
     langPath: 'https://tessdata.projectnaptha.com/4.0.0'
   });
   await worker.loadLanguage(lang);
@@ -283,7 +288,7 @@ async function ocrPdfFirstPages(bytes: Uint8Array, maxPages: number, lang: strin
     let acc = '';
     for (let p = 1; p <= pagesToDo; p++) {
       const page = await pdf.getPage(p);
-      const viewport = page.getViewport({ scale: 2.0 }); // upsample for better OCR
+      const viewport = page.getViewport({ scale });
 
       const cc = canvasFactory.create(viewport.width, viewport.height);
       await page.render({
@@ -294,9 +299,13 @@ async function ocrPdfFirstPages(bytes: Uint8Array, maxPages: number, lang: strin
 
       const png = cc.canvas.toBuffer('image/png');
       const { data: { text } } = await worker.recognize(png);
+
       if (text) acc += '\n' + text;
 
+      // free memory between pages
       canvasFactory.destroy(cc);
+      // yield back to loop to avoid event loop starvation
+      await new Promise(r => setTimeout(r, 0));
     }
     await worker.terminate();
     return { text: normalizeWhitespace(acc), pages: pagesToDo };
@@ -306,7 +315,7 @@ async function ocrPdfFirstPages(bytes: Uint8Array, maxPages: number, lang: strin
   }
 }
 
-// ---------- Reparse guard ----------
+// ---------- helpers ----------
 function maybeReparseStrictIfNoisy(scenes: Scene[], raw: string): Scene[] {
   const stats = scoreRoles(scenes);
   if (!stats.total) return scenes;
@@ -319,6 +328,22 @@ function maybeReparseStrictIfNoisy(scenes: Scene[], raw: string): Scene[] {
     (sStats.total && sStats.badCount < stats.badCount) ||
     (hasDialogue(strict) && sStats.badRatio <= stats.badRatio);
   return strictBetter ? strict : scenes;
+}
+
+async function withTimeout<T>(p: Promise<T>, ms: number): Promise<{ ok: true; value: T } | { ok: false; error: any }> {
+  let to: NodeJS.Timeout;
+  try {
+    const val = await Promise.race([
+      p,
+      new Promise<never>((_, rej) => { to = setTimeout(() => rej(new Error('ocr_timeout')), ms); })
+    ]);
+    clearTimeout(to!);
+    // @ts-ignore
+    return { ok: true, value: val };
+  } catch (e) {
+    if (to) clearTimeout(to);
+    return { ok: false, error: e };
+  }
 }
 
 // ---------- Public API with diagnostics ----------
@@ -357,23 +382,32 @@ export async function parseArrayBufferWithMeta(input: ArrayBuffer | Buffer): Pro
     console.warn('[pdf] naive buffer parse failed:', (err as Error)?.message);
   }
 
-  // 3) OCR fallback (flagged, capped pages)
+  // 3) OCR fallback (flagged, capped pages, timeout-protected)
   if (OCR_ENABLED) {
-    try {
-      const { text, pages } = await ocrPdfFirstPages(bytes, OCR_MAX_PAGES, OCR_LANG);
-      if (text && text.length > 0) {
-        let scenes = analyzeScriptText(text, false);
-        scenes = maybeReparseStrictIfNoisy(scenes, text);
-        if (hasDialogue(scenes)) {
-          return { scenes, meta: { pathUsed: 'ocr', roleStats: scoreRoles(scenes), rawLength: text.length, pagesTried: pages } };
+    const ocrRun = withTimeout(ocrPdfFirstPages(bytes, OCR_MAX_PAGES, OCR_LANG, OCR_SCALE), OCR_TIMEOUT_MS);
+    const result = await ocrRun;
+    if (result.ok) {
+      try {
+        const { text, pages } = result.value as any;
+        if (text && text.length > 0) {
+          let scenes = analyzeScriptText(text, false);
+          scenes = maybeReparseStrictIfNoisy(scenes, text);
+          if (hasDialogue(scenes)) {
+            return { scenes, meta: { pathUsed: 'ocr', roleStats: scoreRoles(scenes), rawLength: text.length, pagesTried: pages } };
+          }
+          const strict = analyzeScriptText(text, true);
+          if (hasDialogue(strict)) {
+            return { scenes: strict, meta: { pathUsed: 'ocr', roleStats: scoreRoles(strict), rawLength: text.length, pagesTried: pages } };
+          }
         }
-        const strict = analyzeScriptText(text, true);
-        if (hasDialogue(strict)) {
-          return { scenes: strict, meta: { pathUsed: 'ocr', roleStats: scoreRoles(strict), rawLength: text.length, pagesTried: pages } };
-        }
+      } catch (err) {
+        console.warn('[pdf] ocr parse failed:', (err as Error)?.message);
       }
-    } catch (err) {
-      console.warn('[pdf] ocr failed:', (err as Error)?.message);
+    } else {
+      console.warn('[pdf] ocr timed out or failed:', (result as any).error?.message || (result as any).error);
+      // fall through to stub but report timeout
+      const stub: Scene[] = [{ id: 'scene-1', title: 'Scene 1', lines: [] }];
+      return { scenes: stub, meta: { pathUsed: 'stub', roleStats: { total: 0, badCount: 0, badRatio: 0 }, rawLength: 0, timedOut: true } };
     }
   }
 
