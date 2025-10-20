@@ -2,7 +2,7 @@
 // PDF/Text parser with optional OCR fallback (tesseract.js recognize()), capped pages & timeout.
 // Env flags:
 //   OCR_ENABLED=1         enable OCR fallback (default: off)
-//   OCR_MAX_PAGES=10      page cap for OCR (default: 10)
+//   OCR_MAX_PAGES=3       page cap for OCR (default: 3; bump if stable)
 //   OCR_LANG=eng          tesseract language (default: 'eng')
 //   OCR_SCALE=2.0         rasterization scale for OCR images (default: 2.0)
 //   OCR_TIMEOUT_MS=25000  hard timeout for the entire OCR pass (default: 25000)
@@ -32,17 +32,17 @@ const STOP_NAMES = new Set([
 ]);
 
 const OCR_ENABLED = process.env.OCR_ENABLED === '1' || process.env.OCR_ENABLED === 'true';
-const OCR_MAX_PAGES = Math.max(1, Number(process.env.OCR_MAX_PAGES || 10));
+const OCR_MAX_PAGES = Math.max(1, Number(process.env.OCR_MAX_PAGES || 3));
 const OCR_LANG = process.env.OCR_LANG || 'eng';
 const OCR_SCALE = Math.max(1, Number(process.env.OCR_SCALE || 2.0));
 const OCR_TIMEOUT_MS = Math.max(5000, Number(process.env.OCR_TIMEOUT_MS || 25000));
 
-// pdf.js standard fonts dir (for Node canvas rendering)
+// pdf.js standard fonts dir (not required when useSystemFonts=true)
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const STANDARD_FONTS_DIR = path.join(__dirname, '../../node_modules/pdfjs-dist/standard_fonts');
 
-// ───────────────────────── utils
+// ───────────── utils
 function normalizeWhitespace(s: string): string {
   return (s || '')
     .normalize('NFKC')
@@ -78,7 +78,7 @@ function cleanName(line: string): string {
   return (line || '').replace(/\s*\([^)]*\)\s*/g, '').replace(/\s{2,}/g, ' ').trim();
 }
 
-// ───────────────────────── heuristics
+// ───────────── heuristics
 function looksLikeSpeakerName(name: string): boolean {
   if (!name) return false;
   const base = cleanName(name).replace(/\s{2,}/g, ' ');
@@ -107,7 +107,7 @@ function scoreRoles(scenes: Scene[]): RoleStats {
   for (const role of roles) {
     const r = cleanName(role);
     const letters = (r.match(/[A-Z]/g) || []).length;
-    const hasDigit = /\d/.test(r);
+    const hasDigit = /\d/./.test(r);
     const hasVowel = /[AEIOUY]/.test(r);
     const multi = r.includes(' ') || r.includes('&');
     if (letters < 3 || hasDigit || (!hasVowel && !multi)) bad++;
@@ -126,7 +126,7 @@ function hasDialogue(scenes: Scene[]): boolean {
   return false;
 }
 
-// ───────────────────────── analyzer
+// ───────────── analyzer
 export function analyzeScriptText(rawInput: string, strictColon = false): Scene[] {
   const raw = normalizeWhitespace(rawInput || '');
   if (!raw) return [];
@@ -162,7 +162,6 @@ export function analyzeScriptText(rawInput: string, strictColon = false): Scene[
       continue;
     }
 
-    // NAME: text
     const m = line.match(colonRe);
     if (m) {
       const name = cleanName(m[1].trim());
@@ -172,7 +171,6 @@ export function analyzeScriptText(rawInput: string, strictColon = false): Scene[
       }
     }
 
-    // NAME on its own + run of following lines
     if (looksLikeSpeakerName(line) && !isParenthetical(line)) {
       const name = cleanName(line);
       const textParts: string[] = [];
@@ -192,7 +190,6 @@ export function analyzeScriptText(rawInput: string, strictColon = false): Scene[
       }
     }
 
-    // continuation
     if (current.lines.length > 0 && !isParenthetical(line)) {
       const last = current.lines[current.lines.length - 1];
       last.text = (last.text ? last.text + ' ' : '') + line.trim();
@@ -207,7 +204,7 @@ export function analyzeScriptText(rawInput: string, strictColon = false): Scene[
   return scenes.filter(sc => sc.lines.length > 0);
 }
 
-// ───────────────────────── CanvasFactory for @napi-rs/canvas
+// ───────────── CanvasFactory (safe destroy)
 type CanvasAndContext = { canvas: any; context: any };
 function makeCanvasFactory(createCanvas: (w:number,h:number)=>any) {
   return {
@@ -221,20 +218,20 @@ function makeCanvasFactory(createCanvas: (w:number,h:number)=>any) {
       target.canvas.width = Math.ceil(w);
       target.canvas.height = Math.ceil(h);
     },
-    destroy: (target: CanvasAndContext) => {
-      if (!target) return;
-      try { if (target.canvas) { target.canvas.width = 0; target.canvas.height = 0; } } catch {}
-      (target as any).canvas = null;
-      (target as any).context = null;
+    destroy: (_target: CanvasAndContext) => {
+      // no-op to avoid napi "unwrap" crash in pdf.js destroy path
+      // we explicitly release per-page below
     }
   };
 }
 
-// ───────────────────────── PDF text extraction (fast path)
+// ───────────── PDF text extraction (fast path)
 async function extractTextWithPdfJs(bytes: Uint8Array): Promise<{ text: string; numPages: number }> {
   const pdfjs = await import('pdfjs-dist/legacy/build/pdf.js');
   const loadingTask = pdfjs.getDocument({
     data: bytes,
+    // Avoid font fetch noise; we don't render glyphs in this path anyway.
+    useSystemFonts: true,
     standardFontDataUrl: `file://${STANDARD_FONTS_DIR}/`
   });
   const pdf = await loadingTask.promise;
@@ -250,7 +247,7 @@ async function extractTextWithPdfJs(bytes: Uint8Array): Promise<{ text: string; 
   return { text: normalizeWhitespace(parts.join('\n')), numPages: pageCount };
 }
 
-// ───────────────────────── OCR fallback using recognize()
+// ───────────── OCR fallback via recognize()
 async function ocrPdfFirstPages(bytes: Uint8Array, maxPages: number, lang: string, scale: number): Promise<{ text: string; pages: number }> {
   const pdfjs = await import('pdfjs-dist/legacy/build/pdf.js');
   const { createCanvas } = await import('@napi-rs/canvas');
@@ -258,6 +255,7 @@ async function ocrPdfFirstPages(bytes: Uint8Array, maxPages: number, lang: strin
 
   const loadingTask = pdfjs.getDocument({
     data: bytes,
+    useSystemFonts: true,
     standardFontDataUrl: `file://${STANDARD_FONTS_DIR}/`
   });
   const pdf = await loadingTask.promise;
@@ -268,32 +266,33 @@ async function ocrPdfFirstPages(bytes: Uint8Array, maxPages: number, lang: strin
   let acc = '';
   for (let p = 1; p <= pagesToDo; p++) {
     const page = await pdf.getPage(p);
-    const viewport = page.getViewport({ scale }); // e.g., 2.0
+    const viewport = page.getViewport({ scale });
 
     const cc = canvasFactory.create(viewport.width, viewport.height);
     await page.render({ canvasContext: cc.context, viewport, canvasFactory }).promise;
 
     const png = cc.canvas.toBuffer('image/png');
 
-    // One-shot recognize with tuned params (no worker init)
     const { data: { text } } = await recognize(png, lang, {
       langPath: 'https://tessdata.projectnaptha.com/4.0.0',
       preserve_interword_spaces: '1',
-      tessedit_pageseg_mode: '6',
+      tessedit_pageseg_mode: '6', // uniform block
       user_defined_dpi: '300',
       tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 .,'-&:;?!()",
     });
 
     if (text) acc += '\n' + text;
 
-    canvasFactory.destroy(cc);
+    // explicit release to keep memory low (we skipped destroy in factory)
+    try { cc.canvas.width = 0; cc.canvas.height = 0; } catch {}
+    // allow event loop to breathe
     await new Promise(r => setTimeout(r, 0));
   }
 
   return { text: normalizeWhitespace(acc), pages: pagesToDo };
 }
 
-// ───────────────────────── guards
+// ───────────── guards
 function maybeReparseStrictIfNoisy(scenes: Scene[], raw: string): Scene[] {
   const stats = scoreRoles(scenes);
   if (!stats.total) return scenes;
@@ -307,7 +306,6 @@ function maybeReparseStrictIfNoisy(scenes: Scene[], raw: string): Scene[] {
     (hasDialogue(strict) && sStats.badRatio <= stats.badRatio);
   return strictBetter ? strict : scenes;
 }
-
 async function withTimeout<T>(p: Promise<T>, ms: number): Promise<{ ok: true; value: T } | { ok: false; error: any }> {
   let to: NodeJS.Timeout;
   try {
@@ -324,7 +322,7 @@ async function withTimeout<T>(p: Promise<T>, ms: number): Promise<{ ok: true; va
   }
 }
 
-// ───────────────────────── public API
+// ───────────── public API
 export async function parseArrayBufferWithMeta(input: ArrayBuffer | Buffer): Promise<{ scenes: Scene[]; meta: ParserMeta }> {
   const bytes = input instanceof Buffer ? new Uint8Array(input) : new Uint8Array(input);
 
