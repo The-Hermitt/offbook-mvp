@@ -1,4 +1,3 @@
-<!-- public/app-tabs.html -->
 <!doctype html>
 <html>
 <head>
@@ -11,12 +10,12 @@
     .tabbar a{flex:1;text-align:center;padding:10px;border-radius:10px;color:#cfd8f3;text-decoration:none}
     .tabbar a.active{background:#1a2447;color:#fff}
     .panel{max-width:720px;margin:20px auto 90px;padding:16px;background:#0d1326;border:1px solid #1b2547;border-radius:12px}
-    .btn{background:#3b82f6;border:none;color:#fff;padding:10px 14px;border-radius:10px;font-weight:600}
+    .btn{background:#3b82f6;border:none;color:#fff;padding:10px 14px;border-radius:10px;font-weight:600;cursor:pointer}
     .field{margin:12px 0}
-    .select, .input, .textarea{width:100%;padding:10px;border-radius:10px;border:1px solid #1b2547;background:#0b1220;color:#eaeef7}
-    .row{display:flex;gap:12px;align-items:center}
+    .select,.input,.textarea{width:100%;padding:10px;border-radius:10px;border:1px solid #1b2547;background:#0b1220;color:#eaeef7}
+    .row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
     .banner{padding:10px;border-radius:10px;background:#24110f;border:1px solid #7a2c22;color:#ffd4cc;margin-bottom:12px}
-    .muted{opacity:.75;font-size:.9em}
+    .muted{opacity:.8;font-size:.9em}
     .role{padding:12px;border:1px solid #1b2547;border-radius:12px;margin:8px 0;font-weight:700}
   </style>
 </head>
@@ -33,193 +32,166 @@
   </nav>
 
 <script>
-const BASE = location.origin;
-const SECRET = new URLSearchParams(location.search).get('secret') || '';
-const H = SECRET ? { 'X-Shared-Secret': SECRET } : {};
-let state = { script_id:null, scenes:[], roles:[], role:'UNKNOWN', voice_map:{}, preview:null };
+(function(){
+  const BASE = location.origin;
+  const SECRET = new URLSearchParams(location.search).get('secret') || '';
+  const HDRS = SECRET ? { 'X-Shared-Secret': SECRET } : {};
 
-function el(html){ const t=document.createElement('template'); t.innerHTML=html.trim(); return t.content.firstChild; }
-function setActive(tab){ document.querySelectorAll('.tabbar a').forEach(a=>a.classList.toggle('active',a.getAttribute('href')===tab)); }
-function fmtPreview(p){ if(!p) return ''; return `<div class="muted">parser:<b>${p.meta?.pathUsed||'n/a'}</b> roles:${p.roles.length}</div>`; }
+  const state = { script_id:null, scenes:[], roles:[], role:'UNKNOWN', voice_map:{} };
 
-async function postJSON(url, body){
-  const r = await fetch(url,{ method:'POST', headers:{'Content-Type':'application/json', ...H}, body:JSON.stringify(body) });
-  if(!r.ok) throw new Error(await r.text());
-  return r.json();
-}
-async function getJSON(url){
-  const r = await fetch(url,{ headers:{...H} });
-  if(!r.ok) throw new Error(await r.text());
-  return r.json();
-}
+  function el(html){ const t=document.createElement('template'); t.innerHTML=html.trim(); return t.content.firstChild; }
+  function setActive(tab){ document.querySelectorAll('.tabbar a').forEach(a=>a.classList.toggle('active',a.getAttribute('href')===tab)); }
 
-function render(){
-  const hash = location.hash || '#import';
-  setActive(hash);
-  const app=document.getElementById('app'); app.innerHTML='';
-
-  if(hash==='#import'){
-    const panel = el(`<div class="panel">
-      <h2>Import</h2>
-      <div class="row">
-        <button class="btn" id="tab-paste">Paste Script Text</button>
-        <button class="btn" id="tab-pdf" style="background:#475569">Upload PDF</button>
-      </div>
-      <div id="mode"></div>
-      <div class="field"><div id="err" class="muted"></div></div>
-    </div>`);
-    app.append(panel);
-
-    const mode = panel.querySelector('#mode');
-    const btnPaste = panel.querySelector('#tab-paste');
-    const btnPdf = panel.querySelector('#tab-pdf');
-
-    function showPaste(){
-      mode.innerHTML = `
-        <div class="field"><textarea id="txt" class="textarea" rows="8" placeholder="JANE: Hello.\nGABE: Hey."></textarea></div>
-        <div class="row">
-          <input id="title" class="input" placeholder="Title" value="Pasted Script"/>
-          <button class="btn" id="go">Continue</button>
-        </div>`;
-      panel.querySelector('#go').onclick = async () => {
-        try {
-          const text = panel.querySelector('#txt').value || '';
-          const title = panel.querySelector('#title').value || 'Pasted Script';
-          const r = await postJSON(`${BASE}/debug/upload_script_text`, { text, title });
-          state.script_id = r.script_id;
-          const s = await getJSON(`${BASE}/debug/scenes?script_id=${state.script_id}`);
-          state.scenes = s.scenes || [];
-          state.roles = Array.from(new Set(state.scenes.flatMap(sc => sc.lines.map(l=>l.speaker))));
-          location.hash = '#assign'; render();
-        } catch (e) {
-          panel.querySelector('#err').textContent = 'Error: ' + (e.message||e);
-        }
-      };
-    }
-    function showPdf(){
-      mode.innerHTML = `
-        <div class="field"><input id="pdf" type="file" accept="application/pdf" class="input"/></div>
-        <div class="row">
-          <input id="title" class="input" placeholder="Title" value="Uploaded Script"/>
-          <button class="btn" id="go">Continue</button>
-        </div>`;
-      panel.querySelector('#go').onclick = async () => {
-        panel.querySelector('#err').textContent='';
-        try{
-          const f = panel.querySelector('#pdf').files[0];
-          if(!f){ panel.querySelector('#err').textContent='Choose a PDF.'; return; }
-          const fd = new FormData(); fd.append('pdf', f); fd.append('title', panel.querySelector('#title').value || 'Script PDF');
-          const r = await fetch(`${BASE}/debug/upload_script_upload`, { method:'POST', headers:{...H}, body:fd });
-          if(!r.ok) throw new Error(await r.text());
-          const j = await r.json();
-          state.script_id = j.script_id;
-          const s = await getJSON(`${BASE}/debug/scenes?script_id=${state.script_id}`);
-          state.scenes = s.scenes || [];
-          state.roles = Array.from(new Set(state.scenes.flatMap(sc => sc.lines.map(l=>l.speaker))));
-          location.hash = '#assign'; render();
-        }catch(e){
-          panel.querySelector('#err').textContent='Error: '+(e.message||e);
-        }
-      };
-    }
-    btnPaste.onclick=showPaste; btnPdf.onclick=showPdf; showPaste();
+  async function postJSON(url, body){
+    const r = await fetch(url,{ method:'POST', headers:{'Content-Type':'application/json', ...HDRS}, body:JSON.stringify(body) });
+    if(!r.ok) throw new Error(await r.text());
+    return r.json();
+  }
+  async function getJSON(url){
+    const r = await fetch(url,{ headers:{...HDRS} });
+    if(!r.ok) throw new Error(await r.text());
+    return r.json();
   }
 
-  if(hash==='#assign'){
-    const roles = state.roles||[];
-    const panel = el(`<div class="panel">
-      <div class="row" style="justify-content:space-between;align-items:center">
-        <h2>Assign</h2>
-        <span class="muted">scene: ${state.scenes?.[0]?.id || 'scene-1'}</span>
-      </div>
-      <div id="banner"></div>
-      <div class="field">
-        <label>I am…</label>
-        <select id="iam" class="select">
-          ${['UNKNOWN', ...roles].map(r=>`<option value="${r}">${r}</option>`).join('')}
-        </select>
-      </div>
-      <div id="roles"></div>
-      <div class="row" style="gap:8px">
-        <button class="btn" id="back" style="background:#334155">Back</button>
-        <button class="btn" id="cont">Continue</button>
-      </div>
-      <div id="diag" class="muted" style="margin-top:10px"></div>
-    </div>`);
-    app.append(panel);
+  function render(){
+    const hash = location.hash || '#import';
+    setActive(hash);
+    const app=document.getElementById('app'); if(!app){ return; }
+    app.innerHTML='';
 
-    // When no roles, show a friendly banner and a Paste hint
-    (async ()=>{
-      let preview = null;
-      if(state.script_id){
-        try{ preview = await getJSON(`${BASE}/debug/preview?script_id=${state.script_id}`); }catch{}
+    if(hash==='#import'){
+      const panel = el(`<div class="panel">
+        <h2>Import</h2>
+        <div class="row">
+          <button class="btn" id="tab-paste">Paste Script Text</button>
+          <button class="btn" id="tab-pdf" style="background:#475569">Upload PDF</button>
+        </div>
+        <div id="mode"></div>
+        <div class="field"><div id="err" class="muted"></div></div>
+      </div>`);
+      app.append(panel);
+      const mode = panel.querySelector('#mode');
+
+      function showPaste(){
+        mode.innerHTML = `
+          <div class="field"><textarea id="txt" class="textarea" rows="8" placeholder="JANE: Hello.\nGABE: Hey."></textarea></div>
+          <div class="row">
+            <input id="title" class="input" placeholder="Title" value="Pasted Script"/>
+            <button class="btn" id="go">Continue</button>
+          </div>`;
+        panel.querySelector('#go').onclick = async () => {
+          try {
+            const text = (panel.querySelector('#txt').value||'');
+            const title = (panel.querySelector('#title').value||'Pasted Script');
+            const r = await postJSON(`${BASE}/debug/upload_script_text`, { text, title });
+            state.script_id = r.script_id;
+            const s = await getJSON(`${BASE}/debug/scenes?script_id=${state.script_id}`);
+            state.scenes = s.scenes||[];
+            state.roles = Array.from(new Set(state.scenes.flatMap(sc => sc.lines.map(l=>l.speaker))));
+            location.hash='#assign'; render();
+          } catch(e){ panel.querySelector('#err').textContent='Error: '+(e.message||e); }
+        };
       }
-      panel.querySelector('#diag').innerHTML = fmtPreview(preview);
-
-      if(roles.length===0){
-        panel.querySelector('#banner').innerHTML = `<div class="banner">
-          No partner roles detected. If you uploaded a PDF, it may be a <b>scanned image</b> with no selectable text.
-          Try <b>Import → Paste Script Text</b> for best results. 
-        </div>`;
+      function showPdf(){
+        mode.innerHTML = `
+          <div class="field"><input id="pdf" type="file" accept="application/pdf" class="input"/></div>
+          <div class="row">
+            <input id="title" class="input" placeholder="Title" value="Uploaded Script"/>
+            <button class="btn" id="go">Continue</button>
+          </div>`;
+        panel.querySelector('#go').onclick = async () => {
+          panel.querySelector('#err').textContent='';
+          try{
+            const f = panel.querySelector('#pdf').files[0];
+            if(!f){ panel.querySelector('#err').textContent='Choose a PDF.'; return; }
+            const fd = new FormData(); fd.append('pdf', f); fd.append('title', panel.querySelector('#title').value||'Script PDF');
+            const r = await fetch(`${BASE}/debug/upload_script_upload`, { method:'POST', headers:{...HDRS}, body:fd });
+            if(!r.ok) throw new Error(await r.text());
+            const j = await r.json();
+            state.script_id = j.script_id;
+            const s = await getJSON(`${BASE}/debug/scenes?script_id=${state.script_id}`);
+            state.scenes = s.scenes||[];
+            state.roles = Array.from(new Set(state.scenes.flatMap(sc => sc.lines.map(l=>l.speaker))));
+            location.hash='#assign'; render();
+          }catch(e){ panel.querySelector('#err').textContent='Error: '+(e.message||e); }
+        };
       }
-    })();
+      panel.querySelector('#tab-paste').onclick = showPaste;
+      panel.querySelector('#tab-pdf').onclick = showPdf;
+      showPaste();
+    }
 
-    const iam = panel.querySelector('#iam');
-    const rolesDiv = panel.querySelector('#roles');
+    if(hash==='#assign'){
+      const roles = state.roles||[];
+      const panel = el(`<div class="panel">
+        <div class="row" style="justify-content:space-between;align-items:center">
+          <h2>Assign</h2><span class="muted">scene: ${state.scenes?.[0]?.id||'scene-1'}</span>
+        </div>
+        <div id="banner"></div>
+        <div class="field">
+          <label>I am…</label>
+          <select id="iam" class="select">
+            ${['UNKNOWN',...roles].map(r=>`<option value="${r}">${r}</option>`).join('')}
+          </select>
+        </div>
+        <div id="roles"></div>
+        <div class="row">
+          <button class="btn" id="back" style="background:#334155">Back</button>
+          <button class="btn" id="cont">Continue</button>
+        </div>
+        <div id="diag" class="muted" style="margin-top:10px"></div>
+      </div>`);
+      app.append(panel);
 
-    function renderVoicePickers(){
-      rolesDiv.innerHTML = '';
-      const me = iam.value;
-      for(const r of roles){
-        if(r===me) continue;
-        rolesDiv.append(el(`<div class="role">
-          <div style="display:flex;justify-content:space-between;align-items:center">
+      (async ()=>{
+        let preview=null;
+        try{ if(state.script_id) preview=await getJSON(`${BASE}/debug/preview?script_id=${state.script_id}`); }catch{}
+        if(roles.length===0){
+          panel.querySelector('#banner').innerHTML =
+            `<div class="banner">No partner roles detected. If this was a PDF, it may be a scanned image. Try <b>Import → Paste Script Text</b>.</div>`;
+        }
+        if(preview){
+          panel.querySelector('#diag').textContent =
+            `parser: ${preview.meta?.pathUsed||'n/a'} • roles: ${preview.roles?.length||0}`;
+        }
+      })();
+
+      const iam = panel.querySelector('#iam');
+      const rolesDiv = panel.querySelector('#roles');
+      function renderVoicePickers(){
+        rolesDiv.innerHTML='';
+        const me = iam.value;
+        for(const r of roles){ if(r===me) continue;
+          rolesDiv.append(el(`<div class="role"><div style="display:flex;justify-content:space-between;align-items:center">
             <div>${r}</div>
             <select class="select vsel" data-role="${r}">
-              <option>Alloy</option>
-              <option>Verse</option>
-              <option>Narrator</option>
-            </select>
-          </div>
-        </div>`));
+              <option>Alloy</option><option>Verse</option><option>Narrator</option>
+            </select></div></div>`));
+        }
       }
+      iam.onchange = renderVoicePickers; renderVoicePickers();
+      panel.querySelector('#back').onclick=()=>{ location.hash='#import'; render(); };
+      panel.querySelector('#cont').onclick=async ()=>{
+        const me = iam.value || 'UNKNOWN';
+        const vm = {}; document.querySelectorAll('.vsel').forEach(s=>vm[s.dataset.role]=s.value.toLowerCase());
+        state.role = me; state.voice_map = vm;
+        try{ await postJSON(`${BASE}/debug/set_voice`, { script_id: state.script_id, voice_map: vm }); }catch{}
+        location.hash='#rehearse'; render();
+      };
     }
-    iam.onchange = renderVoicePickers;
-    renderVoicePickers();
 
-    panel.querySelector('#back').onclick=()=>{ location.hash='#import'; render(); };
-    panel.querySelector('#cont').onclick=async ()=>{
-      const me = iam.value || 'UNKNOWN';
-      const vsel = Array.from(panel.querySelectorAll('.vsel'));
-      const vm:any = {};
-      vsel.forEach((s:any)=> vm[s.dataset.role]=s.value.toLowerCase());
-      state.role = me; state.voice_map = vm;
-      await postJSON(`${BASE}/debug/set_voice`, { script_id: state.script_id, voice_map: vm });
-      location.hash='#rehearse'; render();
-    };
+    if(hash==='#rehearse'){
+      const panel = el(`<div class="panel"><h2>Rehearse</h2><div class="muted">Playback coming next.</div></div>`);
+      app.append(panel);
+    }
+    if(hash==='#record'){ app.append(el(`<div class="panel"><h2>Record</h2><div class="muted">MVP TBD</div></div>`)); }
+    if(hash==='#gallery'){ app.append(el(`<div class="panel"><h2>Gallery</h2><div class="muted">Takes appear here</div></div>`)); }
+    if(hash==='#settings'){ app.append(el(`<div class="panel"><h2>Settings</h2><div class="muted">Defaults TBD</div></div>`)); }
   }
 
-  if(hash==='#rehearse'){
-    const panel = el(`<div class="panel">
-      <h2>Rehearse</h2>
-      <div class="muted">Coming next: playback controls & auto-cue.</div>
-    </div>`);
-    app.append(panel);
-  }
-
-  if(hash==='#record'){
-    const panel = el(`<div class="panel"><h2>Record</h2><div class="muted">Mic capture MVP TBD</div></div>`); app.append(panel);
-  }
-  if(hash==='#gallery'){
-    const panel = el(`<div class="panel"><h2>Gallery</h2><div class="muted">Takes will appear here</div></div>`); app.append(panel);
-  }
-  if(hash==='#settings'){
-    const panel = el(`<div class="panel"><h2>Settings</h2><div class="muted">Defaults TBD</div></div>`); app.append(panel);
-  }
-}
-
-window.addEventListener('hashchange', render);
-render();
+  window.addEventListener('hashchange', render);
+  render();
+})();
 </script>
 </body>
 </html>
