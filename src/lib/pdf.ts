@@ -205,4 +205,174 @@ export function analyzeScriptText(rawInput: string, strictColon = false): Scene[
   for (const sc of scenes) {
     sc.lines = sc.lines
       .map(l => ({ speaker: cleanName(l.speaker), text: (l.text || '').trim() }))
-      .filter(l => l.text.length > 0 && l.sp
+      .filter(l => l.text.length > 0 && l.speaker);
+  }
+  return scenes.filter(sc => sc.lines.length > 0);
+}
+
+// ----- pdf.js CanvasFactory for @napi-rs/canvas -----
+type CanvasAndContext = { canvas: any; context: any };
+function makeCanvasFactory(createCanvas: (w:number,h:number)=>any) {
+  return {
+    create: (w:number, h:number): CanvasAndContext => {
+      const canvas = createCanvas(Math.ceil(w), Math.ceil(h));
+      const context = canvas.getContext('2d');
+      return { canvas, context };
+    },
+    reset: (target: CanvasAndContext, w:number, h:number) => {
+      if (!target?.canvas) return;
+      target.canvas.width = Math.ceil(w);
+      target.canvas.height = Math.ceil(h);
+    },
+    destroy: (target: CanvasAndContext) => {
+      if (!target) return;
+      try {
+        if (target.canvas) { target.canvas.width = 0; target.canvas.height = 0; }
+      } catch {}
+      (target as any).canvas = null;
+      (target as any).context = null;
+    }
+  };
+}
+
+// ----- PDF text extraction (fast path) -----
+async function extractTextWithPdfJs(bytes: Uint8Array): Promise<{ text: string; numPages: number }> {
+  const pdfjs = await import('pdfjs-dist/legacy/build/pdf.js');
+  const loadingTask = pdfjs.getDocument({
+    data: bytes,
+    standardFontDataUrl: `file://${STANDARD_FONTS_DIR}/`
+  });
+  const pdf = await loadingTask.promise;
+
+  const parts: string[] = [];
+  const pageCount = pdf.numPages;
+  for (let p = 1; p <= Math.min(pageCount, 100); p++) {
+    const page = await pdf.getPage(p);
+    const content = await page.getTextContent();
+    const strs = content.items.map((it: any) => (it?.str ?? '')).filter(Boolean);
+    parts.push(strs.join('\n'));
+  }
+  return { text: normalizeWhitespace(parts.join('\n')), numPages: pageCount };
+}
+
+// ----- OCR fallback (tesseract.js) -----
+async function ocrPdfFirstPages(bytes: Uint8Array, maxPages: number, lang: string): Promise<{ text: string; pages: number }> {
+  const pdfjs = await import('pdfjs-dist/legacy/build/pdf.js');
+  const { createCanvas } = await import('@napi-rs/canvas');
+  const { createWorker } = await import('tesseract.js');
+
+  const loadingTask = pdfjs.getDocument({
+    data: bytes,
+    standardFontDataUrl: `file://${STANDARD_FONTS_DIR}/`
+  });
+  const pdf = await loadingTask.promise;
+
+  const pagesToDo = Math.min(pdf.numPages, Math.max(1, maxPages));
+  const worker = await createWorker(lang);
+  const canvasFactory = makeCanvasFactory(createCanvas);
+
+  try {
+    let acc = '';
+    for (let p = 1; p <= pagesToDo; p++) {
+      const page = await pdf.getPage(p);
+      const viewport = page.getViewport({ scale: 2.0 }); // upsample for better OCR
+
+      const cc = canvasFactory.create(viewport.width, viewport.height);
+      await page.render({
+        canvasContext: cc.context,
+        viewport,
+        canvasFactory
+      }).promise;
+
+      const png = cc.canvas.toBuffer('image/png');
+      const { data: { text } } = await worker.recognize(png);
+      if (text) acc += '\n' + text;
+
+      canvasFactory.destroy(cc);
+    }
+    return { text: normalizeWhitespace(acc), pages: pagesToDo };
+  } finally {
+    await (worker as any).terminate?.();
+  }
+}
+
+// ----- Reparse guard -----
+function maybeReparseStrictIfNoisy(scenes: Scene[], raw: string): Scene[] {
+  const stats = scoreRoles(scenes);
+  if (!stats.total) return scenes;
+  const tooManyBad = stats.badCount > 20 || stats.badRatio > 0.5;
+  if (!tooManyBad) return scenes;
+  const strict = analyzeScriptText(raw, /*strictColon*/ true);
+  const sStats = scoreRoles(strict);
+  const strictBetter =
+    (hasDialogue(strict) && !hasDialogue(scenes)) ||
+    (sStats.total && sStats.badCount < stats.badCount) ||
+    (hasDialogue(strict) && sStats.badRatio <= stats.badRatio);
+  return strictBetter ? strict : scenes;
+}
+
+// ----- Public API with diagnostics -----
+export async function parseArrayBufferWithMeta(input: ArrayBuffer | Buffer): Promise<{ scenes: Scene[]; meta: ParserMeta }> {
+  const bytes = input instanceof Buffer ? new Uint8Array(input) : new Uint8Array(input);
+
+  // 1) pdfjs text
+  try {
+    const { text, numPages } = await extractTextWithPdfJs(bytes);
+    if (text && text.length > 0) {
+      let scenes = analyzeScriptText(text, false);
+      scenes = maybeReparseStrictIfNoisy(scenes, text);
+      if (hasDialogue(scenes)) {
+        return { scenes, meta: { pathUsed: 'pdfjs', roleStats: scoreRoles(scenes), rawLength: text.length, pagesTried: Math.min(numPages, 100) } };
+      }
+    }
+  } catch (err) {
+    console.warn('[pdf] pdfjs extract failed:', (err as Error)?.message);
+  }
+
+  // 2) naive buffer as UTF-8
+  try {
+    const raw = Buffer.isBuffer(input) ? input.toString('utf8') : Buffer.from(bytes).toString('utf8');
+    if (raw && raw.length > 0) {
+      let scenes = analyzeScriptText(raw, false);
+      scenes = maybeReparseStrictIfNoisy(scenes, raw);
+      if (hasDialogue(scenes)) {
+        return { scenes, meta: { pathUsed: 'naive', roleStats: scoreRoles(scenes), rawLength: raw.length } };
+      }
+      const strict = analyzeScriptText(raw, true);
+      if (hasDialogue(strict)) {
+        return { scenes: strict, meta: { pathUsed: 'strict', roleStats: scoreRoles(strict), rawLength: raw.length } };
+      }
+    }
+  } catch (err) {
+    console.warn('[pdf] naive buffer parse failed:', (err as Error)?.message);
+  }
+
+  // 3) OCR fallback (flagged, capped pages)
+  if (OCR_ENABLED) {
+    try {
+      const { text, pages } = await ocrPdfFirstPages(bytes, OCR_MAX_PAGES, OCR_LANG);
+      if (text && text.length > 0) {
+        let scenes = analyzeScriptText(text, false);
+        scenes = maybeReparseStrictIfNoisy(scenes, text);
+        if (hasDialogue(scenes)) {
+          return { scenes, meta: { pathUsed: 'ocr', roleStats: scoreRoles(scenes), rawLength: text.length, pagesTried: pages } };
+        }
+        const strict = analyzeScriptText(text, true);
+        if (hasDialogue(strict)) {
+          return { scenes: strict, meta: { pathUsed: 'ocr', roleStats: scoreRoles(strict), rawLength: text.length, pagesTried: pages } };
+        }
+      }
+    } catch (err) {
+      console.warn('[pdf] ocr failed:', (err as Error)?.message);
+    }
+  }
+
+  // 4) stub
+  const stub: Scene[] = [{ id: 'scene-1', title: 'Scene 1', lines: [] }];
+  return { scenes: stub, meta: { pathUsed: 'stub', roleStats: { total: 0, badCount: 0, badRatio: 0 }, rawLength: 0 } };
+}
+
+export async function parseArrayBuffer(input: ArrayBuffer | Buffer): Promise<Scene[]> {
+  const { scenes } = await parseArrayBufferWithMeta(input);
+  return scenes;
+}
