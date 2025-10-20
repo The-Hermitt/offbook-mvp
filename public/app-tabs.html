@@ -1,197 +1,309 @@
 <!doctype html>
-<html>
+<html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>OffBook MVP</title>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>OffBook — MVP Tabs</title>
   <style>
-    body{margin:0;background:#0b1220;color:#eaeef7;font-family:system-ui,Segoe UI,Roboto,Helvetica,Arial}
-    .tabbar{position:fixed;left:0;right:0;bottom:0;display:flex;gap:8px;padding:10px;background:#0d1326;border-top:1px solid #1b2547}
-    .tabbar a{flex:1;text-align:center;padding:10px;border-radius:10px;color:#cfd8f3;text-decoration:none}
-    .tabbar a.active{background:#1a2447;color:#fff}
-    .panel{max-width:720px;margin:20px auto 90px;padding:16px;background:#0d1326;border:1px solid #1b2547;border-radius:12px}
-    .btn{background:#3b82f6;border:none;color:#fff;padding:10px 14px;border-radius:10px;font-weight:600;cursor:pointer}
-    .field{margin:12px 0}
-    .select,.input,.textarea{width:100%;padding:10px;border-radius:10px;border:1px solid #1b2547;background:#0b1220;color:#eaeef7}
-    .row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
-    .banner{padding:10px;border-radius:10px;background:#24110f;border:1px solid #7a2c22;color:#ffd4cc;margin-bottom:12px}
-    .muted{opacity:.8;font-size:.9em}
-    .role{padding:12px;border:1px solid #1b2547;border-radius:12px;margin:8px 0;font-weight:700}
+    :root { --accent:#6b8cff; --bg:#0b0c10; --card:#151822; --muted:#aab1c4; --ok:#1db954; --warn:#ffb020; --err:#ff5577; }
+    body { margin:0; background:#0b0c10; color:#e8ecf1; font:14px/1.4 system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; }
+    .tabs { position:sticky; top:0; display:flex; gap:6px; padding:8px; background:#0b0c10; border-bottom:1px solid #232735; z-index:5; }
+    .tabbtn { flex:1; padding:10px 8px; border-radius:10px; border:1px solid #232735; background:#111523; color:#cfd6e6; cursor:pointer }
+    .tabbtn.active { background:linear-gradient(180deg, #1a1f33, #101426); color:#fff; border-color:#2d3552; outline:1px solid #2d3e7a }
+    .page { display:none; padding:14px; }
+    .page.active { display:block; }
+    .card { background:#151822; border:1px solid #22283a; border-radius:14px; padding:14px; margin:12px 0; }
+    .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+    .btn { padding:10px 14px; border-radius:10px; border:1px solid #2a3450; background:#141a2b; color:#e8ecf1; cursor:pointer; }
+    .btn.primary { background:#1a2450; border-color:#2b3a7a; }
+    .btn.ok { background:#12361f; border-color:#1f6f3c; color:#bcf5cf; }
+    .btn.warn { background:#34260f; border-color:#6f4b1f; color:#ffe1b3; }
+    .btn.err { background:#31121a; border-color:#6f1f3a; color:#ffd0db; }
+    .hint { color:#aab1c4; }
+    .label { font-weight:600; color:#cfd6e6; }
+    .input, textarea { background:#0f1320; color:#e8ecf1; border:1px solid #283052; border-radius:10px; padding:10px; width:100%; }
+    .kv { display:grid; grid-template-columns: 160px 1fr; gap:6px 10px; margin-top:6px; }
+    .pill { display:inline-block; padding:4px 8px; border-radius:999px; border:1px solid #2a3450; background:#12182a; color:#cfd6e6; font-size:12px; }
+    .banner { border:1px dashed #5c6280; background:#0f1322; padding:12px; border-radius:12px; margin:10px 0; }
+    .hidden { display:none !important; }
+    code.small { font-size:12px; color:#cbd3ea; }
+    .roles { display:flex; flex-wrap:wrap; gap:6px; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
   </style>
+
+  <!-- pdf.js (browser) -->
+  <script src="https://unpkg.com/pdfjs-dist@3.11.174/build/pdf.min.js"></script>
+  <script>
+    // Configure worker for pdf.js in browser
+    pdfjsLib.GlobalWorkerOptions.workerSrc = "https://unpkg.com/pdfjs-dist@3.11.174/build/pdf.worker.min.js";
+  </script>
+
+  <!-- tesseract.js (browser) -->
+  <script src="https://unpkg.com/tesseract.js@5.1.0/dist/tesseract.min.js"></script>
 </head>
 <body>
-  <div id="app"></div>
 
-  <nav class="tabbar">
-    <a href="#import" id="t-import">Import</a>
-    <a href="#assign" id="t-assign">Assign</a>
-    <a href="#rehearse" id="t-rehearse">Rehearse</a>
-    <a href="#record" id="t-record">Record</a>
-    <a href="#gallery" id="t-gallery">Gallery</a>
-    <a href="#settings" id="t-settings">Settings</a>
-  </nav>
+  <div class="tabs">
+    <button class="tabbtn active" data-tab="import">Import</button>
+    <button class="tabbtn" data-tab="assign">Assign</button>
+    <button class="tabbtn" data-tab="rehearse">Rehearse</button>
+    <button class="tabbtn" data-tab="record">Record</button>
+    <button class="tabbtn" data-tab="gallery">Gallery</button>
+    <button class="tabbtn" data-tab="settings">Settings</button>
+  </div>
+
+  <div id="import" class="page active">
+    <div class="card">
+      <div class="row">
+        <div class="label">Shared Secret</div>
+        <input id="secret" class="input" placeholder="Optional if not set on server"/>
+      </div>
+      <div class="hint mono">Tip: open this page with <code class="small">?secret=YOUR_VALUE</code> to prefill.</div>
+    </div>
+
+    <div class="card">
+      <h3>Paste Script Text</h3>
+      <textarea id="pasteText" rows="6" placeholder="JANE: Hello.
+GABE: Hey there.
+JANE: Ready?"></textarea>
+      <div class="row" style="margin-top:8px">
+        <input id="pasteTitle" class="input" placeholder="Title (optional)" value="Pasted Sides"/>
+        <button id="btnPaste" class="btn ok">Import → Assign</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Upload PDF</h3>
+      <div class="row">
+        <input id="pdfFile" type="file" accept="application/pdf" class="input"/>
+        <input id="pdfTitle" class="input" placeholder="Title" value="Uploaded PDF"/>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <button id="btnUpload" class="btn primary">Server Parse → Assign</button>
+        <button id="btnClientOCR" class="btn warn hidden">Try Client OCR (Beta)</button>
+      </div>
+      <div id="scanBanner" class="banner hidden">
+        <div style="font-weight:600; margin-bottom:6px">Scanned PDF detected (server couldn’t read it)</div>
+        <div class="hint">Tap <b>Try Client OCR (Beta)</b> to OCR 2–3 pages in your browser and continue. This never leaves your device until text is ready to upload.</div>
+      </div>
+    </div>
+  </div>
+
+  <div id="assign" class="page">
+    <div class="card">
+      <h3>Assign Voices</h3>
+      <div class="kv">
+        <div class="label">Script</div><div id="assignScript" class="hint">—</div>
+        <div class="label">Detected Roles</div>
+        <div id="assignRoles" class="roles"></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="rehearse" class="page">
+    <div class="card"><h3>Rehearse</h3><div class="hint">Prepare reader track and rehearse lines.</div></div>
+  </div>
+
+  <div id="record" class="page">
+    <div class="card"><h3>Record</h3><div class="hint">3-2-1 countdown and record takes.</div></div>
+  </div>
+
+  <div id="gallery" class="page">
+    <div class="card"><h3>Gallery</h3><div class="hint">Your takes appear here.</div></div>
+  </div>
+
+  <div id="settings" class="page">
+    <div class="card"><h3>Settings</h3><div class="hint">Defaults, pace, storage creds (placeholder).</div></div>
+  </div>
 
 <script>
 (function(){
+  // ————— basic tab wiring
+  document.querySelectorAll('.tabbtn').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      document.querySelectorAll('.tabbtn').forEach(b=>b.classList.remove('active'));
+      document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
+      btn.classList.add('active');
+      document.getElementById(btn.dataset.tab).classList.add('active');
+    });
+  });
+
+  const qs = new URLSearchParams(location.search);
+  const secretInput = document.getElementById('secret');
+  if (qs.get('secret')) secretInput.value = qs.get('secret');
+
   const BASE = location.origin;
-  const SECRET = new URLSearchParams(location.search).get('secret') || '';
-  const HDRS = SECRET ? { 'X-Shared-Secret': SECRET } : {};
 
-  const state = { script_id:null, scenes:[], roles:[], role:'UNKNOWN', voice_map:{} };
-
-  function el(html){ const t=document.createElement('template'); t.innerHTML=html.trim(); return t.content.firstChild; }
-  function setActive(tab){ document.querySelectorAll('.tabbar a').forEach(a=>a.classList.toggle('active',a.getAttribute('href')===tab)); }
-
-  async function postJSON(url, body){
-    const r = await fetch(url,{ method:'POST', headers:{'Content-Type':'application/json', ...HDRS}, body:JSON.stringify(body) });
-    if(!r.ok) throw new Error(await r.text());
-    return r.json();
-  }
-  async function getJSON(url){
-    const r = await fetch(url,{ headers:{...HDRS} });
-    if(!r.ok) throw new Error(await r.text());
-    return r.json();
-  }
-
-  function render(){
-    const hash = location.hash || '#import';
-    setActive(hash);
-    const app=document.getElementById('app'); if(!app){ return; }
-    app.innerHTML='';
-
-    if(hash==='#import'){
-      const panel = el(`<div class="panel">
-        <h2>Import</h2>
-        <div class="row">
-          <button class="btn" id="tab-paste">Paste Script Text</button>
-          <button class="btn" id="tab-pdf" style="background:#475569">Upload PDF</button>
-        </div>
-        <div id="mode"></div>
-        <div class="field"><div id="err" class="muted"></div></div>
-      </div>`);
-      app.append(panel);
-      const mode = panel.querySelector('#mode');
-
-      function showPaste(){
-        mode.innerHTML = `
-          <div class="field"><textarea id="txt" class="textarea" rows="8" placeholder="JANE: Hello.\nGABE: Hey."></textarea></div>
-          <div class="row">
-            <input id="title" class="input" placeholder="Title" value="Pasted Script"/>
-            <button class="btn" id="go">Continue</button>
-          </div>`;
-        panel.querySelector('#go').onclick = async () => {
-          try {
-            const text = (panel.querySelector('#txt').value||'');
-            const title = (panel.querySelector('#title').value||'Pasted Script');
-            const r = await postJSON(`${BASE}/debug/upload_script_text`, { text, title });
-            state.script_id = r.script_id;
-            const s = await getJSON(`${BASE}/debug/scenes?script_id=${state.script_id}`);
-            state.scenes = s.scenes||[];
-            state.roles = Array.from(new Set(state.scenes.flatMap(sc => sc.lines.map(l=>l.speaker))));
-            location.hash='#assign'; render();
-          } catch(e){ panel.querySelector('#err').textContent='Error: '+(e.message||e); }
-        };
-      }
-      function showPdf(){
-        mode.innerHTML = `
-          <div class="field"><input id="pdf" type="file" accept="application/pdf" class="input"/></div>
-          <div class="row">
-            <input id="title" class="input" placeholder="Title" value="Uploaded Script"/>
-            <button class="btn" id="go">Continue</button>
-          </div>`;
-        panel.querySelector('#go').onclick = async () => {
-          panel.querySelector('#err').textContent='';
-          try{
-            const f = panel.querySelector('#pdf').files[0];
-            if(!f){ panel.querySelector('#err').textContent='Choose a PDF.'; return; }
-            const fd = new FormData(); fd.append('pdf', f); fd.append('title', panel.querySelector('#title').value||'Script PDF');
-            const r = await fetch(`${BASE}/debug/upload_script_upload`, { method:'POST', headers:{...HDRS}, body:fd });
-            if(!r.ok) throw new Error(await r.text());
-            const j = await r.json();
-            state.script_id = j.script_id;
-            const s = await getJSON(`${BASE}/debug/scenes?script_id=${state.script_id}`);
-            state.scenes = s.scenes||[];
-            state.roles = Array.from(new Set(state.scenes.flatMap(sc => sc.lines.map(l=>l.speaker))));
-            location.hash='#assign'; render();
-          }catch(e){ panel.querySelector('#err').textContent='Error: '+(e.message||e); }
-        };
-      }
-      panel.querySelector('#tab-paste').onclick = showPaste;
-      panel.querySelector('#tab-pdf').onclick = showPdf;
-      showPaste();
+  async function fetchJSON(url, opts={}) {
+    const headers = { ...(opts.headers||{}), 'Accept': 'application/json' };
+    if (!headers['Content-Type'] && (opts.method||'GET') !== 'GET' && !(opts.body instanceof FormData)) {
+      headers['Content-Type'] = 'application/json';
     }
+    const sec = secretInput.value.trim();
+    if (sec) headers['X-Shared-Secret'] = sec;
 
-    if(hash==='#assign'){
-      const roles = state.roles||[];
-      const panel = el(`<div class="panel">
-        <div class="row" style="justify-content:space-between;align-items:center">
-          <h2>Assign</h2><span class="muted">scene: ${state.scenes?.[0]?.id||'scene-1'}</span>
-        </div>
-        <div id="banner"></div>
-        <div class="field">
-          <label>I am…</label>
-          <select id="iam" class="select">
-            ${['UNKNOWN',...roles].map(r=>`<option value="${r}">${r}</option>`).join('')}
-          </select>
-        </div>
-        <div id="roles"></div>
-        <div class="row">
-          <button class="btn" id="back" style="background:#334155">Back</button>
-          <button class="btn" id="cont">Continue</button>
-        </div>
-        <div id="diag" class="muted" style="margin-top:10px"></div>
-      </div>`);
-      app.append(panel);
-
-      (async ()=>{
-        let preview=null;
-        try{ if(state.script_id) preview=await getJSON(`${BASE}/debug/preview?script_id=${state.script_id}`); }catch{}
-        if(roles.length===0){
-          panel.querySelector('#banner').innerHTML =
-            `<div class="banner">No partner roles detected. If this was a PDF, it may be a scanned image. Try <b>Import → Paste Script Text</b>.</div>`;
-        }
-        if(preview){
-          panel.querySelector('#diag').textContent =
-            `parser: ${preview.meta?.pathUsed||'n/a'} • roles: ${preview.roles?.length||0}`;
-        }
-      })();
-
-      const iam = panel.querySelector('#iam');
-      const rolesDiv = panel.querySelector('#roles');
-      function renderVoicePickers(){
-        rolesDiv.innerHTML='';
-        const me = iam.value;
-        for(const r of roles){ if(r===me) continue;
-          rolesDiv.append(el(`<div class="role"><div style="display:flex;justify-content:space-between;align-items:center">
-            <div>${r}</div>
-            <select class="select vsel" data-role="${r}">
-              <option>Alloy</option><option>Verse</option><option>Narrator</option>
-            </select></div></div>`));
-        }
-      }
-      iam.onchange = renderVoicePickers; renderVoicePickers();
-      panel.querySelector('#back').onclick=()=>{ location.hash='#import'; render(); };
-      panel.querySelector('#cont').onclick=async ()=>{
-        const me = iam.value || 'UNKNOWN';
-        const vm = {}; document.querySelectorAll('.vsel').forEach(s=>vm[s.dataset.role]=s.value.toLowerCase());
-        state.role = me; state.voice_map = vm;
-        try{ await postJSON(`${BASE}/debug/set_voice`, { script_id: state.script_id, voice_map: vm }); }catch{}
-        location.hash='#rehearse'; render();
-      };
+    const res = await fetch(url, { ...opts, headers });
+    if (!res.ok) {
+      const text = await res.text().catch(()=>res.statusText);
+      throw new Error(`HTTP ${res.status}: ${text}`);
     }
-
-    if(hash==='#rehearse'){
-      const panel = el(`<div class="panel"><h2>Rehearse</h2><div class="muted">Playback coming next.</div></div>`);
-      app.append(panel);
-    }
-    if(hash==='#record'){ app.append(el(`<div class="panel"><h2>Record</h2><div class="muted">MVP TBD</div></div>`)); }
-    if(hash==='#gallery'){ app.append(el(`<div class="panel"><h2>Gallery</h2><div class="muted">Takes appear here</div></div>`)); }
-    if(hash==='#settings'){ app.append(el(`<div class="panel"><h2>Settings</h2><div class="muted">Defaults TBD</div></div>`)); }
+    const ct = res.headers.get('content-type') || '';
+    if (ct.includes('application/json')) return res.json();
+    return res.text();
   }
 
-  window.addEventListener('hashchange', render);
-  render();
+  function showAssign(script_id, title, roles) {
+    document.querySelector('.tabbtn[data-tab="assign"]').click();
+    document.getElementById('assignScript').textContent = `${title} (${script_id})`;
+    const wrap = document.getElementById('assignRoles');
+    wrap.innerHTML = '';
+    if (!roles || roles.length === 0) {
+      const pill = document.createElement('span');
+      pill.className = 'pill';
+      pill.textContent = 'No partner roles detected (yet)';
+      wrap.appendChild(pill);
+      return;
+    }
+    roles.forEach(r=>{
+      const pill = document.createElement('span');
+      pill.className = 'pill';
+      pill.textContent = r;
+      wrap.appendChild(pill);
+    });
+  }
+
+  async function loadPreview(script_id) {
+    const prev = await fetchJSON(`${BASE}/debug/preview?script_id=${encodeURIComponent(script_id)}`);
+    const roles = prev.roles || [];
+    const pathUsed = prev?.meta?.pathUsed || '';
+    const timedOut = !!prev?.meta?.timedOut;
+    const banner = document.getElementById('scanBanner');
+    const btnClientOCR = document.getElementById('btnClientOCR');
+
+    // if server said "stub" or timed out, expose client OCR button
+    if ((pathUsed === 'stub' || timedOut) && roles.length === 0) {
+      banner.classList.remove('hidden');
+      btnClientOCR.classList.remove('hidden');
+    } else {
+      banner.classList.add('hidden');
+      btnClientOCR.classList.add('hidden');
+    }
+    return {roles, pathUsed, timedOut, title: prev.title};
+  }
+
+  // ————— Paste → Assign
+  document.getElementById('btnPaste').addEventListener('click', async ()=>{
+    const text = document.getElementById('pasteText').value.trim();
+    const title = document.getElementById('pasteTitle').value.trim() || 'Pasted Sides';
+    if (!text) { alert('Paste some script text first.'); return; }
+    try {
+      const up = await fetchJSON(`${BASE}/debug/upload_script_text`, {
+        method:'POST',
+        body: JSON.stringify({ title, text })
+      });
+      const sid = up.script_id;
+      const prev = await fetchJSON(`${BASE}/debug/preview?script_id=${encodeURIComponent(sid)}`);
+      showAssign(sid, title, prev.roles||[]);
+    } catch (e) {
+      alert('Upload failed: '+ e.message);
+    }
+  });
+
+  // ————— PDF Upload (Server) → Assign (+ show OCR button if scanned)
+  document.getElementById('btnUpload').addEventListener('click', async ()=>{
+    const f = document.getElementById('pdfFile').files?.[0];
+    const title = document.getElementById('pdfTitle').value.trim() || (f?.name || 'Uploaded PDF');
+    if (!f) { alert('Choose a PDF first.'); return; }
+    try {
+      const fd = new FormData();
+      fd.append('pdf', f, f.name);
+      fd.append('title', title);
+      const sec = secretInput.value.trim();
+      const res = await fetch(`${BASE}/debug/upload_script_upload`, {
+        method:'POST',
+        headers: sec ? { 'X-Shared-Secret': sec } : undefined,
+        body: fd
+      });
+      if (!res.ok) {
+        const t = await res.text();
+        throw new Error(`HTTP ${res.status}: ${t}`);
+      }
+      const up = await res.json();
+      const sid = up.script_id;
+      const {roles} = await loadPreview(sid);
+      showAssign(sid, title, roles);
+    } catch (e) {
+      alert('Upload failed: '+ e.message);
+    }
+  });
+
+  // ————— Client OCR (Beta): OCR 2–3 pages in browser, then upload as text
+  document.getElementById('btnClientOCR').addEventListener('click', async ()=>{
+    const f = document.getElementById('pdfFile').files?.[0];
+    const title = document.getElementById('pdfTitle').value.trim() || (f?.name || 'Scanned PDF (OCR)');
+    if (!f) { alert('Choose the scanned PDF file first.'); return; }
+
+    const MAXPAGES = Number(qs.get('ocr_pages') || '3');  // override with ?ocr_pages=2
+    const SCALE = Number(qs.get('ocr_scale') || '2.0');   // override with ?ocr_scale=2.2
+
+    try {
+      // Read file → ArrayBuffer
+      const buf = await f.arrayBuffer();
+      const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+
+      // Offscreen canvas
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+
+      const pages = Math.min(pdf.numPages, MAXPAGES);
+      let acc = '';
+      for (let p=1; p<=pages; p++) {
+        const page = await pdf.getPage(p);
+        const viewport = page.getViewport({ scale: SCALE });
+        canvas.width = Math.ceil(viewport.width);
+        canvas.height = Math.ceil(viewport.height);
+        await page.render({ canvasContext: ctx, viewport }).promise;
+
+        const dataURL = canvas.toDataURL('image/png');
+
+        // OCR with tesseract.js in-browser
+        const { data: { text } } = await Tesseract.recognize(
+          dataURL,
+          'eng',
+          {
+            preserve_interword_spaces: '1',
+            tessedit_pageseg_mode: '4',     // sparse text blocks
+            user_defined_dpi: '300',
+            tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 .,'-&:;?!():"
+          }
+        );
+        if (text) acc += '\n' + text;
+
+        // yield to UI
+        await new Promise(r=>setTimeout(r,0));
+      }
+
+      const clean = (acc || '').replace(/\r/g,'').trim();
+      if (!clean) {
+        alert("OCR didn't read any text. Try a higher scale: add `?ocr_scale=2.4` to the URL and retry.");
+        return;
+      }
+
+      // Send as text to server → reuse normal pipeline
+      const up = await fetchJSON(`${BASE}/debug/upload_script_text`, {
+        method:'POST',
+        body: JSON.stringify({ title: `${title} (OCR)`, text: clean })
+      });
+      const sid = up.script_id;
+      const prev = await fetchJSON(`${BASE}/debug/preview?script_id=${encodeURIComponent(sid)}`);
+      showAssign(sid, `${title} (OCR)`, prev.roles||[]);
+    } catch (e) {
+      alert('Client OCR failed: '+ e.message);
+    }
+  });
+
 })();
 </script>
+
 </body>
 </html>
