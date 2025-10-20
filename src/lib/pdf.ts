@@ -13,6 +13,7 @@
 import path from 'path';
 import { fileURLToPath } from 'url';
 
+// ---------- Types ----------
 export type Line = { speaker: string; text: string };
 export type Scene = { id: string; title: string; lines: Line[] };
 
@@ -24,6 +25,7 @@ export type ParserMeta = {
   pagesTried?: number;
 };
 
+// ---------- Config / Env ----------
 const SCENE_HEAD_RE = /^(?:INT\.|EXT\.|I\/E\.|INT\/EXT\.|SCENE\b|SCENE\s+\d+)/i;
 const ONLY_DIGITS_RE = /^\d{1,4}$/;
 const ALLCAPS_NAME_RE = /^[A-Z .,'\-&]+$/;
@@ -37,12 +39,12 @@ const OCR_ENABLED = process.env.OCR_ENABLED === '1' || process.env.OCR_ENABLED =
 const OCR_MAX_PAGES = Math.max(1, Number(process.env.OCR_MAX_PAGES || 10));
 const OCR_LANG = process.env.OCR_LANG || 'eng';
 
-// ----- pdf.js standard fonts path (needed when rendering pages in Node) -----
+// pdf.js standard fonts path (required in Node when rendering pages)
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const STANDARD_FONTS_DIR = path.join(__dirname, '../../node_modules/pdfjs-dist/standard_fonts');
 
-// ----- Utils -----
+// ---------- Utils ----------
 function normalizeWhitespace(s: string): string {
   return (s || '')
     .normalize('NFKC')
@@ -78,7 +80,7 @@ function cleanName(line: string): string {
   return (line || '').replace(/\s*\([^)]*\)\s*/g, '').replace(/\s{2,}/g, ' ').trim();
 }
 
-// ----- Speaker heuristics -----
+// ---------- Speaker heuristics ----------
 function looksLikeSpeakerName(name: string): boolean {
   if (!name) return false;
   const base = cleanName(name).replace(/\s{2,}/g, ' ');
@@ -96,7 +98,7 @@ function looksLikeSpeakerName(name: string): boolean {
   return true;
 }
 
-// ----- Role scoring / quality -----
+// ---------- Role scoring / quality ----------
 function rolesFromScenes(scenes: Scene[]): string[] {
   const set = new Set<string>();
   for (const sc of scenes) for (const ln of sc.lines || []) if (ln.speaker) set.add(ln.speaker);
@@ -128,7 +130,7 @@ function hasDialogue(scenes: Scene[]): boolean {
   return false;
 }
 
-// ----- Core text analyzer -----
+// ---------- Core text analyzer ----------
 export function analyzeScriptText(rawInput: string, strictColon = false): Scene[] {
   const raw = normalizeWhitespace(rawInput || '');
   if (!raw) return [];
@@ -210,7 +212,7 @@ export function analyzeScriptText(rawInput: string, strictColon = false): Scene[
   return scenes.filter(sc => sc.lines.length > 0);
 }
 
-// ----- pdf.js CanvasFactory for @napi-rs/canvas -----
+// ---------- pdf.js CanvasFactory for @napi-rs/canvas ----------
 type CanvasAndContext = { canvas: any; context: any };
 function makeCanvasFactory(createCanvas: (w:number,h:number)=>any) {
   return {
@@ -235,7 +237,7 @@ function makeCanvasFactory(createCanvas: (w:number,h:number)=>any) {
   };
 }
 
-// ----- PDF text extraction (fast path) -----
+// ---------- PDF text extraction (fast path) ----------
 async function extractTextWithPdfJs(bytes: Uint8Array): Promise<{ text: string; numPages: number }> {
   const pdfjs = await import('pdfjs-dist/legacy/build/pdf.js');
   const loadingTask = pdfjs.getDocument({
@@ -255,7 +257,7 @@ async function extractTextWithPdfJs(bytes: Uint8Array): Promise<{ text: string; 
   return { text: normalizeWhitespace(parts.join('\n')), numPages: pageCount };
 }
 
-// ----- OCR fallback (tesseract.js) -----
+// ---------- OCR fallback (tesseract.js) ----------
 async function ocrPdfFirstPages(bytes: Uint8Array, maxPages: number, lang: string): Promise<{ text: string; pages: number }> {
   const pdfjs = await import('pdfjs-dist/legacy/build/pdf.js');
   const { createCanvas } = await import('@napi-rs/canvas');
@@ -268,7 +270,13 @@ async function ocrPdfFirstPages(bytes: Uint8Array, maxPages: number, lang: strin
   const pdf = await loadingTask.promise;
 
   const pagesToDo = Math.min(pdf.numPages, Math.max(1, maxPages));
-  const worker = await createWorker(lang);
+  const worker = await createWorker({
+    // Reliable CDN for traineddata
+    langPath: 'https://tessdata.projectnaptha.com/4.0.0'
+  });
+  await worker.loadLanguage(lang);
+  await worker.initialize(lang);
+
   const canvasFactory = makeCanvasFactory(createCanvas);
 
   try {
@@ -290,13 +298,15 @@ async function ocrPdfFirstPages(bytes: Uint8Array, maxPages: number, lang: strin
 
       canvasFactory.destroy(cc);
     }
+    await worker.terminate();
     return { text: normalizeWhitespace(acc), pages: pagesToDo };
-  } finally {
-    await (worker as any).terminate?.();
+  } catch (err) {
+    try { await worker.terminate(); } catch {}
+    throw err;
   }
 }
 
-// ----- Reparse guard -----
+// ---------- Reparse guard ----------
 function maybeReparseStrictIfNoisy(scenes: Scene[], raw: string): Scene[] {
   const stats = scoreRoles(scenes);
   if (!stats.total) return scenes;
@@ -311,7 +321,7 @@ function maybeReparseStrictIfNoisy(scenes: Scene[], raw: string): Scene[] {
   return strictBetter ? strict : scenes;
 }
 
-// ----- Public API with diagnostics -----
+// ---------- Public API with diagnostics ----------
 export async function parseArrayBufferWithMeta(input: ArrayBuffer | Buffer): Promise<{ scenes: Scene[]; meta: ParserMeta }> {
   const bytes = input instanceof Buffer ? new Uint8Array(input) : new Uint8Array(input);
 
