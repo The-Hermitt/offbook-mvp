@@ -21,22 +21,20 @@
     .btn.err { background:#31121a; border-color:#6f1f3a; color:#ffd0db; }
     .hint { color:#aab1c4; }
     .label { font-weight:600; color:#cfd6e6; }
-    .input, textarea { background:#0f1320; color:#e8ecf1; border:1px solid #283052; border-radius:10px; padding:10px; width:100%; }
-    .kv { display:grid; grid-template-columns: 160px 1fr; gap:6px 10px; margin-top:6px; }
+    .input, textarea, select { background:#0f1320; color:#e8ecf1; border:1px solid #283052; border-radius:10px; padding:10px; }
+    .input, select { width:100%; }
     .pill { display:inline-block; padding:4px 8px; border-radius:999px; border:1px solid #2a3450; background:#12182a; color:#cfd6e6; font-size:12px; }
     .banner { border:1px dashed #5c6280; background:#0f1322; padding:12px; border-radius:12px; margin:10px 0; }
     .hidden { display:none !important; }
-    code.small { font-size:12px; color:#cbd3ea; }
-    .roles { display:flex; flex-wrap:wrap; gap:6px; }
     .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
+    .kv { display:grid; grid-template-columns: 160px 1fr; gap:6px 10px; }
+    .vrow { display:grid; grid-template-columns: 1fr 180px; gap:10px; margin:6px 0; }
+    .hr { height:1px; background:#242a3a; margin:10px 0; }
   </style>
 
   <!-- pdf.js (browser) -->
   <script src="https://unpkg.com/pdfjs-dist@3.11.174/build/pdf.min.js"></script>
-  <script>
-    // Configure worker for pdf.js in browser
-    pdfjsLib.GlobalWorkerOptions.workerSrc = "https://unpkg.com/pdfjs-dist@3.11.174/build/pdf.worker.min.js";
-  </script>
+  <script>pdfjsLib.GlobalWorkerOptions.workerSrc="https://unpkg.com/pdfjs-dist@3.11.174/build/pdf.worker.min.js";</script>
 
   <!-- tesseract.js (browser) -->
   <script src="https://unpkg.com/tesseract.js@5.1.0/dist/tesseract.min.js"></script>
@@ -58,7 +56,7 @@
         <div class="label">Shared Secret</div>
         <input id="secret" class="input" placeholder="Optional if not set on server"/>
       </div>
-      <div class="hint mono">Tip: open this page with <code class="small">?secret=YOUR_VALUE</code> to prefill.</div>
+      <div class="hint mono">Tip: open this page with <code>?secret=YOUR_VALUE</code> to prefill.</div>
     </div>
 
     <div class="card">
@@ -84,7 +82,7 @@ JANE: Ready?"></textarea>
       </div>
       <div id="scanBanner" class="banner hidden">
         <div style="font-weight:600; margin-bottom:6px">Scanned PDF detected (server couldn’t read it)</div>
-        <div class="hint">Tap <b>Try Client OCR (Beta)</b> to OCR 2–3 pages in your browser and continue. This never leaves your device until text is ready to upload.</div>
+        <div class="hint">Tap <b>Try Client OCR (Beta)</b> to OCR 2–3 pages in your browser and continue. Nothing leaves your device until text is ready to upload.</div>
       </div>
     </div>
   </div>
@@ -94,31 +92,28 @@ JANE: Ready?"></textarea>
       <h3>Assign Voices</h3>
       <div class="kv">
         <div class="label">Script</div><div id="assignScript" class="hint">—</div>
-        <div class="label">Detected Roles</div>
-        <div id="assignRoles" class="roles"></div>
+        <div class="label">I am…</div>
+        <div><select id="iamSelect" class="input"></select></div>
+      </div>
+      <div class="hr"></div>
+      <div id="voiceRows"></div>
+      <div class="row" style="margin-top:10px">
+        <button id="btnAssignContinue" class="btn ok">Continue → Rehearse</button>
       </div>
     </div>
   </div>
 
   <div id="rehearse" class="page">
-    <div class="card"><h3>Rehearse</h3><div class="hint">Prepare reader track and rehearse lines.</div></div>
+    <div class="card"><h3>Rehearse</h3><div class="hint">Once voices are set, generate the reader track here (todo UI).</div></div>
   </div>
 
-  <div id="record" class="page">
-    <div class="card"><h3>Record</h3><div class="hint">3-2-1 countdown and record takes.</div></div>
-  </div>
-
-  <div id="gallery" class="page">
-    <div class="card"><h3>Gallery</h3><div class="hint">Your takes appear here.</div></div>
-  </div>
-
-  <div id="settings" class="page">
-    <div class="card"><h3>Settings</h3><div class="hint">Defaults, pace, storage creds (placeholder).</div></div>
-  </div>
+  <div id="record" class="page"><div class="card"><h3>Record</h3></div></div>
+  <div id="gallery" class="page"><div class="card"><h3>Gallery</h3></div></div>
+  <div id="settings" class="page"><div class="card"><h3>Settings</h3></div></div>
 
 <script>
 (function(){
-  // ————— basic tab wiring
+  // — tabs
   document.querySelectorAll('.tabbtn').forEach(btn=>{
     btn.addEventListener('click', ()=>{
       document.querySelectorAll('.tabbtn').forEach(b=>b.classList.remove('active'));
@@ -133,6 +128,13 @@ JANE: Ready?"></textarea>
   if (qs.get('secret')) secretInput.value = qs.get('secret');
 
   const BASE = location.origin;
+
+  // shared state
+  let currentScriptId = null;
+  let currentTitle = '';
+  let currentRoles = [];
+
+  const VOICES = ['Alloy','Amber','Nova','Verse']; // simple list; server accepts any string
 
   async function fetchJSON(url, opts={}) {
     const headers = { ...(opts.headers||{}), 'Accept': 'application/json' };
@@ -152,27 +154,48 @@ JANE: Ready?"></textarea>
     return res.text();
   }
 
-  function showAssign(script_id, title, roles) {
+  // — Assign UI builder
+  function renderAssign(script_id, title, roles) {
+    currentScriptId = script_id;
+    currentTitle = title;
+    currentRoles = roles.slice();
+
     document.querySelector('.tabbtn[data-tab="assign"]').click();
     document.getElementById('assignScript').textContent = `${title} (${script_id})`;
-    const wrap = document.getElementById('assignRoles');
-    wrap.innerHTML = '';
-    if (!roles || roles.length === 0) {
-      const pill = document.createElement('span');
-      pill.className = 'pill';
-      pill.textContent = 'No partner roles detected (yet)';
-      wrap.appendChild(pill);
-      return;
+
+    const iam = document.getElementById('iamSelect');
+    iam.innerHTML = '';
+    if (roles.length === 0) {
+      const opt = document.createElement('option');
+      opt.text = 'UNKNOWN';
+      iam.appendChild(opt);
+    } else {
+      roles.forEach(r=>{
+        const opt = document.createElement('option');
+        opt.value = r; opt.text = r;
+        iam.appendChild(opt);
+      });
     }
-    roles.forEach(r=>{
-      const pill = document.createElement('span');
-      pill.className = 'pill';
-      pill.textContent = r;
-      wrap.appendChild(pill);
+
+    const wrap = document.getElementById('voiceRows');
+    wrap.innerHTML = '';
+    const me = iam.value || roles[0] || 'UNKNOWN';
+    roles.filter(r=>r!==me).forEach(r=>{
+      const row = document.createElement('div'); row.className='vrow';
+      const left = document.createElement('div'); left.innerHTML = `<div class="label">${r}</div>`;
+      const right = document.createElement('div');
+      const sel = document.createElement('select'); sel.className='input';
+      VOICES.forEach(v=>{ const o=document.createElement('option'); o.value=v; o.text=v; sel.appendChild(o); });
+      right.appendChild(sel);
+      row.appendChild(left); row.appendChild(right);
+      wrap.appendChild(row);
     });
+
+    // rebuild pickers when "I am" changes
+    iam.onchange = ()=>renderAssign(script_id, title, roles);
   }
 
-  async function loadPreview(script_id) {
+  async function loadPreview(script_id, title) {
     const prev = await fetchJSON(`${BASE}/debug/preview?script_id=${encodeURIComponent(script_id)}`);
     const roles = prev.roles || [];
     const pathUsed = prev?.meta?.pathUsed || '';
@@ -180,7 +203,6 @@ JANE: Ready?"></textarea>
     const banner = document.getElementById('scanBanner');
     const btnClientOCR = document.getElementById('btnClientOCR');
 
-    // if server said "stub" or timed out, expose client OCR button
     if ((pathUsed === 'stub' || timedOut) && roles.length === 0) {
       banner.classList.remove('hidden');
       btnClientOCR.classList.remove('hidden');
@@ -188,10 +210,10 @@ JANE: Ready?"></textarea>
       banner.classList.add('hidden');
       btnClientOCR.classList.add('hidden');
     }
-    return {roles, pathUsed, timedOut, title: prev.title};
+    renderAssign(script_id, title, roles);
   }
 
-  // ————— Paste → Assign
+  // — Paste → Assign
   document.getElementById('btnPaste').addEventListener('click', async ()=>{
     const text = document.getElementById('pasteText').value.trim();
     const title = document.getElementById('pasteTitle').value.trim() || 'Pasted Sides';
@@ -201,15 +223,11 @@ JANE: Ready?"></textarea>
         method:'POST',
         body: JSON.stringify({ title, text })
       });
-      const sid = up.script_id;
-      const prev = await fetchJSON(`${BASE}/debug/preview?script_id=${encodeURIComponent(sid)}`);
-      showAssign(sid, title, prev.roles||[]);
-    } catch (e) {
-      alert('Upload failed: '+ e.message);
-    }
+      await loadPreview(up.script_id, title);
+    } catch (e) { alert('Upload failed: '+ e.message); }
   });
 
-  // ————— PDF Upload (Server) → Assign (+ show OCR button if scanned)
+  // — PDF Upload (Server) → Assign
   document.getElementById('btnUpload').addEventListener('click', async ()=>{
     const f = document.getElementById('pdfFile').files?.[0];
     const title = document.getElementById('pdfTitle').value.trim() || (f?.name || 'Uploaded PDF');
@@ -224,34 +242,23 @@ JANE: Ready?"></textarea>
         headers: sec ? { 'X-Shared-Secret': sec } : undefined,
         body: fd
       });
-      if (!res.ok) {
-        const t = await res.text();
-        throw new Error(`HTTP ${res.status}: ${t}`);
-      }
+      if (!res.ok) throw new Error(await res.text());
       const up = await res.json();
-      const sid = up.script_id;
-      const {roles} = await loadPreview(sid);
-      showAssign(sid, title, roles);
-    } catch (e) {
-      alert('Upload failed: '+ e.message);
-    }
+      await loadPreview(up.script_id, title);
+    } catch (e) { alert('Upload failed: '+ e.message); }
   });
 
-  // ————— Client OCR (Beta): OCR 2–3 pages in browser, then upload as text
+  // — Client OCR (browser) → Assign
   document.getElementById('btnClientOCR').addEventListener('click', async ()=>{
     const f = document.getElementById('pdfFile').files?.[0];
     const title = document.getElementById('pdfTitle').value.trim() || (f?.name || 'Scanned PDF (OCR)');
     if (!f) { alert('Choose the scanned PDF file first.'); return; }
-
-    const MAXPAGES = Number(qs.get('ocr_pages') || '3');  // override with ?ocr_pages=2
-    const SCALE = Number(qs.get('ocr_scale') || '2.0');   // override with ?ocr_scale=2.2
+    const MAXPAGES = Number(qs.get('ocr_pages') || '3');
+    const SCALE = Number(qs.get('ocr_scale') || '2.2');
 
     try {
-      // Read file → ArrayBuffer
       const buf = await f.arrayBuffer();
       const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
-
-      // Offscreen canvas
       const canvas = document.createElement('canvas');
       const ctx = canvas.getContext('2d');
 
@@ -263,43 +270,55 @@ JANE: Ready?"></textarea>
         canvas.width = Math.ceil(viewport.width);
         canvas.height = Math.ceil(viewport.height);
         await page.render({ canvasContext: ctx, viewport }).promise;
-
         const dataURL = canvas.toDataURL('image/png');
 
-        // OCR with tesseract.js in-browser
         const { data: { text } } = await Tesseract.recognize(
           dataURL,
           'eng',
           {
             preserve_interword_spaces: '1',
-            tessedit_pageseg_mode: '4',     // sparse text blocks
+            tessedit_pageseg_mode: '4',
             user_defined_dpi: '300',
             tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 .,'-&:;?!():"
           }
         );
         if (text) acc += '\n' + text;
-
-        // yield to UI
         await new Promise(r=>setTimeout(r,0));
       }
 
       const clean = (acc || '').replace(/\r/g,'').trim();
-      if (!clean) {
-        alert("OCR didn't read any text. Try a higher scale: add `?ocr_scale=2.4` to the URL and retry.");
-        return;
-      }
+      if (!clean) { alert("OCR didn't read any text. Try a higher scale: add `?ocr_scale=2.6`."); return; }
 
-      // Send as text to server → reuse normal pipeline
       const up = await fetchJSON(`${BASE}/debug/upload_script_text`, {
         method:'POST',
         body: JSON.stringify({ title: `${title} (OCR)`, text: clean })
       });
-      const sid = up.script_id;
-      const prev = await fetchJSON(`${BASE}/debug/preview?script_id=${encodeURIComponent(sid)}`);
-      showAssign(sid, `${title} (OCR)`, prev.roles||[]);
-    } catch (e) {
-      alert('Client OCR failed: '+ e.message);
-    }
+      await loadPreview(up.script_id, `${title} (OCR)`);
+    } catch (e) { alert('Client OCR failed: '+ e.message); }
+  });
+
+  // — Save voices and continue
+  document.getElementById('btnAssignContinue').addEventListener('click', async ()=>{
+    if (!currentScriptId) { alert('No script loaded.'); return; }
+    const me = (document.getElementById('iamSelect') as HTMLSelectElement).value || 'UNKNOWN';
+
+    // build voice map for partners only
+    const rows = Array.from(document.querySelectorAll('#voiceRows .vrow'));
+    const voice_map: Record<string,string> = {};
+    rows.forEach(row=>{
+      const label = row.querySelector('.label')!.textContent!.trim();
+      const sel = row.querySelector('select') as HTMLSelectElement;
+      voice_map[label] = sel.value || 'Alloy';
+    });
+
+    try {
+      await fetchJSON(`${BASE}/debug/set_voice`, {
+        method:'POST',
+        body: JSON.stringify({ script_id: currentScriptId, voice_map })
+      });
+      alert(`Saved voices. You are ${me}. (Generate reader in Rehearse next.)`);
+      document.querySelector('.tabbtn[data-tab="rehearse"]').click();
+    } catch (e) { alert('Save failed: '+ e.message); }
   });
 
 })();
