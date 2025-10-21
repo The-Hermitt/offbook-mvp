@@ -1,14 +1,9 @@
-import fs from "fs";
-import path from "path";
 import type { PDFDocumentProxy, TextContent } from "pdfjs-dist";
 import * as pdfjs from "pdfjs-dist/legacy/build/pdf";
 
-const OCR_ENABLED = process.env.OCR_ENABLED === "1"; // we won't do server OCR; just set signal flags
-
 /**
- * Load a PDF from a Buffer and extract text only.
- * IMPORTANT: We never call page.render() (no node-canvas). This avoids the
- * "Failed to unwrap exclusive reference of CanvasElement" crash on Render.
+ * Extract text from a PDF buffer using pdf.js text layer only.
+ * We never call page.render() (no node-canvas), which avoids crashes on Render.
  */
 export async function extractPdfText(
   buf: Buffer,
@@ -22,12 +17,10 @@ export async function extractPdfText(
     scannedSuspected: false,
   };
 
-  // Load PDF (no canvas factories)
   let doc: PDFDocumentProxy | null = null;
   try {
     doc = await pdfjs.getDocument({ data: buf }).promise;
   } catch (err) {
-    // If pdf.js can't even open it, mark as scannedSuspected so client can OCR.
     meta.pathUsed = "open-failed";
     meta.scannedSuspected = true;
     return { text: "", meta };
@@ -41,30 +34,24 @@ export async function extractPdfText(
     try {
       const page = await doc.getPage(i);
       const tc: TextContent = await page.getTextContent();
-      // Join with spaces and basic noise trim
-      const line = tc.items
+      const line = (tc.items as any[])
         .map((it: any) => ("str" in it ? it.str : ""))
         .join(" ")
         .replace(/\s{2,}/g, " ")
         .trim();
-      if (line) {
-        out.push(line);
-      }
+      if (line) out.push(line);
       meta.pagesRead++;
-    } catch (e) {
-      // Non-fatal: keep going
+    } catch {
+      // ignore page error; keep going
     }
   }
 
   const text = out.join("\n\n");
-
-  // Heuristic: if there is almost no text, it's probably a scan.
   const charCount = text.replace(/\s/g, "").length;
+
   if (charCount < 40 || meta.pagesRead === 0) {
-    // If OCR is "enabled" server-side, we still DO NOT OCR here.
-    // We simply signal the client that OCR is needed.
-    meta.pathUsed = OCR_ENABLED ? "stub" : "text-empty";
     meta.scannedSuspected = true;
+    meta.pathUsed = "text-empty";
   }
 
   return { text, meta };
@@ -73,18 +60,65 @@ export async function extractPdfText(
 export type PdfExtractMeta = {
   pageCount: number;
   pagesRead: number;
-  pathUsed: "text-only" | "stub" | "open-failed" | "text-empty";
+  pathUsed: "text-only" | "open-failed" | "text-empty";
   timedOut: boolean;
   scannedSuspected: boolean;
 };
 
 /**
- * Convenience wrapper used by the upload route.
- * Returns { text, meta }. The caller decides how to proceed (parse → scenes).
+ * Back-compat helper used by routes: parses a PDF upload.
+ * Routes can decide:
+ * - If meta.scannedSuspected === true -> respond { scanned:true } (let client OCR silently)
+ * - Else -> continue to parse script text -> scenes
  */
 export async function parseUploadedPdf(
   buf: Buffer
 ): Promise<{ text: string; meta: PdfExtractMeta }> {
-  // We explicitly DO NOT run any canvas render or server OCR here.
   return extractPdfText(buf, 50);
+}
+
+/**
+ * Exported text analyzer (back-compat).
+ * Some parts of the app import { analyzeScriptText } from "./lib/pdf.js".
+ * Provide it here so those imports stop failing.
+ *
+ * Very simple heuristic: split lines, keep ONLY dialog in the form:
+ *   NAME: dialogue
+ *   NAME (parenthetical): dialogue
+ * Skip scene headings (INT./EXT./SCENE), ALL-CAPS action, URLs, page numbers.
+ */
+export function analyzeScriptText(text: string): {
+  scenes: { id: string; title: string; lines: { speaker: string; text: string }[] }[];
+  roles: string[];
+} {
+  const lines = text.replace(/\r/g, "").split("\n");
+  const scene = { id: "s1", title: "Scene 1", lines: [] as { speaker: string; text: string }[] };
+  const roleSet = new Set<string>();
+
+  for (const raw of lines) {
+    const s = raw.trim();
+    if (!s) continue;
+
+    // Skip obvious non-dialogue
+    if (/^(INT\.|EXT\.|SCENE\s)/i.test(s)) continue;
+    if (/^https?:\/\//i.test(s)) continue;
+    if (/^\d{1,3}\s*$/.test(s)) continue; // page #
+    if (/^[A-Z0-9 .\-]+$/.test(s) && s.length > 4 && !/:/.test(s)) {
+      // Likely ALL-CAPS action or standalone character cue; skip as dialogue line
+      continue;
+    }
+
+    // Match NAME: text  or  NAME (xxx): text
+    const m = s.match(/^([A-Z][A-Z0-9 ]{1,})(?:\s*\([^)]*\))?:\s*(.+)$/);
+    if (m) {
+      const speaker = m[1].trim();
+      const lineText = m[2].trim();
+      scene.lines.push({ speaker, text: lineText });
+      roleSet.add(speaker);
+    }
+  }
+
+  const scenes = [scene];
+  const roles = Array.from(roleSet).sort();
+  return { scenes, roles };
 }
