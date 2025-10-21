@@ -28,15 +28,24 @@ The system also exposes **MCP tools** for GPT integration in the SDK Store.
 
 ---
 
-## 🧠 Collaboration Workflow (Codex → GPT → User)
+## Collaboration Contract
 
-| Stage | Role | Responsibility |
-|-------|------|----------------|
-| **1. Codex** | Drafts long or repetitive code, generates boilerplate, refactors modules. |
-| **2. GPT** | Reviews Codex output, ensures correctness, safety, and full-file replacement. |
-| **3. User** | Copies finalized code into GitHub Codespaces and pushes to `main`. |
+**Who does what**
+- **Codex (cloud/IDE/GitHub)**: Works in branches and pull requests. It may push granular commits, refactor multiple files, and open PRs for review. It should NEVER force-push to `main`.
+- **OffBook-Builder GPT (chat)**: When the user asks for code in chat, always return **complete file replacements** (no diffs). Include exact file paths and copy–pasteable commit/deploy commands.
+- **User**: Merges PRs or pastes full files from chat into Codespaces, then pushes.
 
-Always deliver **complete file replacements** (no patches).  
-Commit format:
-```bash
-git add -A && git commit -m "feat: <summary>" && git push origin main
+**Repo hygiene for Codex**
+- Branch naming: `feature/<slug>` or `fix/<slug>`
+- Open a PR with:
+  - Clear title and summary
+  - Checklist asserting:
+    - [ ] Does not break **camera+mic** recording in Record tab
+    - [ ] Preserves **responsive cueing** (target ≤ 250 ms)
+    - [ ] Parser still skips INT./EXT., ALL-CAPS action, parentheticals
+    - [ ] No secrets committed; Render env untouched
+- If code review is enabled, mention `@codex review` in PR description.
+
+**When to use which format**
+- **Codex** → PRs and diffs are preferred (speed + traceability).
+- **Chat (this thread)** → return entire files so the user can paste once and push.
