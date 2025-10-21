@@ -6,14 +6,13 @@ import path from "path";
 import fs from "fs";
 import crypto from "crypto";
 
-// Optional, lazy-loaded OCR/PDF deps
 type PdfParseModule = (buffer: Buffer) => Promise<{ text: string }>;
 type TesseractWorker = {
   recognize: (data: Buffer | string, lang?: string) => Promise<{ data: { text: string } }>;
   terminate: () => Promise<void>;
 };
 
-// Shared-secret guard (cloak with 404 if missing/wrong)
+// Secret guard (404 cloak)
 function secretGuard(req: Request, res: Response, next: NextFunction) {
   const required = process.env.SHARED_SECRET;
   if (!required) return next();
@@ -22,7 +21,7 @@ function secretGuard(req: Request, res: Response, next: NextFunction) {
   return res.status(404).send("Not Found");
 }
 
-// In-memory state (MVP)
+// In-memory state
 type SceneLine = { speaker: string; text: string };
 type Scene = { id: string; title: string; lines: SceneLine[] };
 type Script = { id: string; title: string; text: string; scenes: Scene[]; voiceMap?: Record<string, string> };
@@ -34,9 +33,7 @@ const renders = new Map<string, { status: "queued" | "working" | "complete" | "e
 const ASSETS_DIR = path.join(process.cwd(), "assets");
 if (!fs.existsSync(ASSETS_DIR)) fs.mkdirSync(ASSETS_DIR, { recursive: true });
 
-// -------------------------
-// Parser (supports two styles)
-// -------------------------
+// ---------- Parser: colon style + screenplay blocks ----------
 function parseScenesFromText(text: string): Scene[] {
   const lines = text.split(/\r?\n/);
 
@@ -51,7 +48,7 @@ function parseScenesFromText(text: string): Scene[] {
   const sceneId = crypto.randomUUID();
   const scene: Scene = { id: sceneId, title: "Scene 1", lines: [] };
 
-  // Pass 1: try colon style anywhere
+  // Pass 1: colon style
   for (const raw of lines) {
     const s = raw.replace(/\t/g, " ").trimRight();
     if (!s.trim()) continue;
@@ -59,12 +56,9 @@ function parseScenesFromText(text: string): Scene[] {
     const m = colonLine(s);
     if (m) scene.lines.push({ speaker: m[1].trim(), text: m[2].trim() });
   }
-
-  // If we already got dialogue, return
   if (scene.lines.length) return [scene];
 
-  // Pass 2: screenplay blocks:
-  // NAME (all caps, shortish), optional parenthetical, then one or more dialogue lines until blank or next NAME
+  // Pass 2: screenplay blocks
   let i = 0;
   while (i < lines.length) {
     let line = lines[i].replace(/\t/g, " ").trimRight();
@@ -73,31 +67,26 @@ function parseScenesFromText(text: string): Scene[] {
     if (!line.trim()) continue;
     if (isSceneHeading(line) || isLikelyHeaderFooter(line)) continue;
 
-    // Candidate speaker line: all caps, mostly letters, 2–30 chars
     const candidate = line.trim();
     if (/^[A-Z][A-Z0-9 '&.-]{1,29}$/.test(candidate) && isAllCapsWordy(candidate)) {
       const speaker = candidate;
 
-      // Optional parenthetical on next line
+      // optional parenthetical
       if (i < lines.length && isOnlyParen(lines[i].trim())) i++;
 
-      // Gather dialogue lines
+      // gather dialogue lines
       const buf: string[] = [];
       while (i < lines.length) {
         const peek = lines[i].trimRight();
         const isBlank = !peek.trim();
         const nextIsSpeaker = /^[A-Z][A-Z0-9 '&.-]{1,29}$/.test(peek) && isAllCapsWordy(peek);
         const nextIsHeader = isSceneHeading(peek) || isLikelyHeaderFooter(peek);
-
         if (isBlank || nextIsSpeaker || nextIsHeader) break;
-
-        // skip pure parenthetical lines inside dialogue
         if (!isOnlyParen(peek)) buf.push(peek);
         i++;
       }
-
-      const text = buf.join(" ").replace(/\s+/g, " ").trim();
-      if (text) scene.lines.push({ speaker, text });
+      const t = buf.join(" ").replace(/\s+/g, " ").trim();
+      if (t) scene.lines.push({ speaker, text: t });
       continue;
     }
   }
@@ -105,7 +94,7 @@ function parseScenesFromText(text: string): Scene[] {
   return [scene];
 }
 
-// Silent MP3 (stub)
+// ---------- Silent MP3 for render stub ----------
 function writeSilentMp3(renderId: string): string {
   const safe = renderId.replace(/[^a-zA-Z0-9_-]/g, "_");
   const file = path.join(ASSETS_DIR, `${safe}.mp3`);
@@ -113,7 +102,7 @@ function writeSilentMp3(renderId: string): string {
   return file;
 }
 
-// Upload (accept PDF or image)
+// ---------- Upload (PDF or image) ----------
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 20 * 1024 * 1024 },
@@ -127,13 +116,10 @@ const upload = multer({
   },
 });
 
-// Lazy OCR/PDF helpers
+// ---------- PDF / OCR helpers ----------
 async function importPdfParse(): Promise<PdfParseModule | null> {
-  try {
-    // @ts-ignore
-    const mod = await import("pdf-parse");
-    return (mod.default || mod) as PdfParseModule;
-  } catch { return null; }
+  try { const mod = await import("pdf-parse"); return (mod.default || mod) as PdfParseModule; }
+  catch { return null; }
 }
 async function newTesseractWorker(): Promise<TesseractWorker | null> {
   try {
@@ -202,7 +188,6 @@ async function extractTextAuto(buffer: Buffer, mime: string): Promise<string> {
   return mime === "application/pdf" ? extractTextFromPdf(buffer) : extractTextFromImage(buffer);
 }
 
-// Absolute BASE for download_url
 function baseUrlFrom(req: Request): string {
   const env = process.env.BASE_URL?.trim();
   if (env) return env.replace(/\/$/, "");
@@ -211,14 +196,13 @@ function baseUrlFrom(req: Request): string {
   return `${proto}://${host}`;
 }
 
-// Public API
+// ---------- Public API ----------
 export function initHttpRoutes(app: Express) {
   const debug = express.Router();
   const api = express.Router();
 
   debug.use(secretGuard);
 
-  // Paste text
   debug.post("/upload_script_text", (req: Request, res: Response) => {
     const { title, text } = req.body || {};
     if (!title || !text) return res.status(400).json({ error: "title and text are required" });
@@ -229,7 +213,6 @@ export function initHttpRoutes(app: Express) {
     res.json({ script_id: id, scene_count: scenes.length });
   });
 
-  // PDF/Image upload (OCR fallback)
   debug.post("/upload_script_upload", upload.single("pdf"), async (req: Request, res: Response) => {
     try {
       const title = String(req.body?.title || "Uploaded Script");
@@ -248,7 +231,6 @@ export function initHttpRoutes(app: Express) {
     }
   });
 
-  // Scenes
   debug.get("/scenes", (req: Request, res: Response) => {
     const scriptId = String(req.query.script_id || "");
     if (!scriptId || !scripts.has(scriptId)) return res.status(404).json({ error: "script not found" });
@@ -256,7 +238,6 @@ export function initHttpRoutes(app: Express) {
     res.json({ script_id: script.id, scenes: script.scenes });
   });
 
-  // Voice map
   debug.post("/set_voice", (req: Request, res: Response) => {
     const { script_id, voice_map } = req.body || {};
     if (!script_id || !scripts.has(script_id)) return res.status(404).json({ error: "script not found" });
@@ -267,7 +248,6 @@ export function initHttpRoutes(app: Express) {
     res.json({ ok: true });
   });
 
-  // Render (stub)
   debug.post("/render", (req: Request, res: Response) => {
     const { script_id, scene_id, role } = req.body || {};
     if (!script_id || !scene_id || !role) return res.status(400).json({ error: "script_id, scene_id, role required" });
@@ -279,7 +259,6 @@ export function initHttpRoutes(app: Express) {
     res.json({ render_id: renderId, status: "complete" });
   });
 
-  // Render status
   debug.get("/render_status", (req: Request, res: Response) => {
     const rid = String(req.query.render_id || "");
     if (!rid || !renders.has(rid)) return res.status(404).json({ status: "error", error: "render not found" });
@@ -293,8 +272,8 @@ export function initHttpRoutes(app: Express) {
     res.json(payload);
   });
 
-  // Mount routers
   app.use("/debug", debug);
+
   api.get("/assets/:render_id", (req: Request, res: Response) => {
     const file = path.join(ASSETS_DIR, `${String(req.params.render_id)}.mp3`);
     if (!fs.existsSync(file)) return res.status(404).send("Not Found");
