@@ -1,80 +1,105 @@
 name: OffBook Smoke (Render)
 
 on:
-  workflow_dispatch:
   pull_request:
-    types: [opened, synchronize, reopened]
-    branches: [ main ]
+    types: [opened, synchronize, reopened, labeled]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+env:
+  BASE: ${{ secrets.OFFBOOK_BASE_URL }}
+  SECRET: ${{ secrets.OFFBOOK_SHARED_SECRET }}
 
 jobs:
   smoke:
+    name: Smoke test API + UI contract
     runs-on: ubuntu-latest
-    env:
-      BASE: ${{ secrets.OFFBOOK_BASE_URL }}   # e.g. https://offbook-mvp.onrender.com
-      SECRET: ${{ secrets.SHARED_SECRET }}    # e.g. super-dev-secret (or empty)
     steps:
-      - name: Validate config
+      - uses: actions/checkout@v4
+
+      - name: Show PR info
         run: |
-          test -n "$BASE" || (echo "❌ Missing OFFBOOK_BASE_URL secret" && exit 1)
+          echo "PR #${{ github.event.pull_request.number }} by ${{ github.actor }}"
           echo "BASE=$BASE"
-          if [ -n "$SECRET" ]; then echo "Secret present"; else echo "No secret set"; fi
 
-      - name: Health checks
+      - name: Quick health checks
         run: |
-          curl -s -i "$BASE/health" | sed -n '1,10p'
-          curl -s -i "$BASE/health/tts" | sed -n '1,10p'
+          curl -fsSL "$BASE/health" | tee /tmp/health.json
+          curl -fsSL "$BASE/health/tts" | tee /tmp/tts.json
 
-      - name: Upload script text
-        id: upload
+      - name: Safe smoke test script
         run: |
-          HDRS=(-H "Content-Type: application/json"); [ -n "$SECRET" ] && HDRS+=(-H "X-Shared-Secret: $SECRET")
-          UP=$(curl -s -i -X POST "$BASE/debug/upload_script_text" "${HDRS[@]}" \
-            -d '{"title":"Sides","text":"JANE: Hi.\nGABE: Hey.\nJANE: Ready?"}')
-          echo "$UP" | sed -n '1,25p'
-          SID=$(echo "$UP" | sed -n 's/.*"script_id":"\([^"]*\)".*/\1/p')
-          echo "SID=$SID" >> "$GITHUB_OUTPUT"
-          test -n "$SID"
+          chmod +x scripts/smoke-debug.sh || true
+          BASE="$BASE" SECRET="$SECRET" scripts/smoke-debug.sh || exit 1
 
-      - name: Scenes
-        id: scenes
-        run: |
-          HDRS=(-H "Content-Type: application/json"); [ -n "$SECRET" ] && HDRS+=(-H "X-Shared-Secret: $SECRET")
-          SC=$(curl -s -i "$BASE/debug/scenes?script_id=${{ steps.upload.outputs.SID }}" "${HDRS[@]}")
-          echo "$SC" | sed -n '1,25p'
-          SCID=$(echo "$SC" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
-          echo "SCID=$SCID" >> "$GITHUB_OUTPUT"
-          test -n "$SCID"
-
-      - name: Set voice
-        run: |
-          HDRS=(-H "Content-Type: application/json"); [ -n "$SECRET" ] && HDRS+=(-H "X-Shared-Secret: $SECRET")
-          curl -s -i -X POST "$BASE/debug/set_voice" "${HDRS[@]}" \
-            -d "{\"script_id\":\"${{ steps.upload.outputs.SID }}\",\"voice_map\":{\"GABE\":\"alloy\"}}" | sed -n '1,20p'
-
-      - name: Render
-        id: render
-        run: |
-          HDRS=(-H "Content-Type: application/json"); [ -n "$SECRET" ] && HDRS+=(-H "X-Shared-Secret: $SECRET")
-          R=$(curl -s -i -X POST "$BASE/debug/render" "${HDRS[@]}" \
-            -d "{\"script_id\":\"${{ steps.upload.outputs.SID }}\",\"scene_id\":\"${{ steps.scenes.outputs.SCID }}\",\"role\":\"JANE\",\"pace\":\"normal\"}")
-          echo "$R" | sed -n '1,25p'
-          RID=$(echo "$R" | sed -n 's/.*"render_id":"\([^"]*\)".*/\1/p')
-          echo "RID=$RID" >> "$GITHUB_OUTPUT"
-          test -n "$RID"
-
-      - name: Render status
-        run: |
-          HDRS=(-H "Content-Type: application/json"); [ -n "$SECRET" ] && HDRS+=(-H "X-Shared-Secret: $SECRET")
-          curl -s -i "$BASE/debug/render_status?render_id=${{ steps.render.outputs.RID }}" "${HDRS[@]}" | sed -n '1,40p'
-          echo "Asset URL: $BASE/api/assets/${{ steps.render.outputs.RID }}"
-
-      - name: UI tabs load (basic HTML presence check)
+      - name: UI contract (tabs must exist)
         run: |
           URL="$BASE/app-tabs.html"
           [ -n "$SECRET" ] && URL="$URL?secret=$SECRET"
-          H=$(curl -s -i "$URL")
-          echo "$H" | sed -n '1,15p'
+          PAGE=$(curl -fsS "$URL")
+          # Minimal check: these 6 labels must be present
           for T in Import Assign Rehearse Record Gallery Settings; do
-            echo "$H" | grep -qi "$T" || (echo "❌ Missing tab: $T" && exit 1)
+            echo "$PAGE" | grep -qi "$T" || { echo "Missing tab: $T"; exit 1; }
           done
-          echo "✅ Tabs rendered."
+          echo "Tabs OK"
+
+  gate:
+    name: Gate PR (UI change detection)
+    runs-on: ubuntu-latest
+    outputs:
+      ui_changed: ${{ steps.diff.outputs.ui_changed }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - id: diff
+        name: Detect UI changes
+        run: |
+          UI_CHANGED="false"
+          git fetch origin ${{ github.base_ref }} --depth=1
+          git diff --name-only origin/${{ github.base_ref }}...HEAD | tee /tmp/diff.txt
+          if grep -E '^public/app-tabs\.html$' /tmp/diff.txt >/dev/null; then
+            UI_CHANGED="true"
+          fi
+          echo "ui_changed=$UI_CHANGED" >> "$GITHUB_OUTPUT"
+
+      - name: Label if UI changed
+        if: steps.diff.outputs.ui_changed == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const {owner, repo, number} = context.issue;
+            await github.rest.issues.addLabels({ owner, repo, issue_number: number, labels: ["ui-approval-required"] });
+            core.notice("UI changed. Label added: ui-approval-required");
+
+  automerge:
+    name: Auto-merge 'ready' PRs (no UI changes)
+    needs: [smoke, gate]
+    if: needs.gate.outputs.ui_changed == 'false'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Merge when labeled 'ready' and checks are green
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const {owner, repo, number} = context.issue;
+
+            // Only merge if label 'ready' is present
+            const labels = (pr.labels || []).map(l => l.name);
+            if (!labels.includes('ready')) {
+              core.notice("Not labeled 'ready' — skipping automerge.");
+              return;
+            }
+
+            // Merge (squash) if all required checks succeeded
+            await github.rest.pulls.merge({
+              owner, repo, pull_number: number, merge_method: "squash"
+            });
+            core.notice("Merged via automerge job.");
