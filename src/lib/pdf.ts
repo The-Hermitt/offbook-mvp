@@ -1,99 +1,39 @@
+// src/lib/pdf.ts
+// NOTE: This file keeps the ORIGINAL exports your app expects:
+// - analyzeScriptText(text, strictColon?) => Scene[]
+// - parseArrayBufferWithMeta(buf) => { scenes: Scene[], meta: ParserMeta }
+// It performs text-only PDF extraction (no page.render()) to avoid node-canvas
+// crashes on Render.
+
 import type { PDFDocumentProxy, TextContent } from "pdfjs-dist";
 import * as pdfjs from "pdfjs-dist/legacy/build/pdf";
 
-/**
- * Extract text from a PDF buffer using pdf.js text layer only.
- * We never call page.render() (no node-canvas), which avoids crashes on Render.
- */
-export async function extractPdfText(
-  buf: Buffer,
-  maxPages = 50
-): Promise<{ text: string; meta: PdfExtractMeta }> {
-  const meta: PdfExtractMeta = {
-    pageCount: 0,
-    pagesRead: 0,
-    pathUsed: "text-only",
-    timedOut: false,
-    scannedSuspected: false,
-  };
+export type Line = { speaker: string; text: string };
+export type Scene = { id: string; title: string; lines: Line[] };
 
-  let doc: PDFDocumentProxy | null = null;
-  try {
-    doc = await pdfjs.getDocument({ data: buf }).promise;
-  } catch (err) {
-    meta.pathUsed = "open-failed";
-    meta.scannedSuspected = true;
-    return { text: "", meta };
-  }
-
-  meta.pageCount = doc.numPages;
-  const pages = Math.min(maxPages, doc.numPages);
-
-  const out: string[] = [];
-  for (let i = 1; i <= pages; i++) {
-    try {
-      const page = await doc.getPage(i);
-      const tc: TextContent = await page.getTextContent();
-      const line = (tc.items as any[])
-        .map((it: any) => ("str" in it ? it.str : ""))
-        .join(" ")
-        .replace(/\s{2,}/g, " ")
-        .trim();
-      if (line) out.push(line);
-      meta.pagesRead++;
-    } catch {
-      // ignore page error; keep going
-    }
-  }
-
-  const text = out.join("\n\n");
-  const charCount = text.replace(/\s/g, "").length;
-
-  if (charCount < 40 || meta.pagesRead === 0) {
-    meta.scannedSuspected = true;
-    meta.pathUsed = "text-empty";
-  }
-
-  return { text, meta };
-}
-
-export type PdfExtractMeta = {
-  pageCount: number;
-  pagesRead: number;
+// Kept loose so we don’t couple callers to internal fields
+export type ParserMeta = {
   pathUsed: "text-only" | "open-failed" | "text-empty";
-  timedOut: boolean;
-  scannedSuspected: boolean;
+  pageCount?: number;
+  pagesRead?: number;
+  rawLength?: number;
+  scannedSuspected?: boolean;
+  timedOut?: boolean;
+  roleStats?: { total: number; badCount: number; badRatio: number };
 };
 
 /**
- * Back-compat helper used by routes: parses a PDF upload.
- * Routes can decide:
- * - If meta.scannedSuspected === true -> respond { scanned:true } (let client OCR silently)
- * - Else -> continue to parse script text -> scenes
+ * Very small, robust analyzer that turns raw text into scenes/lines.
+ * - Accepts "NAME: dialogue" or "NAME (note): dialogue"
+ * - Skips INT./EXT./SCENE headings, URLs, page numbers, ALL-CAPS action
+ * - Returns a single scene (MVP-compatible)
  */
-export async function parseUploadedPdf(
-  buf: Buffer
-): Promise<{ text: string; meta: PdfExtractMeta }> {
-  return extractPdfText(buf, 50);
-}
-
-/**
- * Exported text analyzer (back-compat).
- * Some parts of the app import { analyzeScriptText } from "./lib/pdf.js".
- * Provide it here so those imports stop failing.
- *
- * Very simple heuristic: split lines, keep ONLY dialog in the form:
- *   NAME: dialogue
- *   NAME (parenthetical): dialogue
- * Skip scene headings (INT./EXT./SCENE), ALL-CAPS action, URLs, page numbers.
- */
-export function analyzeScriptText(text: string): {
-  scenes: { id: string; title: string; lines: { speaker: string; text: string }[] }[];
-  roles: string[];
-} {
-  const lines = text.replace(/\r/g, "").split("\n");
-  const scene = { id: "s1", title: "Scene 1", lines: [] as { speaker: string; text: string }[] };
-  const roleSet = new Set<string>();
+export function analyzeScriptText(text: string, strictColon: boolean = false): Scene[] {
+  const lines = (text || "").replace(/\r/g, "").split("\n");
+  const scene: Scene = { id: "scene_1", title: "Scene 1", lines: [] };
+  const re = strictColon
+    ? /^([A-Z][A-Z0-9 ]{1,})(?:\s*\([^)]*\))?:\s+(.+)$/
+    : /^([A-Z][A-Z0-9 ]{1,})(?:\s*\([^)]*\))?:\s*(.+)$/;
 
   for (const raw of lines) {
     const s = raw.trim();
@@ -102,23 +42,82 @@ export function analyzeScriptText(text: string): {
     // Skip obvious non-dialogue
     if (/^(INT\.|EXT\.|SCENE\s)/i.test(s)) continue;
     if (/^https?:\/\//i.test(s)) continue;
-    if (/^\d{1,3}\s*$/.test(s)) continue; // page #
-    if (/^[A-Z0-9 .\-]+$/.test(s) && s.length > 4 && !/:/.test(s)) {
-      // Likely ALL-CAPS action or standalone character cue; skip as dialogue line
-      continue;
-    }
+    if (/^\d{1,3}\s*$/.test(s)) continue; // page number
+    if (/^[A-Z0-9 .\-]+$/.test(s) && s.length > 4 && !/:/.test(s)) continue; // ALL-CAPS action/cues
 
-    // Match NAME: text  or  NAME (xxx): text
-    const m = s.match(/^([A-Z][A-Z0-9 ]{1,})(?:\s*\([^)]*\))?:\s*(.+)$/);
+    const m = s.match(re);
     if (m) {
       const speaker = m[1].trim();
       const lineText = m[2].trim();
-      scene.lines.push({ speaker, text: lineText });
-      roleSet.add(speaker);
+      if (speaker && lineText) scene.lines.push({ speaker, text: lineText });
     }
   }
 
-  const scenes = [scene];
-  const roles = Array.from(roleSet).sort();
-  return { scenes, roles };
+  return [scene];
+}
+
+/**
+ * Extract text content from a PDF buffer using pdf.js TEXT ONLY.
+ * We never call page.render() (no node-canvas), which avoids Render crashes.
+ */
+async function extractPdfTextOnly(buf: Buffer, maxPages = 50): Promise<{ text: string; meta: ParserMeta }> {
+  const meta: ParserMeta = {
+    pathUsed: "text-only",
+    pageCount: 0,
+    pagesRead: 0,
+    rawLength: 0,
+    scannedSuspected: false,
+    timedOut: false,
+  };
+
+  let doc: PDFDocumentProxy | null = null;
+  try {
+    doc = await pdfjs.getDocument({ data: buf }).promise;
+  } catch (_err) {
+    meta.pathUsed = "open-failed";
+    meta.scannedSuspected = true;
+    return { text: "", meta };
+  }
+
+  meta.pageCount = doc.numPages;
+  const pages = Math.min(maxPages, doc.numPages);
+
+  const chunks: string[] = [];
+  for (let i = 1; i <= pages; i++) {
+    try {
+      const page = await doc.getPage(i);
+      const tc: TextContent = await page.getTextContent(); // TEXT LAYER ONLY
+      const joined = (tc.items as any[])
+        .map((it: any) => ("str" in it ? it.str : ""))
+        .join(" ")
+        .replace(/\s{2,}/g, " ")
+        .trim();
+      if (joined) chunks.push(joined);
+      meta.pagesRead = (meta.pagesRead || 0) + 1;
+    } catch {
+      // ignore per-page failures; keep going
+    }
+  }
+
+  const text = chunks.join("\n\n");
+  meta.rawLength = text.length;
+
+  const charCount = text.replace(/\s/g, "").length;
+  if (charCount < 40 || (meta.pagesRead || 0) === 0) {
+    meta.pathUsed = "text-empty";
+    meta.scannedSuspected = true;
+  }
+
+  return { text, meta };
+}
+
+/**
+ * The original API your routes expect.
+ * - Returns scenes derived from the text-only extractor
+ * - Adds meta (with scannedSuspected when text looks empty)
+ */
+export async function parseArrayBufferWithMeta(buf: Buffer): Promise<{ scenes: Scene[]; meta: ParserMeta }> {
+  const { text, meta } = await extractPdfTextOnly(buf, 50);
+  const scenes = analyzeScriptText(text, false);
+  return { scenes, meta };
 }
