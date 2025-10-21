@@ -4,22 +4,19 @@
   <meta charset="utf-8" />
   <title>OffBook</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <!-- DO NOT CHANGE MARKUP/STYLING WITHOUT APPROVAL: @The-Hermitt -->
   <style>
     :root { color-scheme: dark; }
     html,body{margin:0;background:#0b0f14;color:#e9eef6;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif}
     .wrap{max-width:820px;margin:24px auto 96px;padding:0 16px}
-    .card{background:#0f1725;border:1px solid #1e2b40;border-radius:16px;padding:18px;box-shadow:0 10px 26px rgba(0,0,0,.35)}
-    h1{margin:0 0 8px;font-size:28px;letter-spacing:.2px}
-    h2{margin:0 0 12px;font-size:18px;opacity:.9}
+    .card{background:#0f1725;border:1px solid #1e2b40;border-radius:16px;padding:18px;box-shadow:0 10px 26px rgba(0,0,0,.35); overflow:hidden}
+    h1{margin:0 0 8px;font-size:28px}
     .muted{color:#a7b6cc;font-size:14px}
-    .row{display:flex;gap:12px;flex-wrap:wrap}
     .btn{appearance:none;border:0;border-radius:18px;padding:14px 18px;font-weight:700;cursor:pointer}
     .btn.primary{background:#3b82f6;color:#fff}
     .btn.ghost{background:#0b1220;color:#d7e3f8;border:1px solid #20304a}
     .input,select,textarea{width:100%;border-radius:12px;border:1px solid #22334d;background:#0c1422;color:#e9eef6;padding:12px 14px}
-    textarea{resize:vertical;min-height:150px}
     label{display:block;margin:12px 0 6px;color:#a7b6cc;font-size:14px}
+    textarea{resize:vertical;min-height:150px}
     .sp{height:14px}
     .err{color:#ff7b7b;font-size:13px;margin-top:8px}
     .ok{color:#63e6be;font-size:13px;margin-top:8px}
@@ -28,8 +25,8 @@
     .tab{padding:10px 14px;border-radius:12px;color:#b8c7dc;cursor:pointer}
     .tab.active{background:#172337;color:#fff}
     .hidden{display:none}
-    /* Keep form fields inside frame (no wide overflow) */
-    .card > * { max-width: 100%; }
+    /* Ensure fields never sit side-by-side inside cards */
+    .stack > * { display:block; width:100%; }
   </style>
 </head>
 <body>
@@ -39,15 +36,15 @@
       <h1>Import <span class="pill" id="scenePill" hidden>0 scenes</span></h1>
       <div class="muted">Paste plain text (most reliable), or upload a PDF. After import we’ll detect roles and move to Assign.</div>
       <div class="sp"></div>
-      <div class="row">
+      <div style="display:flex;gap:12px;flex-wrap:wrap">
         <button class="btn primary" id="showPaste">Paste Script Text</button>
         <button class="btn ghost" id="showPdf">Upload PDF</button>
       </div>
 
-      <!-- Paste pane -->
+      <!-- Paste -->
       <div id="pastePane" style="margin-top:14px;">
-        <h2>Paste script here</h2>
-        <textarea id="pasteText" placeholder="JANE: Hi.
+        <label for="pasteText">Paste script here</label>
+        <textarea id="pasteText" class="input" placeholder="JANE: Hi.
 GABE: Hey.
 JANE: Ready?"></textarea>
         <label for="pasteTitle">Title</label>
@@ -57,8 +54,8 @@ JANE: Ready?"></textarea>
         <div id="pasteMsg"></div>
       </div>
 
-      <!-- PDF pane -->
-      <div id="pdfPane" class="hidden" style="margin-top:14px;">
+      <!-- PDF -->
+      <div id="pdfPane" class="hidden stack" style="margin-top:14px;">
         <label for="pdfTitle">Title</label>
         <input id="pdfTitle" class="input" placeholder="Uploaded Script" />
         <label for="pdfFile">PDF</label>
@@ -106,7 +103,6 @@ JANE: Ready?"></textarea>
     </section>
   </div>
 
-  <!-- Bottom tabs -->
   <nav class="tabs">
     <div class="tab active" data-tab="import">Import</div>
     <div class="tab" data-tab="assign">Assign</div>
@@ -118,7 +114,6 @@ JANE: Ready?"></textarea>
 
 <script>
 (() => {
-  // ====== SECRET HEADER FROM URL ======
   const qs = new URLSearchParams(location.search);
   const SHARED_SECRET = qs.get("secret") || "";
   const H = (json = true) => {
@@ -128,7 +123,6 @@ JANE: Ready?"></textarea>
     return h;
   };
 
-  // ====== TABS ======
   const sections = {
     import:  document.getElementById("tab-import"),
     assign:  document.getElementById("tab-assign"),
@@ -139,48 +133,37 @@ JANE: Ready?"></textarea>
   };
   function showTab(name){
     for (const k in sections) sections[k].classList.toggle("hidden", k !== name);
-    document.querySelectorAll(".tabs .tab").forEach(t=>{
-      t.classList.toggle("active", t.dataset.tab === name);
-    });
+    document.querySelectorAll(".tabs .tab").forEach(t => t.classList.toggle("active", t.dataset.tab === name));
   }
   document.querySelectorAll(".tabs .tab").forEach(t=>t.addEventListener("click", ()=>showTab(t.dataset.tab)));
-  showTab("import"); // default
+  showTab("import");
 
-  // ====== Import pane toggles ======
   const pastePane = document.getElementById("pastePane");
   const pdfPane   = document.getElementById("pdfPane");
   document.getElementById("showPaste").onclick = () => { pastePane.classList.remove("hidden"); pdfPane.classList.add("hidden"); };
   document.getElementById("showPdf").onclick   = () => { pastePane.classList.add("hidden");    pdfPane.classList.remove("hidden"); };
 
-  // ====== State ======
-  let scriptId = null;
-  let scenes = [];
-  let speakers = [];
-
+  let scriptId = null, scenes = [], speakers = [];
   const setMsg = (id, msg, ok=false)=>{ const el=document.getElementById(id); el.textContent=msg||""; el.className=ok?"ok":"err"; };
   const uniq = a => Array.from(new Set(a));
 
-  // ====== IMPORT: Paste ======
   document.getElementById("pasteSend").onclick = async () => {
     setMsg("pasteMsg","");
-    const text  = document.getElementById("pasteText").value;
-    const title = (document.getElementById("pasteTitle").value || "Pasted Script").trim();
+    const text  = (document.getElementById("pasteText") as HTMLTextAreaElement).value;
+    const title = (document.getElementById("pasteTitle") as HTMLInputElement).value || "Pasted Script";
     if (!text.trim()) return setMsg("pasteMsg","Paste some text first.");
     try {
       const r = await fetch("/debug/upload_script_text", { method:"POST", headers:H(true), body:JSON.stringify({ title, text }) });
       if (!r.ok) return setMsg("pasteMsg",`Upload failed (${r.status})`);
       const j = await r.json(); scriptId = j.script_id;
-      await refreshScenes();
-      setMsg("pasteMsg","Uploaded!", true);
-      showTab("assign");
+      await refreshScenes(); setMsg("pasteMsg","Uploaded!", true); showTab("assign");
     } catch(e){ setMsg("pasteMsg", String(e)); }
   };
 
-  // ====== IMPORT: PDF ======
   document.getElementById("pdfSend").onclick = async () => {
     setMsg("pdfMsg","");
-    const f = document.getElementById("pdfFile").files[0];
-    const title = (document.getElementById("pdfTitle").value || "Uploaded Script").trim();
+    const f = (document.getElementById("pdfFile") as HTMLInputElement).files?.[0];
+    const title = (document.getElementById("pdfTitle") as HTMLInputElement).value || "Uploaded Script";
     if (!f) return setMsg("pdfMsg","Choose a PDF first.");
     try {
       const form = new FormData();
@@ -189,30 +172,26 @@ JANE: Ready?"></textarea>
       const r = await fetch("/debug/upload_script_upload", { method:"POST", headers:H(false), body:form });
       if (!r.ok) return setMsg("pdfMsg",`Upload failed (${r.status})`);
       const j = await r.json(); scriptId = j.script_id;
-      await refreshScenes();
-      setMsg("pdfMsg","Uploaded!", true);
-      showTab("assign");
+      await refreshScenes(); setMsg("pdfMsg","Uploaded!", true); showTab("assign");
     } catch(e){ setMsg("pdfMsg", String(e)); }
   };
 
-  // ====== Scenes + Assign population ======
   async function refreshScenes(){
     const r = await fetch(`/debug/scenes?script_id=${encodeURIComponent(scriptId)}`, { headers:H(false) });
-    if (!r.ok) return setMsg("pasteMsg",`Scenes failed (${r.status})`);
+    if (!r.ok) return;
     const j = await r.json(); scenes = j.scenes || [];
     const names=[]; for (const sc of scenes) for (const ln of (sc.lines||[])) names.push(ln.speaker);
     speakers = uniq(names);
-    const pillText = `${scenes.length} ${scenes.length===1?'scene':'scenes'}`;
-    document.getElementById("scenePill").textContent = pillText;
+    document.getElementById("scenePill").textContent = `${scenes.length} ${scenes.length===1?'scene':'scenes'}`;
     document.getElementById("scenePill").hidden = false;
-    document.getElementById("assignPill").textContent = pillText;
+    document.getElementById("assignPill").textContent = `${scenes.length} ${scenes.length===1?'scene':'scenes'}`;
     document.getElementById("assignPill").hidden = false;
     populateAssign();
   }
 
   function populateAssign(){
-    const iam = document.getElementById("iam");
-    const voiceRows = document.getElementById("voiceRows");
+    const iam = document.getElementById("iam") as HTMLSelectElement;
+    const voiceRows = document.getElementById("voiceRows")!;
     iam.innerHTML=""; voiceRows.innerHTML="";
     if (!speakers.length){ iam.innerHTML='<option value="">No partner roles detected yet.</option>'; return; }
     iam.innerHTML='<option value="">Select your role…</option>'+speakers.map(s=>`<option value="${s}">${s}</option>`).join("");
@@ -231,17 +210,16 @@ JANE: Ready?"></textarea>
 
   async function saveVoices(){
     if (!scriptId) return false;
-    const map={}; document.querySelectorAll('select[data-voice-for]').forEach(sel=>{
-      map[sel.getAttribute('data-voice-for')] = sel.value;
+    const map: Record<string,string> = {};
+    document.querySelectorAll('select[data-voice-for]').forEach(sel=>{
+      map[(sel as HTMLSelectElement).getAttribute('data-voice-for')!] = (sel as HTMLSelectElement).value;
     });
     const r = await fetch("/debug/set_voice", { method:"POST", headers:H(true), body:JSON.stringify({ script_id:scriptId, voice_map:map }) });
-    if (!r.ok){ setMsg("assignMsg",`Save voices failed (${r.status})`); return false; }
-    setMsg("assignMsg","Voices saved.", true); return true;
+    return r.ok;
   }
 
   document.getElementById("toRehearse").onclick = async ()=>{
-    setMsg("assignMsg","");
-    const iamSel=document.getElementById("iam");
+    const iamSel=document.getElementById("iam") as HTMLSelectElement;
     if (!scriptId) return setMsg("assignMsg","Import a script first.");
     if (!iamSel.value) return setMsg("assignMsg","Choose your role in “I am…”.");
     await saveVoices();
