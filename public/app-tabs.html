@@ -1,318 +1,73 @@
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <title>OffBook</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <style>
-    :root { color-scheme: dark; }
-    body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Inter, Arial, sans-serif; background: #0b0f14; color: #e8eef5; }
-    .wrap { max-width: 880px; margin: 24px auto 96px; padding: 0 16px; }
-    .card { background: #111826; border: 1px solid #1b2838; border-radius: 14px; padding: 18px; box-shadow: 0 6px 18px rgba(0,0,0,0.25); }
-    h1 { font-size: 22px; margin: 0 0 8px; letter-spacing: 0.2px; }
-    .muted { opacity: .85; font-size: 13px; }
-    .row { display: flex; gap: 10px; flex-wrap: wrap; }
-    .btn { background: #3b82f6; border: 0; color: white; padding: 12px 16px; border-radius: 10px; font-weight: 600; cursor: pointer; }
-    .btn.secondary { background: #1f2937; color: #dbe5f4; }
-    .btn:disabled { opacity: .5; cursor: not-allowed; }
-    .input, select { width: 100%; padding: 12px; border-radius: 10px; border: 1px solid #2a3a4d; background: #0e1622; color: #e8eef5; }
-    .tabs { position: fixed; bottom: 0; left: 0; right: 0; background: #0d131d; border-top: 1px solid #1b2838; display: flex; gap: 6px; padding: 8px; justify-content: center; }
-    .tab { padding: 10px 12px; border-radius: 12px; color: #b8c7dc; cursor: pointer; }
-    .tab.active { background: #1b2738; color: #fff; }
-    .pill { background:#0f1b2b; border:1px solid #1f2e44; color:#a9c2e8; padding:4px 8px; border-radius:999px; font-size:12px; }
-    .err { color: #ff6b6b; font-size: 13px; margin-top: 10px; }
-    .ok { color: #67e8f9; font-size: 13px; margin-top: 10px; }
-    .spacer { height: 14px; }
-    label { font-size: 13px; color: #a9b8cc; margin-bottom: 6px; display: block; }
-    .section { margin-top: 14px; }
+    .sr-only{position:absolute;left:-9999px}
   </style>
-</head>
-<body>
-  <div class="wrap">
-    <div class="card" id="importCard">
-      <div style="display:flex; align-items:center; gap:8px;">
-        <h1 style="margin-right:8px;">Import</h1>
-        <span class="pill" id="sceneCountPill" hidden>0 scenes</span>
-      </div>
-      <div class="muted">Paste plain text (most reliable) or upload a PDF. Image-only PDFs will need OCR; paste works best.</div>
 
-      <div class="section">
-        <div class="row">
-          <button class="btn" id="btnPaste">Paste Script Text</button>
-          <button class="btn secondary" id="btnPdf">Upload PDF</button>
+  <!-- pdf.js + Tesseract for automatic client fallback -->
+  <!-- pdf.js + Tesseract for automatic, silent client fallback (only if needed) -->
+  <script src="https://unpkg.com/pdfjs-dist@4.6.82/build/pdf.min.js"></script>
+  <script> if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://unpkg.com/pdfjs-dist@4.6.82/build/pdf.worker.min.js'; </script>
+  <script src="https://unpkg.com/tesseract.js@5.0.4/dist/tesseract.min.js"></script>
+@@ -71,7 +71,7 @@
+          <h2 style="margin:0;font-size:18px">Import</h2>
+          <span class="pill">Paste or PDF</span>
         </div>
-      </div>
+        <p class="hint mt8">Paste plain text (most reliable) or upload a PDF. We’ll handle scanned PDFs automatically.</p>
+        <p class="hint mt8">Paste plain text (most reliable) or upload a PDF. We’ll handle scans automatically.</p>
 
-      <div id="pasteView" class="section" hidden>
-        <label for="titleInput">Title</label>
-        <input id="titleInput" class="input" placeholder="Uploaded Script" />
-        <label for="textInput">Script Text</label>
-        <textarea id="textInput" class="input" rows="8" placeholder="JANE: Hi.\nGABE: Hey.\nJANE: Ready?"></textarea>
-        <div class="spacer"></div>
-        <button class="btn" id="btnUploadText">Upload & Continue</button>
-        <div id="pasteMsg" class="err" hidden></div>
-      </div>
+        <div class="inner-tabs mt12">
+          <div id="itab-paste" class="inner-tab active">Paste Script Text</div>
+@@ -176,7 +176,6 @@ <h2 style="margin:0 0 8px 0;font-size:18px">Settings</h2>
+    async function jget(path){ const r = await fetch(path,{headers:hdrs(false)}); if(!r.ok) throw new Error(await r.text()); return r.json(); }
 
-      <div id="pdfView" class="section" hidden>
-        <label for="pdfTitle">Title</label>
-        <input id="pdfTitle" class="input" placeholder="Uploaded Script" />
-        <label for="pdfFile">PDF file</label>
-        <input id="pdfFile" type="file" accept="application/pdf" class="input" />
-        <div class="spacer"></div>
-        <button class="btn" id="btnUploadPdf">Upload & Continue</button>
-        <div id="pdfMsg" class="err" hidden></div>
-      </div>
-    </div>
+    const VOICES = [{id:'alloy',label:'Alloy'},{id:'amber',label:'Amber'},{id:'nova',label:'Nova'},{id:'verse',label:'Verse'}];
 
-    <div class="spacer"></div>
+    let state = { script_id:null, scenes:[], roles:[], iam:'', voice_map:{} };
 
-    <div class="card" id="assignCard">
-      <div style="display:flex; align-items:center; gap:8px;">
-        <h1>Assign</h1>
-        <span class="pill" id="assignSceneCount" hidden>1 scene</span>
-      </div>
-      <label for="iamSelect">I am…</label>
-      <select id="iamSelect" class="input"></select>
-      <div class="spacer"></div>
-      <div id="partnerVoices"></div>
-      <div class="spacer"></div>
-      <button class="btn" id="toRehearse">Continue to Rehearse</button>
-      <div id="assignMsg" class="err" hidden></div>
-    </div>
-
-    <div class="spacer"></div>
-
-    <div class="card">
-      <h1>Rehearse</h1>
-      <div class="muted">Coming up next — cueing ladder toggle (L0/L1).</div>
-    </div>
-
-    <div class="spacer"></div>
-
-    <div class="card">
-      <h1>Record</h1>
-      <div class="muted">Camera + mic with 3-2-1 countdown (store requirement).</div>
-    </div>
-  </div>
-
-  <div class="tabs">
-    <div class="tab active">Import</div>
-    <div class="tab">Assign</div>
-    <div class="tab">Rehearse</div>
-    <div class="tab">Record</div>
-    <div class="tab">Gallery</div>
-    <div class="tab">Settings</div>
-  </div>
-
-<script>
-(() => {
-  // ----- Config + helpers
-  const qs = new URLSearchParams(location.search);
-  const SHARED_SECRET = qs.get("secret") || ""; // if present, we add X-Shared-Secret automatically
-
-  function hdrs(json = true) {
-    const h = {};
-    if (json) h["Content-Type"] = "application/json";
-    if (SHARED_SECRET) h["X-Shared-Secret"] = SHARED_SECRET;
-    return h;
-  }
-
-  function setText(id, msg, isErr=true) {
-    const el = document.getElementById(id);
-    el.textContent = msg || "";
-    el.hidden = !msg;
-    el.className = isErr ? "err" : "ok";
-  }
-
-  function setScenesPill(count) {
-    const pill = document.getElementById("sceneCountPill");
-    pill.textContent = `${count} ${count === 1 ? "scene" : "scenes"}`;
-    pill.hidden = false;
-    const pill2 = document.getElementById("assignSceneCount");
-    pill2.textContent = pill.textContent;
-    pill2.hidden = false;
-  }
-
-  function uniq(arr) { return Array.from(new Set(arr)); }
-
-  // ----- state
-  let currentScriptId = null;
-  let scenes = [];
-  let speakers = [];
-
-  // ----- UI references
-  const btnPaste = document.getElementById("btnPaste");
-  const btnPdf = document.getElementById("btnPdf");
-  const pasteView = document.getElementById("pasteView");
-  const pdfView = document.getElementById("pdfView");
-  const pasteMsg = document.getElementById("pasteMsg");
-  const pdfMsg = document.getElementById("pdfMsg");
-
-  const titleInput = document.getElementById("titleInput");
-  const textInput = document.getElementById("textInput");
-  const btnUploadText = document.getElementById("btnUploadText");
-
-  const pdfTitle = document.getElementById("pdfTitle");
-  const pdfFile = document.getElementById("pdfFile");
-  const btnUploadPdf = document.getElementById("btnUploadPdf");
-
-  const iamSelect = document.getElementById("iamSelect");
-  const partnerVoices = document.getElementById("partnerVoices");
-  const assignMsg = document.getElementById("assignMsg");
-  const toRehearse = document.getElementById("toRehearse");
-
-  // ----- toggle import sub-views
-  btnPaste.addEventListener("click", () => {
-    pasteView.hidden = false; pdfView.hidden = true;
-  });
-  btnPdf.addEventListener("click", () => {
-    pasteView.hidden = true; pdfView.hidden = false;
-  });
-
-  // ----- upload (paste)
-  btnUploadText.addEventListener("click", async () => {
-    setText("pasteMsg", "");
-    try {
-      const title = titleInput.value.trim() || "Uploaded Script";
-      const text = textInput.value;
-      if (!text.trim()) { setText("pasteMsg", "Please paste some script text."); return; }
-
-      const r = await fetch("/debug/upload_script_text", {
-        method: "POST",
-        headers: hdrs(true),
-        body: JSON.stringify({ title, text })
-      });
-      if (!r.ok) {
-        const t = await r.text();
-        setText("pasteMsg", `Upload failed (${r.status}). ${t || ""}`.trim());
-        return;
-      }
-      const j = await r.json();
-      currentScriptId = j.script_id;
-
-      await refreshScenes();
-      setText("pasteMsg", "Uploaded!", false);
-    } catch (e) {
-      setText("pasteMsg", `Error: ${e.message || e}`);
-    }
-  });
-
-  // ----- upload (pdf)
-  btnUploadPdf.addEventListener("click", async () => {
-    setText("pdfMsg", "");
-    const f = pdfFile.files?.[0];
-    if (!f) { setText("pdfMsg", "Choose a PDF first."); return; }
-
-    try {
-      const form = new FormData();
-      form.append("title", pdfTitle.value.trim() || "Uploaded Script");
-      form.append("pdf", f);
-
-      const h = hdrs(false);
-      const r = await fetch("/debug/upload_script_upload", {
-        method: "POST",
-        headers: h, // FormData will set boundary; we only add secret header
-        body: form
-      });
-      if (!r.ok) {
-        const t = await r.text();
-        setText("pdfMsg", `Upload failed (${r.status}). ${t || ""}`.trim());
-        return;
-      }
-      const j = await r.json();
-      currentScriptId = j.script_id;
-
-      await refreshScenes();
-      setText("pdfMsg", "Uploaded!", false);
-    } catch (e) {
-      setText("pdfMsg", `Error: ${e.message || e}`);
-    }
-  });
-
-  // ----- fetch scenes and populate Assign
-  async function refreshScenes() {
-    const url = `/debug/scenes?script_id=${encodeURIComponent(currentScriptId)}`;
-    const r = await fetch(url, { headers: hdrs(false) });
-    if (!r.ok) {
-      const t = await r.text();
-      setText("pasteMsg", `Scenes failed (${r.status}). ${t || ""}`.trim());
-      return;
-    }
-    const j = await r.json();
-    scenes = j.scenes || [];
-
-    // Collect speakers across all scenes
-    const names = [];
-    for (const sc of scenes) for (const line of sc.lines || []) names.push(line.speaker);
-    speakers = uniq(names);
-
-    setScenesPill(scenes.length);
-    populateAssign();
-  }
-
-  function populateAssign() {
-    iamSelect.innerHTML = "";
-    partnerVoices.innerHTML = "";
-
-    if (!speakers.length) {
-      iamSelect.innerHTML = `<option value="">No partner roles detected yet.</option>`;
-      return;
-    }
-    // “I am …” (user role) first option is a placeholder
-    iamSelect.innerHTML = `<option value="">Select your role…</option>` + speakers.map(s => `<option value="${s}">${s}</option>`).join("");
-
-    // Partner voices pickers
-    const group = document.createElement("div");
-    for (const s of speakers) {
-      const row = document.createElement("div");
-      row.style.margin = "8px 0";
-      row.innerHTML = `
-        <label style="margin-bottom:6px;">${s} voice</label>
-        <select data-voice-for="${s}" class="input">
-          <option value="alloy">alloy</option>
-          <option value="verse">verse</option>
-          <option value="bright">bright</option>
-        </select>`;
-      group.appendChild(row);
-    }
-    partnerVoices.appendChild(group);
-  }
-
-  // ----- apply chosen voices
-  async function saveVoices() {
-    if (!currentScriptId) return;
-    const selects = partnerVoices.querySelectorAll("select[data-voice-for]");
-    const voice_map = {};
-    selects.forEach(sel => {
-      const role = sel.getAttribute("data-voice-for");
-      voice_map[role] = sel.value;
+    // Tabs
+@@ -193,7 +192,7 @@ <h2 style="margin:0 0 8px 0;font-size:18px">Settings</h2>
+      try{ const up = await jpost('/debug/upload_script_text',{title,text}); state.script_id=up.script_id; await loadScenes(); showScreen('assign'); buildAssign(); toast('Script imported'); }catch(e){ $('#paste-error').textContent='Upload failed. Try again.'; }
     });
-    const r = await fetch("/debug/set_voice", {
-      method: "POST",
-      headers: hdrs(true),
-      body: JSON.stringify({ script_id: currentScriptId, voice_map })
-    });
-    if (!r.ok) {
-      const t = await r.text();
-      setText("assignMsg", `Save voices failed (${r.status}). ${t || ""}`.trim());
-      return false;
-    }
-    setText("assignMsg", "Voices saved.", false);
-    return true;
-  }
 
-  toRehearse.addEventListener("click", async () => {
-    setText("assignMsg", "");
-    if (!currentScriptId) { setText("assignMsg", "Import a script first."); return; }
-    if (!iamSelect.value) { setText("assignMsg", "Choose your role in “I am…”."); return; }
-    await saveVoices();
-    // In the next iteration, we’ll add an actual render call from here.
-    setText("assignMsg", `Ready to rehearse as ${iamSelect.value}.`, false);
-  });
+    // PDF flow with automatic OCR fallback
+    // PDF flow with automatic silent OCR fallback (only if needed)
+    $('#btn-pdf-upload').addEventListener('click', async ()=>{
+      const f = $('#pdf-file').files[0]; const title = $('#pdf-title').value.trim() || (f?f.name.replace(/\.pdf$/i,''):'Uploaded Script');
+      $('#pdf-error').textContent=''; if(!f){ $('#pdf-error').textContent='Choose a PDF first.'; return; }
+@@ -202,9 +201,19 @@ <h2 style="margin:0 0 8px 0;font-size:18px">Settings</h2>
+        const fd = new FormData(); fd.append('title',title); fd.append('pdf',f);
+        const res = await fetch('/debug/upload_script_upload',{method:'POST', headers:SHARED_SECRET?{'X-Shared-Secret':SHARED_SECRET}:undefined, body:fd});
+        if(!res.ok) throw new Error(await res.text());
+        const up = await res.json(); state.script_id = up.script_id;
+        const up = await res.json();
 
-  // If the page has ?secret, inform the user once:
-  if (SHARED_SECRET) console.log("Shared secret detected; adding X-Shared-Secret to all /debug calls.");
-})();
-</script>
-</body>
-</html>
+        // If server signals scan, do silent OCR
+        if (up && up.scanned === true) {
+          await runClientOCRAndReupload(f, title);
+          return;
+        }
+
+        // Otherwise assume we have a script_id and proceed
+        state.script_id = up.script_id;
+        await loadScenes();
+        // If no roles found → likely scan → automatic client OCR
+
+        // If scenes contain no roles, this is likely a scan -> OCR and reupload automatically
+        if (state.roles.length === 0) {
+          await runClientOCRAndReupload(f, title);
+        } else {
+@@ -218,13 +227,13 @@ <h2 style="margin:0 0 8px 0;font-size:18px">Settings</h2>
+
+    async function runClientOCRAndReupload(file, title){
+      try{
+        toast('This looks like a scanned PDF — extracting text…');
+        toast('Extracting text…');
+        const text = await ocrPdfFirstPages(file, 3);
+        if (!text || text.trim().length < 10) throw new Error('No text detected');
+        const up = await jpost('/debug/upload_script_text', { title: title + ' (OCR)', text });
+        const up = await jpost('/debug/upload_script_text', { title: title + ' (extracted)', text });
+        state.script_id = up.script_id;
+        await loadScenes();
+        showScreen('assign'); buildAssign(); toast('Imported via automatic text extraction');
+        showScreen('assign'); buildAssign(); toast('Imported');
+      }catch(e){
+        console.error(e);
+        $('#pdf-error').textContent = 'Could not extract text. Try pasting the script.';
