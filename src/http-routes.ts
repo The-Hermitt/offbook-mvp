@@ -6,13 +6,18 @@ import path from "path";
 import fs from "fs";
 import crypto from "crypto";
 
+// ---------- Types ----------
+type SceneLine = { speaker: string; text: string };
+type Scene = { id: string; title: string; lines: SceneLine[] };
+type Script = { id: string; title: string; text: string; scenes: Scene[]; voiceMap?: Record<string, string> };
+
 type PdfParseModule = (buffer: Buffer) => Promise<{ text: string }>;
 type TesseractWorker = {
   recognize: (data: Buffer | string, lang?: string) => Promise<{ data: { text: string } }>;
   terminate: () => Promise<void>;
 };
 
-// Secret guard (404 cloak)
+// ---------- Optional shared-secret guard ----------
 function secretGuard(req: Request, res: Response, next: NextFunction) {
   const required = process.env.SHARED_SECRET;
   if (!required) return next();
@@ -21,34 +26,31 @@ function secretGuard(req: Request, res: Response, next: NextFunction) {
   return res.status(404).send("Not Found");
 }
 
-// In-memory state
-type SceneLine = { speaker: string; text: string };
-type Scene = { id: string; title: string; lines: SceneLine[] };
-type Script = { id: string; title: string; text: string; scenes: Scene[]; voiceMap?: Record<string, string> };
-
+// ---------- In-memory state ----------
 const scripts = new Map<string, Script>();
 const renders = new Map<string, { status: "queued" | "working" | "complete" | "error"; file?: string; err?: string }>();
 
-// Assets dir
+// ---------- Assets dir ----------
 const ASSETS_DIR = path.join(process.cwd(), "assets");
 if (!fs.existsSync(ASSETS_DIR)) fs.mkdirSync(ASSETS_DIR, { recursive: true });
 
-// ---------- Parser: colon style + screenplay blocks ----------
+// ---------- Parser: supports `NAME: line` and screenplay blocks ----------
 function parseScenesFromText(text: string): Scene[] {
   const lines = text.split(/\r?\n/);
 
   const isAllCapsWordy = (s: string) =>
-    /^[A-Z0-9 ,.'"?!\-:;()]+$/.test(s) && s === s.toUpperCase() && s.replace(/\s+/g, "").length > 3;
+    /^[A-Z0-9 ,.'"?!\-:;()]+$/.test(s) &&
+    s === s.toUpperCase() &&
+    s.replace(/\s+/g, "").length > 3;
 
   const isSceneHeading = (s: string) => /^\s*(INT\.|EXT\.|SCENE\b)/i.test(s.trim());
   const isLikelyHeaderFooter = (s: string) => /(page \d+|actors access|breakdown services|http|https|www\.)/i.test(s);
   const isOnlyParen = (s: string) => /^\s*\([^)]*\)\s*$/.test(s);
   const colonLine = (s: string) => s.match(/^\s*([A-Z][A-Z0-9 _&'.-]{1,30})\s*:\s*(.+)$/);
 
-  const sceneId = crypto.randomUUID();
-  const scene: Scene = { id: sceneId, title: "Scene 1", lines: [] };
+  const scene: Scene = { id: crypto.randomUUID(), title: "Scene 1", lines: [] };
 
-  // Pass 1: colon style
+  // Pass 1: NAME: dialogue
   for (const raw of lines) {
     const s = raw.replace(/\t/g, " ").trimRight();
     if (!s.trim()) continue;
@@ -58,7 +60,7 @@ function parseScenesFromText(text: string): Scene[] {
   }
   if (scene.lines.length) return [scene];
 
-  // Pass 2: screenplay blocks
+  // Pass 2: screenplay blocks (NAME on its own line; optional parenthetical; dialogue lines)
   let i = 0;
   while (i < lines.length) {
     let line = lines[i].replace(/\t/g, " ").trimRight();
@@ -70,11 +72,8 @@ function parseScenesFromText(text: string): Scene[] {
     const candidate = line.trim();
     if (/^[A-Z][A-Z0-9 '&.-]{1,29}$/.test(candidate) && isAllCapsWordy(candidate)) {
       const speaker = candidate;
+      if (i < lines.length && isOnlyParen(lines[i].trim())) i++; // skip parenthetical
 
-      // optional parenthetical
-      if (i < lines.length && isOnlyParen(lines[i].trim())) i++;
-
-      // gather dialogue lines
       const buf: string[] = [];
       while (i < lines.length) {
         const peek = lines[i].trimRight();
@@ -87,14 +86,13 @@ function parseScenesFromText(text: string): Scene[] {
       }
       const t = buf.join(" ").replace(/\s+/g, " ").trim();
       if (t) scene.lines.push({ speaker, text: t });
-      continue;
     }
   }
 
   return [scene];
 }
 
-// ---------- Silent MP3 for render stub ----------
+// ---------- Silent MP3 stub ----------
 function writeSilentMp3(renderId: string): string {
   const safe = renderId.replace(/[^a-zA-Z0-9_-]/g, "_");
   const file = path.join(ASSETS_DIR, `${safe}.mp3`);
@@ -102,7 +100,7 @@ function writeSilentMp3(renderId: string): string {
   return file;
 }
 
-// ---------- Upload (PDF or image) ----------
+// ---------- Upload middleware ----------
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 20 * 1024 * 1024 },
@@ -118,18 +116,31 @@ const upload = multer({
 
 // ---------- PDF / OCR helpers ----------
 async function importPdfParse(): Promise<PdfParseModule | null> {
-  try { const mod = await import("pdf-parse"); return (mod.default || mod) as PdfParseModule; }
-  catch { return null; }
+  try {
+    const mod = await import("pdf-parse");
+    return (mod.default || mod) as PdfParseModule;
+  } catch {
+    return null;
+  }
 }
+
 async function newTesseractWorker(): Promise<TesseractWorker | null> {
   try {
     const tesseract = await import("tesseract.js");
     const { createWorker } = (tesseract as any);
-    const worker = await createWorker({ logger: () => {} });
-    await worker.load(); await worker.loadLanguage("eng"); await worker.initialize("eng");
+
+    // IMPORTANT: no options with logger() → avoids DataCloneError in worker.postMessage
+    const worker = await createWorker();
+    await worker.load();
+    await worker.loadLanguage("eng");
+    await worker.initialize("eng");
     return worker as TesseractWorker;
-  } catch { return null; }
+  } catch (e) {
+    console.error("[ocr] init failed:", e);
+    return null;
+  }
 }
+
 async function rasterizePdfToPngBuffers(pdfBuffer: Buffer, maxPages = 3): Promise<Buffer[]> {
   const pdfjs = await import("pdfjs-dist/legacy/build/pdf.js");
   const { createCanvas } = await import("canvas");
@@ -147,6 +158,7 @@ async function rasterizePdfToPngBuffers(pdfBuffer: Buffer, maxPages = 3): Promis
   }
   return out;
 }
+
 async function extractTextFromPdf(buffer: Buffer): Promise<string> {
   const pdfParse = await importPdfParse();
   if (pdfParse) {
@@ -167,11 +179,13 @@ async function extractTextFromPdf(buffer: Buffer): Promise<string> {
     }
     await worker.terminate();
     return ocr;
-  } catch {
+  } catch (e) {
+    console.error("[ocr] pdf ocr failed:", e);
     try { await worker.terminate(); } catch {}
     return "";
   }
 }
+
 async function extractTextFromImage(buffer: Buffer): Promise<string> {
   const worker = await newTesseractWorker();
   if (!worker) return "";
@@ -179,11 +193,13 @@ async function extractTextFromImage(buffer: Buffer): Promise<string> {
     const res = await worker.recognize(buffer, "eng");
     await worker.terminate();
     return res?.data?.text || "";
-  } catch {
+  } catch (e) {
+    console.error("[ocr] image ocr failed:", e);
     try { await worker.terminate(); } catch {}
     return "";
   }
 }
+
 async function extractTextAuto(buffer: Buffer, mime: string): Promise<string> {
   return mime === "application/pdf" ? extractTextFromPdf(buffer) : extractTextFromImage(buffer);
 }
@@ -196,13 +212,14 @@ function baseUrlFrom(req: Request): string {
   return `${proto}://${host}`;
 }
 
-// ---------- Public API ----------
+// ---------- Routes ----------
 export function initHttpRoutes(app: Express) {
   const debug = express.Router();
   const api = express.Router();
 
   debug.use(secretGuard);
 
+  // POST /debug/upload_script_text
   debug.post("/upload_script_text", (req: Request, res: Response) => {
     const { title, text } = req.body || {};
     if (!title || !text) return res.status(400).json({ error: "title and text are required" });
@@ -213,6 +230,7 @@ export function initHttpRoutes(app: Express) {
     res.json({ script_id: id, scene_count: scenes.length });
   });
 
+  // POST /debug/upload_script_upload  (PDF or image)
   debug.post("/upload_script_upload", upload.single("pdf"), async (req: Request, res: Response) => {
     try {
       const title = String(req.body?.title || "Uploaded Script");
@@ -226,11 +244,13 @@ export function initHttpRoutes(app: Express) {
       scripts.set(id, script);
 
       res.json({ script_id: id, scene_count: scenes.length });
-    } catch {
+    } catch (e) {
+      console.error("[upload] failed:", e);
       res.status(500).json({ error: "could not extract text" });
     }
   });
 
+  // GET /debug/scenes
   debug.get("/scenes", (req: Request, res: Response) => {
     const scriptId = String(req.query.script_id || "");
     if (!scriptId || !scripts.has(scriptId)) return res.status(404).json({ error: "script not found" });
@@ -238,6 +258,7 @@ export function initHttpRoutes(app: Express) {
     res.json({ script_id: script.id, scenes: script.scenes });
   });
 
+  // POST /debug/set_voice
   debug.post("/set_voice", (req: Request, res: Response) => {
     const { script_id, voice_map } = req.body || {};
     if (!script_id || !scripts.has(script_id)) return res.status(404).json({ error: "script not found" });
@@ -248,10 +269,12 @@ export function initHttpRoutes(app: Express) {
     res.json({ ok: true });
   });
 
+  // POST /debug/render (stub -> silent mp3)
   debug.post("/render", (req: Request, res: Response) => {
     const { script_id, scene_id, role } = req.body || {};
     if (!script_id || !scene_id || !role) return res.status(400).json({ error: "script_id, scene_id, role required" });
     if (!scripts.has(script_id)) return res.status(404).json({ error: "script not found" });
+
     const renderId = crypto.randomUUID();
     renders.set(renderId, { status: "working" });
     const file = writeSilentMp3(renderId);
@@ -259,6 +282,7 @@ export function initHttpRoutes(app: Express) {
     res.json({ render_id: renderId, status: "complete" });
   });
 
+  // GET /debug/render_status
   debug.get("/render_status", (req: Request, res: Response) => {
     const rid = String(req.query.render_id || "");
     if (!rid || !renders.has(rid)) return res.status(404).json({ status: "error", error: "render not found" });
@@ -272,6 +296,7 @@ export function initHttpRoutes(app: Express) {
     res.json(payload);
   });
 
+  // Mount routers
   app.use("/debug", debug);
 
   api.get("/assets/:render_id", (req: Request, res: Response) => {
