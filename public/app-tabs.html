@@ -28,8 +28,8 @@
     .tab{padding:10px 14px;border-radius:12px;color:#b8c7dc;cursor:pointer}
     .tab.active{background:#172337;color:#fff}
     .hidden{display:none}
-    .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-    @media (max-width:700px){.grid2{grid-template-columns:1fr}}
+    /* Keep form fields inside frame (no wide overflow) */
+    .card > * { max-width: 100%; }
   </style>
 </head>
 <body>
@@ -59,16 +59,10 @@ JANE: Ready?"></textarea>
 
       <!-- PDF pane -->
       <div id="pdfPane" class="hidden" style="margin-top:14px;">
-        <div class="grid2">
-          <div>
-            <label for="pdfTitle">Title</label>
-            <input id="pdfTitle" class="input" placeholder="Uploaded Script" />
-          </div>
-          <div>
-            <label for="pdfFile">PDF</label>
-            <input id="pdfFile" type="file" accept="application/pdf" class="input" />
-          </div>
-        </div>
+        <label for="pdfTitle">Title</label>
+        <input id="pdfTitle" class="input" placeholder="Uploaded Script" />
+        <label for="pdfFile">PDF</label>
+        <input id="pdfFile" type="file" accept="application/pdf" class="input" />
         <div class="sp"></div>
         <button class="btn primary" id="pdfSend">Upload & Continue</button>
         <div id="pdfMsg"></div>
@@ -134,7 +128,7 @@ JANE: Ready?"></textarea>
     return h;
   };
 
-  // ====== TABS (one visible section at a time) ======
+  // ====== TABS ======
   const sections = {
     import:  document.getElementById("tab-import"),
     assign:  document.getElementById("tab-assign"),
@@ -149,9 +143,7 @@ JANE: Ready?"></textarea>
       t.classList.toggle("active", t.dataset.tab === name);
     });
   }
-  document.querySelectorAll(".tabs .tab").forEach(t=>{
-    t.addEventListener("click", ()=>showTab(t.dataset.tab));
-  });
+  document.querySelectorAll(".tabs .tab").forEach(t=>t.addEventListener("click", ()=>showTab(t.dataset.tab)));
   showTab("import"); // default
 
   // ====== Import pane toggles ======
@@ -208,16 +200,13 @@ JANE: Ready?"></textarea>
     const r = await fetch(`/debug/scenes?script_id=${encodeURIComponent(scriptId)}`, { headers:H(false) });
     if (!r.ok) return setMsg("pasteMsg",`Scenes failed (${r.status})`);
     const j = await r.json(); scenes = j.scenes || [];
-    // Unique speaker names
     const names=[]; for (const sc of scenes) for (const ln of (sc.lines||[])) names.push(ln.speaker);
     speakers = uniq(names);
-    // Pills
     const pillText = `${scenes.length} ${scenes.length===1?'scene':'scenes'}`;
     document.getElementById("scenePill").textContent = pillText;
     document.getElementById("scenePill").hidden = false;
     document.getElementById("assignPill").textContent = pillText;
     document.getElementById("assignPill").hidden = false;
-    // Assign controls
     populateAssign();
   }
 
