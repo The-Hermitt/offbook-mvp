@@ -3,7 +3,7 @@
 
 ---
 
-## 0) What we’re building (unchanged)
+## 0) What we’re building
 OffBook is a script rehearsal toolkit where actors can:
 - Import scripts (paste text or PDF; image-PDFs auto-OCR on the server)
 - Assign AI voices to partner roles
