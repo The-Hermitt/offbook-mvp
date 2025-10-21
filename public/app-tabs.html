@@ -56,7 +56,7 @@
     .sr-only{position:absolute;left:-9999px}
   </style>
 
-  <!-- pdf.js + Tesseract for automatic client fallback -->
+  <!-- pdf.js + Tesseract for automatic, silent client fallback (only if needed) -->
   <script src="https://unpkg.com/pdfjs-dist@4.6.82/build/pdf.min.js"></script>
   <script> if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://unpkg.com/pdfjs-dist@4.6.82/build/pdf.worker.min.js'; </script>
   <script src="https://unpkg.com/tesseract.js@5.0.4/dist/tesseract.min.js"></script>
@@ -71,7 +71,7 @@
           <h2 style="margin:0;font-size:18px">Import</h2>
           <span class="pill">Paste or PDF</span>
         </div>
-        <p class="hint mt8">Paste plain text (most reliable) or upload a PDF. We’ll handle scanned PDFs automatically.</p>
+        <p class="hint mt8">Paste plain text (most reliable) or upload a PDF. We’ll handle scans automatically.</p>
 
         <div class="inner-tabs mt12">
           <div id="itab-paste" class="inner-tab active">Paste Script Text</div>
@@ -176,7 +176,6 @@ JANE (whispering): Ready?"></textarea>
     async function jget(path){ const r = await fetch(path,{headers:hdrs(false)}); if(!r.ok) throw new Error(await r.text()); return r.json(); }
 
     const VOICES = [{id:'alloy',label:'Alloy'},{id:'amber',label:'Amber'},{id:'nova',label:'Nova'},{id:'verse',label:'Verse'}];
-
     let state = { script_id:null, scenes:[], roles:[], iam:'', voice_map:{} };
 
     // Tabs
@@ -193,7 +192,7 @@ JANE (whispering): Ready?"></textarea>
       try{ const up = await jpost('/debug/upload_script_text',{title,text}); state.script_id=up.script_id; await loadScenes(); showScreen('assign'); buildAssign(); toast('Script imported'); }catch(e){ $('#paste-error').textContent='Upload failed. Try again.'; }
     });
 
-    // PDF flow with automatic OCR fallback
+    // PDF flow with automatic silent OCR fallback (only if needed)
     $('#btn-pdf-upload').addEventListener('click', async ()=>{
       const f = $('#pdf-file').files[0]; const title = $('#pdf-title').value.trim() || (f?f.name.replace(/\.pdf$/i,''):'Uploaded Script');
       $('#pdf-error').textContent=''; if(!f){ $('#pdf-error').textContent='Choose a PDF first.'; return; }
@@ -202,9 +201,19 @@ JANE (whispering): Ready?"></textarea>
         const fd = new FormData(); fd.append('title',title); fd.append('pdf',f);
         const res = await fetch('/debug/upload_script_upload',{method:'POST', headers:SHARED_SECRET?{'X-Shared-Secret':SHARED_SECRET}:undefined, body:fd});
         if(!res.ok) throw new Error(await res.text());
-        const up = await res.json(); state.script_id = up.script_id;
+        const up = await res.json();
+
+        // If server signals scan, do silent OCR
+        if (up && up.scanned === true) {
+          await runClientOCRAndReupload(f, title);
+          return;
+        }
+
+        // Otherwise assume we have a script_id and proceed
+        state.script_id = up.script_id;
         await loadScenes();
-        // If no roles found → likely scan → automatic client OCR
+
+        // If scenes contain no roles, this is likely a scan -> OCR and reupload automatically
         if (state.roles.length === 0) {
           await runClientOCRAndReupload(f, title);
         } else {
@@ -218,13 +227,13 @@ JANE (whispering): Ready?"></textarea>
 
     async function runClientOCRAndReupload(file, title){
       try{
-        toast('This looks like a scanned PDF — extracting text…');
+        toast('Extracting text…');
         const text = await ocrPdfFirstPages(file, 3);
         if (!text || text.trim().length < 10) throw new Error('No text detected');
-        const up = await jpost('/debug/upload_script_text', { title: title + ' (OCR)', text });
+        const up = await jpost('/debug/upload_script_text', { title: title + ' (extracted)', text });
         state.script_id = up.script_id;
         await loadScenes();
-        showScreen('assign'); buildAssign(); toast('Imported via automatic text extraction');
+        showScreen('assign'); buildAssign(); toast('Imported');
       }catch(e){
         console.error(e);
         $('#pdf-error').textContent = 'Could not extract text. Try pasting the script.';
