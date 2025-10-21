@@ -1,3 +1,4 @@
+// src/http-routes.ts
 import type { Express, Request, Response, NextFunction } from "express";
 import express from "express";
 import multer from "multer";
@@ -13,12 +14,12 @@ function secretGuard(req: Request, res: Response, next: NextFunction) {
   if (!required) return next();
   const provided = req.header("X-Shared-Secret");
   if (provided && provided === required) return next();
-  return res.status(401).json({ error: "unauthorized" });
+  // Don’t reveal existence of debug routes when secret is wrong/absent:
+  return res.status(404).send("Not Found");
 }
 
 // -------------------------------------------------------------
 // Minimal in-memory state for MVP debug harness
-// (OK on Render Free; renders are ephemeral anyway)
 // -------------------------------------------------------------
 type SceneLine = { speaker: string; text: string };
 type Scene = { id: string; title: string; lines: SceneLine[] };
@@ -36,7 +37,7 @@ if (!fs.existsSync(ASSETS_DIR)) fs.mkdirSync(ASSETS_DIR, { recursive: true });
 
 // -------------------------------------------------------------
 // Simple parser (MVP): skip INT./EXT./SCENE, ALL-CAPS actions,
-// lines that are only parentheticals, and headers/footers-ish.
+// parentheticals-only lines, and headers/footers-ish.
 // Detect NAME: Dialogue
 // -------------------------------------------------------------
 function parseScenesFromText(text: string): Scene[] {
@@ -44,10 +45,13 @@ function parseScenesFromText(text: string): Scene[] {
 
   const isSceneHeading = (s: string) => /^\s*(INT\.|EXT\.|SCENE)/i.test(s.trim());
   const isAllCapsAction = (s: string) =>
-    /^[A-Z0-9 ,.'"?!\-:;()]+$/.test(s.trim()) && s.trim() === s.trim().toUpperCase() && s.trim().length > 3;
+    /^[A-Z0-9 ,.'"?!\-:;()]+$/.test(s.trim()) &&
+    s.trim() === s.trim().toUpperCase() &&
+    s.trim().length > 3;
   const isLikelyHeaderFooter = (s: string) => /(page \d+|actors access|http|https|www\.)/i.test(s);
   const isOnlyParen = (s: string) => /^\s*\([^)]*\)\s*$/.test(s);
-  const speakerLine = (s: string) => s.match(/^\s*([A-Z][A-Z0-9 _&'-]{1,30})(?:\s*\([^)]*\))?\s*:\s*(.+)$/);
+  const speakerLine = (s: string) =>
+    s.match(/^\s*([A-Z][A-Z0-9 _&'-]{1,30})(?:\s*\([^)]*\))?\s*:\s*(.+)$/);
 
   const sceneId = crypto.randomUUID();
   const scene: Scene = { id: sceneId, title: "Scene 1", lines: [] };
@@ -64,9 +68,7 @@ function parseScenesFromText(text: string): Scene[] {
     if (m) {
       const speaker = m[1].trim();
       const text = m[2].trim();
-      if (speaker && text) {
-        scene.lines.push({ speaker, text });
-      }
+      if (speaker && text) scene.lines.push({ speaker, text });
     }
   }
 
@@ -74,27 +76,34 @@ function parseScenesFromText(text: string): Scene[] {
 }
 
 // -------------------------------------------------------------
-// Tiny placeholder MP3 (1 second of silence) so smoke test passes
-// Valid MP3 header; size is tiny to keep memory low.
+// Tiny placeholder MP3 so smoke test passes
+// (Writes an empty file or short payload; enough to stream.)
 // -------------------------------------------------------------
-const SILENT_MP3_BASE64 =
-  "SUQzAwAAAAAAFlRFTkMAAAABAAAADQAAABJhdWRpby9tcDMtYmxhbmsAAAAA//uQZAAAAAD/2wBDAAcHBwgHBwkJCQwLCQwNDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDf/..." +
-// keep payload short — this is a stub; we only care that a file exists.
-  "";
-
 function writeSilentMp3(renderId: string): string {
   const safeId = renderId.replace(/[^a-zA-Z0-9_-]/g, "_");
   const file = path.join(ASSETS_DIR, `${safeId}.mp3`);
-  // If the base64 string is empty (trimmed), just create an empty mp3-ish file
-  const buf = SILENT_MP3_BASE64.length > 50 ? Buffer.from(SILENT_MP3_BASE64, "base64") : Buffer.from([]);
-  fs.writeFileSync(file, buf);
+  if (!fs.existsSync(file)) fs.writeFileSync(file, Buffer.from([]));
   return file;
 }
 
 // -------------------------------------------------------------
-// Upload handler for PDFs (we accept but parse naively here)
+// Upload handler for PDFs (naive parse for MVP debug harness)
 // -------------------------------------------------------------
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 },
+});
+
+// -------------------------------------------------------------
+// Helper: build absolute base URL
+// -------------------------------------------------------------
+function baseUrlFrom(req: Request): string {
+  const env = process.env.BASE_URL?.trim();
+  if (env) return env.replace(/\/$/, "");
+  const proto = (req.headers["x-forwarded-proto"] as string) || req.protocol || "https";
+  const host = req.headers["x-forwarded-host"] || req.get("host");
+  return `${proto}://${host}`;
+}
 
 // -------------------------------------------------------------
 // Public API initializer
@@ -124,13 +133,8 @@ export function initHttpRoutes(app: Express) {
     const title = String(req.body?.title || "Untitled");
     const id = crypto.randomUUID();
 
-    // Minimal fallback parsing: treat extracted text as raw if possible, else empty
     let extracted = "";
-    if (req.file && req.file.buffer) {
-      // NOTE: Proper PDF parsing lives in project libs; for MVP here we fallback to binary->string
-      // This is acceptable for the debug harness and avoids heavy dependencies.
-      extracted = req.file.buffer.toString("utf8");
-    }
+    if (req.file?.buffer) extracted = req.file.buffer.toString("utf8");
     const scenes = parseScenesFromText(extracted);
     const script: Script = { id, title, text: extracted, scenes };
     scripts.set(id, script);
@@ -146,8 +150,7 @@ export function initHttpRoutes(app: Express) {
     res.json({ script_id: script.id, scenes: script.scenes });
   });
 
-  // --- POST /debug/set_voice
-  // {script_id, voice_map:{CHAR:VOICE}}
+  // --- POST /debug/set_voice  {script_id, voice_map:{CHAR:VOICE}}
   debug.post("/set_voice", (req: Request, res: Response) => {
     const { script_id, voice_map } = req.body || {};
     if (!script_id || !scripts.has(script_id)) return res.status(404).json({ error: "script not found" });
@@ -158,8 +161,7 @@ export function initHttpRoutes(app: Express) {
     res.json({ ok: true });
   });
 
-  // --- POST /debug/render
-  // {script_id, scene_id, role, pace}
+  // --- POST /debug/render  {script_id, scene_id, role, pace}
   debug.post("/render", (req: Request, res: Response) => {
     const { script_id, scene_id, role } = req.body || {};
     if (!script_id || !scene_id || !role) return res.status(400).json({ error: "script_id, scene_id, role required" });
@@ -168,7 +170,6 @@ export function initHttpRoutes(app: Express) {
     const renderId = crypto.randomUUID();
     renders.set(renderId, { status: "queued" });
 
-    // Minimal immediate-completion path using placeholder MP3
     try {
       renders.set(renderId, { status: "working" });
       const file = writeSilentMp3(renderId);
@@ -187,8 +188,9 @@ export function initHttpRoutes(app: Express) {
     const job = renders.get(rid)!;
     const payload: any = { status: job.status };
     if (job.status === "complete" && job.file) {
-      const baseUrl = process.env.BASE_URL || ""; // optional
-      payload.download_url = `${baseUrl}/api/assets/${path.basename(job.file, ".mp3")}`;
+      const base = baseUrlFrom(req);
+      const id = path.basename(job.file, ".mp3");
+      payload.download_url = `${base}/api/assets/${id}`;
     }
     res.json(payload);
   });
