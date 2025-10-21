@@ -1,94 +1,49 @@
-// @ts-nocheck
-// src/mcp-server.ts
-//
-// HTTP MCP endpoint that proxies to the same REST debug routes.
-// POST /mcp { tool, args } -> { ok, result|error }
-//
-// NOTE: Node 20+ has global fetch, so no node-fetch import needed.
+import express from "express";
+import path from "path";
+import cors from "cors";
+import morgan from "morgan";
+import { fileURLToPath } from "url";
+import { initHttpRoutes } from "./http-routes";
 
-import express from 'express';
-import { z } from 'zod';
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
-// ---------- Validation ----------
-const UploadSchema = z.object({
-  pdf_url: z.string().url(),
-  title: z.string().min(1).max(200),
+const app = express();
+
+// --- Core middleware
+app.use(cors());
+app.use(express.json({ limit: "2mb" }));
+app.use(express.urlencoded({ extended: true }));
+app.use(morgan("tiny"));
+
+// --- Static (UI)
+const publicDir = path.join(__dirname, "..", "public");
+app.use(express.static(publicDir));
+
+// --- Health endpoints
+app.get("/health", (_req, res) => {
+  res.json({ ok: true });
 });
-const ScenesSchema = z.object({ script_id: z.string().min(1) });
-const NonEmptyRecord = <T extends z.ZodTypeAny>(schema: T) =>
-  z.record(schema).refine((obj) => Object.keys(obj).length > 0, {
-    message: 'voice_map must have at least one entry',
-  });
-const SetVoiceSchema = z.object({
-  script_id: z.string().min(1),
-  voice_map: NonEmptyRecord(z.string().min(1)),
+
+app.get("/health/tts", (_req, res) => {
+  const hasKey = !!process.env.OPENAI_API_KEY;
+  res.json({ provider: "openai", has_key: hasKey });
 });
-const RenderSchema = z.object({
-  script_id: z.string().min(1),
-  scene_id: z.string().min(1),
-  role: z.string().min(1),
-  pace: z.enum(['slow', 'normal', 'fast']).default('normal'),
+
+// --- App / Debug / API routes
+initHttpRoutes(app);
+
+// --- 404 fallback for non-static, non-API requests
+app.use((req, res, _next) => {
+  if (req.path.startsWith("/api") || req.path.startsWith("/debug")) {
+    return res.status(404).send("Not Found");
+  }
+  // serve UI index if someone hits unknown paths in public
+  res.sendFile(path.join(publicDir, "app-tabs.html"));
 });
-const StatusSchema = z.object({ render_id: z.string().min(1) });
 
-// ---------- Router ----------
-export function createMcpServer() {
-  const router = express.Router();
-
-  router.post('/', express.json({ limit: '2mb' }), async (req, res) => {
-    try {
-      const { tool, args } = req.body || {};
-      if (!tool || typeof tool !== 'string') {
-        return res.status(400).json({ ok: false, error: 'missing tool' });
-      }
-
-      const PORT = process.env.PORT || '3010';
-      const BASE = `http://127.0.0.1:${PORT}/debug`;
-
-      // optional secret passthrough
-      const secret = req.get('X-Shared-Secret');
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-      if (secret) headers['X-Shared-Secret'] = secret;
-
-      switch (tool) {
-        case 'upload_script': {
-          const data = UploadSchema.parse(args || {});
-          const r = await fetch(`${BASE}/upload_script`, { method: 'POST', headers, body: JSON.stringify(data) });
-          return res.json({ ok: true, result: await r.json() });
-        }
-        case 'list_scenes': {
-          const { script_id } = ScenesSchema.parse(args || {});
-          const q = new URLSearchParams({ script_id }).toString();
-          const r = await fetch(`${BASE}/scenes?${q}`, { headers });
-          return res.json({ ok: true, result: await r.json() });
-        }
-        case 'set_voice': {
-          const data = SetVoiceSchema.parse(args || {});
-          const r = await fetch(`${BASE}/set_voice`, { method: 'POST', headers, body: JSON.stringify(data) });
-          return res.json({ ok: true, result: await r.json() });
-        }
-        case 'render_reader': {
-          const data = RenderSchema.parse(args || {});
-          const r = await fetch(`${BASE}/render`, { method: 'POST', headers, body: JSON.stringify(data) });
-          return res.json({ ok: true, result: await r.json() });
-        }
-        case 'render_status': {
-          const { render_id } = StatusSchema.parse(args || {});
-          const q = new URLSearchParams({ render_id }).toString();
-          const r = await fetch(`${BASE}/render_status?${q}`, { headers });
-          return res.json({ ok: true, result: await r.json() });
-        }
-        default:
-          return res.status(400).json({ ok: false, error: `unknown tool: ${tool}` });
-      }
-    } catch (err: any) {
-      return res.status(400).json({ ok: false, error: err?.message || String(err) });
-    }
-  });
-
-  router.get('/tools', (_req, res) => {
-    res.json({ tools: ['upload_script', 'list_scenes', 'set_voice', 'render_reader', 'render_status'] });
-  });
-
-  return router;
-}
+const PORT = process.env.PORT ? Number(process.env.PORT) : 3000;
+app.listen(PORT, () => {
+  // eslint-disable-next-line no-console
+  console.log(`OffBook server listening on :${PORT}`);
+});
