@@ -1,3 +1,4 @@
+mkdir -p src && cp -f src/server.ts src/server.ts.bak 2>/dev/null || true
 cat > src/server.ts <<'EOF'
 // src/server.ts
 import express from "express";
@@ -25,22 +26,16 @@ const publicDir = path.join(__dirname, "..", "public");
 app.use(express.static(publicDir));
 
 // --- Health endpoints
-app.get("/health", (_req, res) => {
-  res.json({ ok: true });
-});
-
+app.get("/health", (_req, res) => res.json({ ok: true }));
 app.get("/health/tts", (_req, res) => {
   const hasKey = !!process.env.OPENAI_API_KEY;
   res.json({ provider: hasKey ? "openai" : "stub", has_key: hasKey });
 });
 
 // --- App / Debug / API routes
-// (initHttpRoutes internally mounts /debug and /api regardless of NODE_ENV;
-//   if SHARED_SECRET is set, /debug requires X-Shared-Secret)
 initHttpRoutes(app);
 
 // =============== MCP SHIM ===============
-/** Tools the connector can call */
 type ToolCall =
   | { tool: "upload_script"; args: { title: string; text: string } }
   | { tool: "list_scenes"; args: { script_id: string } }
@@ -53,14 +48,12 @@ const HOST = process.env.HOST || "0.0.0.0";
 const FORWARD_BASE = process.env.MCP_FORWARD_BASE || `http://127.0.0.1:${PORT}`;
 const SHARED_SECRET = process.env.SHARED_SECRET || "";
 
-/** Headers for forwarding to /debug/* (we only forward the secret there) */
 function jsonHeaders() {
   const h: Record<string, string> = { "Content-Type": "application/json" };
   if (SHARED_SECRET) h["X-Shared-Secret"] = SHARED_SECRET;
   return h;
 }
 
-/** Descriptor the ChatGPT connector fetches */
 app.get("/mcp", (_req, res) => {
   console.log("[mcp] descriptor served");
   res.json({
@@ -71,7 +64,7 @@ app.get("/mcp", (_req, res) => {
     tools: [
       {
         name: "upload_script",
-        description: "Upload script as plain text. Returns { script_id, scene_count }. ",
+        description: "Upload script as plain text. Returns { script_id, scene_count }.",
         input_schema: {
           type: "object",
           required: ["title", "text"],
@@ -126,7 +119,6 @@ app.get("/mcp", (_req, res) => {
   });
 });
 
-/** Tool invoker → forwards to existing /debug/* endpoints */
 app.post("/mcp/call", async (req, res) => {
   const body = req.body as ToolCall;
   try {
@@ -187,22 +179,18 @@ app.post("/mcp/call", async (req, res) => {
 });
 // ============= END MCP SHIM =============
 
-// --- Default UI route
+// Default UI route
 app.get("/", (_req, res) => {
   res.sendFile(path.join(publicDir, "app-tabs.html"));
 });
 
-// --- Error safety nets (avoid process crash → 502)
-process.on("uncaughtException", (err) => {
-  console.error("[fatal] uncaughtException:", err);
-});
-process.on("unhandledRejection", (reason) => {
-  console.error("[fatal] unhandledRejection:", reason);
-});
+// Error safety nets
+process.on("uncaughtException", (err) => console.error("[fatal] uncaughtException:", err));
+process.on("unhandledRejection", (reason) => console.error("[fatal] unhandledRejection:", reason));
 
-// --- Start server
-app.listen(PORT, HOST, () => {
-  console.log(`[offbook] listening on http://${HOST}:${PORT}`);
+// Start server on 3010 / 0.0.0.0
+app.listen(Number(process.env.PORT || 3010), process.env.HOST || "0.0.0.0", () => {
+  console.log(`[offbook] listening on http://${process.env.HOST || "0.0.0.0"}:${Number(process.env.PORT || 3010)}`);
 });
 
 export default app;
