@@ -1,3 +1,4 @@
+cat > src/server.ts <<'EOF'
 // src/server.ts
 import express from "express";
 import path from "path";
@@ -70,7 +71,7 @@ app.get("/mcp", (_req, res) => {
     tools: [
       {
         name: "upload_script",
-        description: "Upload script as plain text. Returns { script_id, scene_count }.",
+        description: "Upload script as plain text. Returns { script_id, scene_count }. ",
         input_schema: {
           type: "object",
           required: ["title", "text"],
@@ -205,3 +206,4 @@ app.listen(PORT, HOST, () => {
 });
 
 export default app;
+EOF
