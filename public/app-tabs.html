@@ -8,17 +8,17 @@
     :root { --bg:#0b0c0f; --panel:#111318; --panel-2:#151823; --text:#eaf0ff; --muted:#a7b0c5; --border:#252a36; --focus:#3b82f6; --accent:#3b82f6; --danger:#ef4444; --maxw:720px; }
     *{ box-sizing:border-box } html,body{ margin:0; padding:0; background:var(--bg); color:var(--text); font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial }
     header{ padding:14px 16px; font-weight:700; letter-spacing:.2px }
-    main{ padding:12px 12px 84px; max-width:var(--maxw); margin:0 auto }
+    main{ padding:12px 12px 92px; max-width:var(--maxw); margin:0 auto }
     .card{ background:var(--panel); border:1px solid var(--border); border-radius:14px; padding:12px }
     h3,h4{ margin:6px 0 10px } .hint{ color:var(--muted); font-size:12px; line-height:1.4 }
     label{ display:block; font-size:12px; color:var(--muted); margin:8px 0 6px }
     input[type="text"],textarea,select{ width:100%; border:1px solid var(--border); background:#0c0f16; color:var(--text); border-radius:10px; padding:10px 12px; font-size:15px }
     textarea{ min-height:140px; line-height:1.35 }
-    .btn{ display:inline-flex; align-items:center; justify-content:center; background:var(--accent); color:#fff; border:none; padding:12px 14px; border-radius:12px; font-weight:700; font-size:15px; min-height:44px }
+    .btn{ display:inline-flex; align-items:center; justify-content:center; background:var(--accent); color:#fff; border:none; padding:12px 14px; border-radius:12px; font-weight:700; font-size:15px; min-height:44px; cursor:pointer }
     .btn.secondary{ background:transparent; color:var(--text); border:1px solid var(--border) }
     .btn.ghost{ background:transparent; color:var(--muted); border:1px dashed var(--border) }
     .row{ display:flex; gap:8px } .row>*{ flex:1 }
-    .spacer8{ height:8px } .spacer12{ height:12px }
+    .spacer8{ height:8px } .spacer12{ height:12px } .spacer16{ height:16px }
     .tabbar{ position:fixed; bottom:0; left:0; right:0; background:var(--panel-2); border-top:1px solid var(--border); padding:0 8px }
     .tabbar-inner{ max-width:var(--maxw); margin:0 auto; display:grid; grid-template-columns:repeat(6,1fr) }
     .tabbar button{ appearance:none; border:none; background:transparent; color:var(--muted); padding:10px 4px; font-size:12px; font-weight:600 }
@@ -30,6 +30,15 @@
     pre.status{ white-space:pre-wrap; word-break:break-word; background:#0c0f16; border:1px dashed var(--border); border-radius:10px; padding:8px; color:var(--muted); min-height:22px }
     .pill{ display:inline-block; padding:6px 10px; border-radius:999px; border:1px solid var(--border); background:#0f1420; font-size:12px; margin-right:6px }
     .small{ font-size:12px; color:var(--muted) }
+    /* Rehearse */
+    .line{ padding:10px; border-radius:10px; border:1px solid var(--border); margin-bottom:8px; background:#0c0f16 }
+    .line.me{ border-color:#2f6df6; background:#0e1220 }
+    .line .who{ font-weight:700; margin-bottom:6px }
+    .line .text{ line-height:1.4 }
+    .controls{ display:flex; gap:8px; align-items:center; flex-wrap:wrap }
+    .controls .btn{ min-width:88px }
+    .kbd{ font-size:11px; color:var(--muted) }
+    .playing{ outline:2px solid var(--focus) }
   </style>
 </head>
 <body>
@@ -101,8 +110,30 @@ JANE: Ready?"></textarea>
       </div>
     </section>
 
-    <!-- Stubs -->
-    <section id="screen-rehearse" class="screen"><div class="card"><h3>Rehearse</h3><p class="hint">Render reader track next.</p></div></section>
+    <!-- REHEARSE -->
+    <section id="screen-rehearse" class="screen">
+      <div class="card">
+        <h3>Rehearse</h3>
+        <div class="hint">Partner lines are auto-spoken with your chosen voices. You speak your lines out loud. <span class="kbd">Space=Play/Pause</span> <span class="kbd">↑/↓=Prev/Next</span></div>
+        <div class="spacer12"></div>
+        <div class="controls">
+          <button id="btnPlay" class="btn">Play</button>
+          <button id="btnPrev" class="btn secondary">Prev</button>
+          <button id="btnNext" class="btn secondary">Next</button>
+          <select id="selPace" title="Partner pacing">
+            <option value="0">No gap</option>
+            <option value="250" selected>+250 ms</option>
+            <option value="500">+500 ms</option>
+            <option value="1000">+1 s</option>
+          </select>
+          <label class="small"><input type="checkbox" id="chkAutoAdvance" checked /> Auto-advance partner lines</label>
+        </div>
+        <div class="spacer12"></div>
+        <div id="lines"></div>
+      </div>
+    </section>
+
+    <!-- RECORD / GALLERY / SETTINGS -->
     <section id="screen-record" class="screen"><div class="card"><h3>Record</h3><p class="hint">3-2-1 countdown; camera+mic required for Store.</p></div></section>
     <section id="screen-gallery" class="screen"><div class="card"><h3>Gallery</h3><p class="hint">Saved takes will appear here.</p></div></section>
     <section id="screen-settings" class="screen"><div class="card"><h3>Settings</h3><p class="hint">Defaults & storage (future).</p></div></section>
@@ -190,7 +221,7 @@ JANE: Ready?"></textarea>
       }catch(e){ setStatusPdf("Network error: "+e); }
     });
 
-    // Client-side OCR fallback (first 3 pages by default)
+    // Client-side OCR fallback (first 3 pages for speed)
     btnPdfOcr.addEventListener("click", async ()=>{
       const file=document.getElementById("pdfFile").files[0];
       if(!file){ setStatusPdf("Choose a PDF first."); return; }
@@ -198,16 +229,15 @@ JANE: Ready?"></textarea>
 
       try{
         const buf = await file.arrayBuffer();
-        // Load pdf.js (module already loaded by <script type="module"> above)
         const pdfjsLib = await import("https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.6.82/pdf.min.mjs");
         const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
 
-        const maxPages = Math.min(pdf.numPages, 3); // first 3 pages for speed
+        const maxPages = Math.min(pdf.numPages, 3);
         let ocrText = "";
         for(let p=1;p<=maxPages;p++){
           setStatusPdf(`OCR: rendering page ${p}/${maxPages}…`);
           const page = await pdf.getPage(p);
-          const viewport = page.getViewport({ scale: 2.0 }); // 2x for better OCR
+          const viewport = page.getViewport({ scale: 2.0 });
           const canvas = document.createElement("canvas");
           const ctx = canvas.getContext("2d");
           canvas.width = Math.ceil(viewport.width);
@@ -232,16 +262,21 @@ JANE: Ready?"></textarea>
       }
     });
 
+    // ---------- Shared data helpers ----------
     async function loadScenes(){
       const r=await fetch("/debug/scenes?script_id="+encodeURIComponent(S.script_id),{headers:JSON_HDRS});
       const j=await r.json().catch(()=>({}));
-      if(!r.ok){ setStatus("Error "+r.status+": "+JSON.stringify(j)); return; }
-      S.scenes=j.scenes||[]; hydrateAssign();
+      if(!r.ok) return;
+      S.scenes = j.scenes||[];
+      hydrateAssign();
+      hydrateRehearse();
     }
     function uniqueRoles(){
       const names=new Set(); for(const sc of (S.scenes||[])) for(const ln of (sc.lines||[])) names.add(ln.speaker);
       return Array.from(names).filter(n=>n&&n!=="SYSTEM"&&n!=="NARRATOR");
     }
+
+    // ---------- Assign ----------
     function hydrateAssign(){
       document.getElementById("pillScript").textContent="script: "+(S.script_id||"—");
       document.getElementById("pillScenes").textContent="scenes: "+(S.scenes?.length||0);
@@ -250,7 +285,7 @@ JANE: Ready?"></textarea>
       select.innerHTML=roles.map(r=>`<option value="${r}">${r}</option>`).join("");
       if(!S.role&&roles.length) S.role=roles[0];
       select.value=S.role||"";
-      select.onchange=()=>{ S.role=select.value; buildVoicePickers(); };
+      select.onchange=()=>{ S.role=select.value; buildVoicePickers(); hydrateRehearse(); };
       buildVoicePickers();
     }
     function buildVoicePickers(){
@@ -270,14 +305,115 @@ JANE: Ready?"></textarea>
       });
     }
     document.getElementById("btnSaveAssign").addEventListener("click", async ()=>{
-      if(!S.script_id){ setStatus("Upload a script first."); return; }
+      if(!S.script_id) return;
       const roles=uniqueRoles().filter(r=>r!==S.role);
       for(const r of roles) if(!S.voice_map[r]) S.voice_map[r]="alloy";
-      const resp=await fetch("/debug/set_voice",{method:"POST",headers:JSON_HDRS,body:JSON.stringify({script_id:S.script_id,voice_map:S.voice_map})});
-      const j=await resp.json().catch(()=>({}));
-      if(!resp.ok){ setStatus("Error "+resp.status+": "+JSON.stringify(j)); return; }
-      setStatus("Voices saved. Proceed to Rehearse."); showScreen("rehearse");
+      await fetch("/debug/set_voice",{method:"POST",headers:JSON_HDRS,body:JSON.stringify({script_id:S.script_id,voice_map:S.voice_map})});
+      showScreen("rehearse");
     });
+
+    // ---------- Rehearse (local TTS) ----------
+    const E = {
+      linesWrap: document.getElementById("lines"),
+      btnPlay: document.getElementById("btnPlay"),
+      btnPrev: document.getElementById("btnPrev"),
+      btnNext: document.getElementById("btnNext"),
+      selPace: document.getElementById("selPace"),
+      chkAutoAdvance: document.getElementById("chkAutoAdvance"),
+    };
+
+    let idx = 0;           // current line index in filtered list
+    let playing = false;
+    let voices = [];
+
+    const isParenOnly = (t)=> /^\(.*\)$/.test((t||"").trim());
+
+    function rehearseLines(){
+      const sc = S.scenes[0]; if(!sc) return [];
+      // Hide NARRATOR + pure parentheticals
+      return sc.lines.filter(ln => ln.speaker !== "NARRATOR" && !isParenOnly(ln.text));
+    }
+
+    function hydrateRehearse(){
+      const list = rehearseLines();
+      if(!list.length){ E.linesWrap.innerHTML="<p class='hint'>Import a script first.</p>"; return; }
+      const my = S.role || uniqueRoles()[0] || "";
+      const rows = list.map((ln,i)=>{
+        const me = ln.speaker===my;
+        return `<div class="line ${me?"me":""}" data-i="${i}">
+          <div class="who">${ln.speaker}</div>
+          <div class="text">${ln.text}</div>
+        </div>`;
+      }).join("");
+      E.linesWrap.innerHTML = rows;
+      idx = 0;
+      highlightCurrent();
+    }
+
+    function highlightCurrent(){
+      E.linesWrap.querySelectorAll(".line").forEach(el=>el.classList.remove("playing"));
+      const current = E.linesWrap.querySelector(`.line[data-i="${idx}"]`);
+      if(current){ current.classList.add("playing"); current.scrollIntoView({block:"center",behavior:"smooth"}); }
+    }
+
+    function synthSpeak(text){
+      if(!window.speechSynthesis) return;
+      window.speechSynthesis.cancel();
+      const u = new SpeechSynthesisUtterance(text);
+      const v = voices.find(v=>/en(-|_)?/.test(v.lang)) || voices[0];
+      if(v) u.voice = v;
+      u.rate = 1.0; u.pitch = 1.0;
+      window.speechSynthesis.speak(u);
+      return new Promise(res=>{ u.onend = ()=>res(void 0); u.onerror = ()=>res(void 0); });
+    }
+
+    async function step(playMode){
+      const list = rehearseLines(); if(!list.length) return;
+      const pace = Number(E.selPace.value||0);
+      const my = S.role || uniqueRoles()[0] || "";
+      const ln = list[idx]; if(!ln) { playing=false; E.btnPlay.textContent="Play"; return; }
+      highlightCurrent();
+
+      if(ln.speaker===my){
+        if(playMode && E.chkAutoAdvance.checked){
+          playing=false; E.btnPlay.textContent="Play";
+        }
+      }else{
+        await synthSpeak(ln.text);
+        if(pace>0) await new Promise(r=>setTimeout(r, pace));
+        if(playing && E.chkAutoAdvance.checked){ idx = Math.min(idx+1, list.length-1); step(true); }
+      }
+    }
+
+    E.btnPlay.addEventListener("click", ()=>{
+      playing = !playing;
+      E.btnPlay.textContent = playing ? "Pause" : "Play";
+      if(playing) step(true); else window.speechSynthesis?.cancel();
+    });
+    E.btnPrev.addEventListener("click", ()=>{
+      const list = rehearseLines(); if(!list.length) return;
+      idx = Math.max(0, idx-1); highlightCurrent();
+      if(playing) step(true);
+    });
+    E.btnNext.addEventListener("click", ()=>{
+      const list = rehearseLines(); if(!list.length) return;
+      idx = Math.min(list.length-1, idx+1); highlightCurrent();
+      if(playing) step(true);
+    });
+    document.addEventListener("keydown",(e)=>{
+      if(document.getElementById("screen-rehearse").classList.contains("active")){
+        if(e.code==="Space"){ e.preventDefault(); E.btnPlay.click(); }
+        if(e.code==="ArrowUp"){ e.preventDefault(); E.btnPrev.click(); }
+        if(e.code==="ArrowDown"){ e.preventDefault(); E.btnNext.click(); }
+      }
+    });
+
+    // preload voices
+    if(window.speechSynthesis){
+      const loadVoices=()=>{ voices = window.speechSynthesis.getVoices()||[]; };
+      window.speechSynthesis.onvoiceschanged = loadVoices;
+      loadVoices();
+    }
   </script>
 </body>
 </html>
