@@ -1,41 +1,41 @@
+// src/server.ts
 import express from "express";
-import path from "path";
-import cors from "cors";
+import path from "node:path";
 import morgan from "morgan";
-import { fileURLToPath } from "url";
-import { initHttpRoutes } from "./http-routes"; // <— no .js; tsx resolves this
+import { fileURLToPath } from "node:url";
+import { initMcpServer } from "./mcp-server.js";
+// If your repo already has http routes in a helper, keep them:
+import { initHttpRoutes } from "./http-routes.js"; // assumes it exists per project pack
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
+app.disable("x-powered-by");
+app.use(morgan("dev"));
+app.use(express.json({ limit: "5mb" }));
+app.use(express.urlencoded({ extended: true }));
 
-// Core middleware
-app.use(cors());
-app.use(express.json({ limit: "4mb" }));
-app.use(express.urlencoded({ extended: true, limit: "4mb" }));
-app.use(morgan("tiny"));
+// Health
+app.get("/health", (_req, res) => res.json({ ok: true }));
+app.get("/health/tts", (_req, res) =>
+  res.json({ provider: "openai", has_key: Boolean(process.env.OPENAI_API_KEY) })
+);
 
 // Static UI
-const publicDir = path.join(__dirname, "..", "public");
-app.use(express.static(publicDir));
+app.use(express.static(path.join(__dirname, "..", "public")));
 
-// Health endpoints
-app.get("/health", (_req, res) => res.json({ ok: true }));
-app.get("/health/tts", (_req, res) => {
-  res.json({ provider: "openai", has_key: !!process.env.OPENAI_API_KEY });
+// Existing debug/API routes (upload, scenes, set_voice, render, etc.)
+if (typeof initHttpRoutes === "function") {
+  initHttpRoutes(app);
+}
+
+// MCP
+initMcpServer(app);
+
+// Start
+const PORT = Number(process.env.PORT || 3010);
+const HOST = process.env.HOST || "0.0.0.0";
+app.listen(PORT, HOST, () => {
+  console.log(`[offbook] listening on http://${HOST}:${PORT}`);
 });
-
-// Attach API/Debug routes
-initHttpRoutes(app);
-
-// 404 for API/Debug only
-app.use((req, res, _next) => {
-  if (req.path.startsWith("/api") || req.path.startsWith("/debug")) return res.status(404).send("Not Found");
-  res.sendFile(path.join(publicDir, "app-tabs.html"));
-});
-
-const PORT = process.env.PORT ? Number(process.env.PORT) : 3000;
-app.listen(PORT, () => console.log(`OffBook listening on :${PORT}`));
-
-export default app;
