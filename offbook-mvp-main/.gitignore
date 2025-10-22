@@ -1,0 +1,16 @@
+# deps & builds
+node_modules/
+dist/
+
+# local env
+.env
+
+# generated assets
+assets/renders/
+assets/pdfs/
+
+# misc
+.DS_Store
+offbook.db
+data/
+

@@ -1,0 +1,398 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>OffBook — Rehearsal MVP</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin:0; }
+    header { padding:12px 16px; border-bottom:1px solid #eee; }
+    .tabs { position:fixed; bottom:0; left:0; right:0; border-top:1px solid #eee; display:flex; background:#fff; }
+    .tab-btn { flex:1; padding:12px; text-align:center; cursor:pointer; }
+    .tab-btn.active { font-weight:600; }
+    main { padding:16px; padding-bottom:72px; }
+    .panel { display:none; }
+    .panel.active { display:block; }
+    .row { display:flex; gap:8px; align-items:center; margin:8px 0; }
+    .role-row { display:flex; justify-content:space-between; align-items:center; padding:8px 0; border-bottom:1px dashed #eee; }
+    .btn { padding:8px 12px; border:1px solid #ccc; border-radius:6px; cursor:pointer; background:#fff; }
+    .btn[disabled]{ opacity:0.6; cursor:not-allowed; }
+    .danger { color:#b00020; }
+    .hint { color:#666; font-size:12px; }
+    .banner { background:#fff7e6; border:1px solid #ffe0a3; padding:8px 12px; border-radius:6px; margin:8px 0; }
+    label { font-weight:600; }
+    select, input[type="text"], textarea { width:100%; padding:8px; border:1px solid #ccc; border-radius:6px; }
+    textarea { min-height:120px; }
+  </style>
+</head>
+<body>
+  <header>
+    <strong>OffBook</strong> — Rehearsal MVP
+  </header>
+
+  <main>
+    <!-- Import -->
+    <section id="panel-import" class="panel active">
+      <h2>Import</h2>
+
+      <div class="banner hint" id="guard-msg" style="display:none"></div>
+
+      <h3>Paste Script Text</h3>
+      <form id="form-text">
+        <div class="row">
+          <input type="text" id="text-title" placeholder="Title (e.g., Sides)" required />
+        </div>
+        <div class="row">
+          <textarea id="text-body" placeholder="NAME: Dialogue" required></textarea>
+        </div>
+        <div class="row">
+          <button class="btn" id="btn-text">Upload Text</button>
+        </div>
+      </form>
+
+      <h3>Upload PDF</h3>
+      <form id="form-pdf">
+        <div class="row">
+          <input type="text" id="pdf-title" placeholder="Title" required />
+        </div>
+        <div class="row">
+          <input type="file" id="pdf-file" accept="application/pdf" required />
+        </div>
+        <div class="row">
+          <button class="btn" id="btn-pdf">Upload PDF</button>
+        </div>
+        <div class="hint">If the PDF is scanned/image-only, enable OCR on the server build when available.</div>
+      </form>
+
+      <div id="import-error" class="danger"></div>
+    </section>
+
+    <!-- Assign -->
+    <section id="panel-assign" class="panel">
+      <h2>Assign</h2>
+      <div class="row">
+        <label for="meRole">I am…</label>
+        <select id="meRole"></select>
+      </div>
+      <div id="roles-wrap"></div>
+      <div class="row">
+        <button class="btn" id="btn-assign-continue">Continue</button>
+      </div>
+      <div id="assign-error" class="danger"></div>
+    </section>
+
+    <!-- Rehearse (placeholder) -->
+    <section id="panel-rehearse" class="panel">
+      <h2>Rehearse</h2>
+      <p class="hint">Reader rendering happens here in the next step.</p>
+    </section>
+
+    <!-- Record / Gallery / Settings (placeholders) -->
+    <section id="panel-record" class="panel"><h2>Record</h2></section>
+    <section id="panel-gallery" class="panel"><h2>Gallery</h2></section>
+    <section id="panel-settings" class="panel"><h2>Settings</h2></section>
+  </main>
+
+  <nav class="tabs">
+    <div class="tab-btn active" data-tab="import">Import</div>
+    <div class="tab-btn" data-tab="assign">Assign</div>
+    <div class="tab-btn" data-tab="rehearse">Rehearse</div>
+    <div class="tab-btn" data-tab="record">Record</div>
+    <div class="tab-btn" data-tab="gallery">Gallery</div>
+    <div class="tab-btn" data-tab="settings">Settings</div>
+  </nav>
+
+<script>
+(function(){
+  // ---------- Config / helpers ----------
+  const qs = new URLSearchParams(location.search);
+  const secret = qs.get('secret') || '';
+  const baseUrl = ''; // same-origin; leave empty unless hosting API elsewhere
+
+  const VOICES = ["alloy","verse","aria","coral","sage"];
+
+  const AppState = {
+    scriptId: localStorage.getItem('offbook.scriptId') || null,
+    scenes: null,
+    roles: null,
+    meRole: null,
+    voiceMap: {} // role -> voice (for partner roles only)
+  };
+
+  function absolutePath(p){
+    if (!p.startsWith('/')) return '/' + p;
+    return p;
+  }
+
+  async function apiFetch(path, opts={}){
+    const url = baseUrl + absolutePath(path);
+    const headers = new Headers(opts.headers || {});
+    if (secret) headers.set('X-Shared-Secret', secret);
+
+    const isFormData = (opts.body && typeof FormData !== 'undefined' && opts.body instanceof FormData);
+    // Only set Content-Type for JSON payloads
+    if (!isFormData && opts.body && typeof opts.body === 'object' && !(opts.body instanceof Blob)) {
+      headers.set('Content-Type','application/json');
+      opts.body = JSON.stringify(opts.body);
+    }
+
+    const resp = await fetch(url, { method: opts.method || 'GET', headers, body: opts.body });
+    if (!resp.ok) {
+      const text = await resp.text().catch(()=>String(resp.status));
+      throw new Error(`HTTP ${resp.status} ${resp.statusText} — ${text}`);
+    }
+    // Try JSON, fallback text
+    const ct = resp.headers.get('content-type') || '';
+    if (ct.includes('application/json')) return resp.json();
+    return resp.text();
+  }
+
+  function showError(el, msg){
+    el.textContent = msg || '';
+  }
+
+  function setActiveTab(id){
+    document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.getElementById(`panel-${id}`).classList.add('active');
+    document.querySelector(`.tab-btn[data-tab="${id}"]`).classList.add('active');
+  }
+
+  function gotoTab(id){
+    // Guards
+    if (['assign','rehearse','record','gallery'].includes(id) && !AppState.scriptId) {
+      const guard = document.getElementById('guard-msg');
+      guard.style.display = 'block';
+      guard.textContent = 'Import a script first (paste text or upload PDF).';
+      setActiveTab('import');
+      return;
+    }
+    setActiveTab(id);
+    if (id === 'assign') renderAssign();
+  }
+
+  // Role normalization
+  function normalizeRole(name){
+    if (!name) return '';
+    let s = String(name);
+    s = s.replace(/\(.*?\)/g, '');     // strip parentheticals
+    s = s.replace(/\s+/g, ' ').trim(); // collapse spaces
+    s = s.toUpperCase();
+    // discard obvious non-speakers
+    if (/^(INT|EXT|SCENE)\b/.test(s)) return '';
+    if (/^[A-Z ]+$/.test(s) && s.length > 28) return ''; // long all-caps likely action
+    return s;
+  }
+
+  function rolesFromScenes(scenes){
+    const set = new Set();
+    for (const sc of (scenes||[])) {
+      for (const line of (sc.lines||[])) {
+        const n = normalizeRole(line.speaker);
+        if (n) set.add(n);
+      }
+    }
+    return Array.from(set);
+  }
+
+  function renderAssign(){
+    const meSel = document.getElementById('meRole');
+    const wrap = document.getElementById('roles-wrap');
+    const err = document.getElementById('assign-error');
+    showError(err,'');
+
+    // Populate "I am..." if needed
+    if (!AppState.roles || AppState.roles.length === 0) {
+      wrap.innerHTML = '<div class="banner">No roles detected. Try pasting as <strong>NAME: Dialogue</strong> or upload a clearer PDF.</div>';
+      return;
+    }
+
+    // Build options
+    meSel.innerHTML = '';
+    const placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.textContent = 'Select your role';
+    meSel.appendChild(placeholder);
+
+    for (const r of AppState.roles) {
+      const o = document.createElement('option');
+      o.value = r;
+      o.textContent = r;
+      meSel.appendChild(o);
+    }
+
+    // Preserve selection if present
+    if (AppState.meRole && AppState.roles.includes(AppState.meRole)) {
+      meSel.value = AppState.meRole;
+    }
+
+    // Render partner role voice rows
+    function drawRows(){
+      wrap.innerHTML = '';
+      const me = AppState.meRole || '';
+      const partners = AppState.roles.filter(r => r !== me);
+      if (me && partners.length === 0) {
+        wrap.innerHTML = '<div class="banner">Only one role found. Add another character to assign AI voices.</div>';
+        return;
+      }
+      for (const role of partners) {
+        const row = document.createElement('div');
+        row.className = 'role-row';
+
+        const label = document.createElement('div');
+        label.textContent = role;
+
+        const select = document.createElement('select');
+        select.className = 'voiceForRole';
+        select.dataset.role = role;
+
+        for (const v of VOICES) {
+          const opt = document.createElement('option');
+          opt.value = v;
+          opt.textContent = v;
+          select.appendChild(opt);
+        }
+        const chosen = AppState.voiceMap[role] || 'alloy';
+        select.value = chosen;
+        select.addEventListener('change', () => {
+          AppState.voiceMap[role] = select.value;
+        });
+
+        row.appendChild(label);
+        row.appendChild(select);
+        wrap.appendChild(row);
+      }
+
+      // Prune voiceMap keys that are now "me"
+      if (me && AppState.voiceMap[me]) delete AppState.voiceMap[me];
+    }
+
+    drawRows();
+
+    // Change handler triggers re-render
+    meSel.onchange = () => {
+      const chosen = normalizeRole(meSel.value);
+      AppState.meRole = chosen || null;
+      drawRows();
+    };
+  }
+
+  // ---------- Import: Text ----------
+  document.getElementById('form-text').addEventListener('submit', async (e)=>{
+    e.preventDefault();
+    const btn = document.getElementById('btn-text');
+    const err = document.getElementById('import-error');
+    showError(err,'');
+    btn.disabled = true;
+
+    try {
+      const title = (document.getElementById('text-title').value || '').trim();
+      const text  = (document.getElementById('text-body').value || '').trim();
+      const up = await apiFetch('/debug/upload_script_text', {
+        method:'POST',
+        body: { title, text }
+      });
+      const sid = up.script_id;
+      if (!sid) throw new Error('No script_id returned');
+      AppState.scriptId = sid;
+      localStorage.setItem('offbook.scriptId', sid);
+
+      const sc = await apiFetch(`/debug/scenes?script_id=${encodeURIComponent(sid)}`);
+      AppState.scenes = sc.scenes || [];
+      AppState.roles  = rolesFromScenes(AppState.scenes);
+      AppState.meRole = null;
+      AppState.voiceMap = {};
+      gotoTab('assign');
+    } catch(ex) {
+      showError(err, ex.message || String(ex));
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  // ---------- Import: PDF ----------
+  document.getElementById('form-pdf').addEventListener('submit', async (e)=>{
+    e.preventDefault();
+    const btn = document.getElementById('btn-pdf');
+    const err = document.getElementById('import-error');
+    showError(err,'');
+    btn.disabled = true;
+    try {
+      const file = document.getElementById('pdf-file').files[0];
+      const title = (document.getElementById('pdf-title').value || '').trim();
+      if (!file) throw new Error('Choose a PDF file.');
+      const fd = new FormData();
+      fd.append('pdf', file);
+      fd.append('title', title);
+
+      const up = await apiFetch('/debug/upload_script_upload', {
+        method:'POST',
+        body: fd
+      });
+      const sid = up.script_id;
+      if (!sid) throw new Error('No script_id returned');
+      AppState.scriptId = sid;
+      localStorage.setItem('offbook.scriptId', sid);
+
+      const sc = await apiFetch(`/debug/scenes?script_id=${encodeURIComponent(sid)}`);
+      AppState.scenes = sc.scenes || [];
+      AppState.roles  = rolesFromScenes(AppState.scenes);
+      AppState.meRole = null;
+      AppState.voiceMap = {};
+      gotoTab('assign');
+    } catch(ex) {
+      showError(err, ex.message || String(ex));
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  // ---------- Assign: Continue ----------
+  document.getElementById('btn-assign-continue').addEventListener('click', async ()=>{
+    const err = document.getElementById('assign-error');
+    showError(err,'');
+    if (!AppState.scriptId) return showError(err,'Missing script id.');
+    if (!AppState.roles || AppState.roles.length === 0) return showError(err,'No roles found.');
+    if (!AppState.meRole) return showError(err,'Select your role first.');
+
+    // Ensure we have voices for all partner roles
+    const partners = AppState.roles.filter(r => r !== AppState.meRole);
+    for (const r of partners) {
+      if (!AppState.voiceMap[r]) AppState.voiceMap[r] = 'alloy';
+    }
+
+    try {
+      await apiFetch('/debug/set_voice', {
+        method:'POST',
+        body: {
+          script_id: AppState.scriptId,
+          voice_map: AppState.voiceMap
+        }
+      });
+      gotoTab('rehearse');
+    } catch(ex) {
+      showError(err, ex.message || String(ex));
+    }
+  });
+
+  // ---------- Tabs ----------
+  document.querySelectorAll('.tab-btn').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      gotoTab(btn.dataset.tab);
+    });
+  });
+
+  // If a script is already present (from earlier), allow going straight to Assign
+  if (AppState.scriptId && (!AppState.roles || AppState.roles.length === 0)) {
+    // Try to refetch scenes to rebuild roles
+    apiFetch(`/debug/scenes?script_id=${encodeURIComponent(AppState.scriptId)}`)
+      .then(sc => {
+        AppState.scenes = sc.scenes || [];
+        AppState.roles  = rolesFromScenes(AppState.scenes);
+      })
+      .catch(()=>{ /* ignore */ });
+  }
+})();
+</script>
+</body>
+</html>
