@@ -1,40 +1,45 @@
 // src/server.ts
-// OffBook dev server with inline MCP shim
-// - GET  /health
-// - GET  /health/tts
-// - STATIC /public
-// - Debug/API routes via initHttpRoutes(app)
-// - MCP shim: GET /mcp (descriptor), POST /mcp/call (forwards to /debug/*)
-
-import express, { type Express, type Request, type Response } from "express";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
+import express from "express";
+import path from "path";
+import cors from "cors";
 import morgan from "morgan";
+import { fileURLToPath } from "url";
 import { request } from "undici";
-import { initHttpRoutes } from "./http-routes"; // existing project debug routes
+import { initHttpRoutes } from "./http-routes.js"; // ESM NodeNext style
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const app: Express = express();
-app.disable("x-powered-by");
-app.use(morgan("dev"));
-app.use(express.json({ limit: "5mb" }));
-app.use(express.urlencoded({ extended: true }));
+const app = express();
+app.set("trust proxy", true);
 
-// ---------- Health ----------
-app.get("/health", (_req, res) => res.json({ ok: true }));
-app.get("/health/tts", (_req, res) =>
-  res.json({ provider: process.env.OPENAI_API_KEY ? "openai" : "stub", has_key: Boolean(process.env.OPENAI_API_KEY) })
-);
+// --- Core middleware
+app.use(cors());
+app.use(express.json({ limit: "4mb" }));
+app.use(express.urlencoded({ extended: true, limit: "4mb" }));
+app.use(morgan("tiny"));
 
-// ---------- Static UI ----------
-app.use(express.static(path.join(__dirname, "..", "public")));
+// --- Static (UI)
+const publicDir = path.join(__dirname, "..", "public");
+app.use(express.static(publicDir));
 
-// ---------- Existing debug/API ----------
+// --- Health endpoints
+app.get("/health", (_req, res) => {
+  res.json({ ok: true });
+});
+
+app.get("/health/tts", (_req, res) => {
+  const hasKey = !!process.env.OPENAI_API_KEY;
+  res.json({ provider: hasKey ? "openai" : "stub", has_key: hasKey });
+});
+
+// --- App / Debug / API routes
+// (initHttpRoutes internally mounts /debug and /api regardless of NODE_ENV;
+//   if SHARED_SECRET is set, /debug requires X-Shared-Secret)
 initHttpRoutes(app);
 
-// ---------- INLINE MCP SHIM ----------
+// =============== MCP SHIM ===============
+/** Tools the connector can call */
 type ToolCall =
   | { tool: "upload_script"; args: { title: string; text: string } }
   | { tool: "list_scenes"; args: { script_id: string } }
@@ -47,14 +52,16 @@ const HOST = process.env.HOST || "0.0.0.0";
 const FORWARD_BASE = process.env.MCP_FORWARD_BASE || `http://127.0.0.1:${PORT}`;
 const SHARED_SECRET = process.env.SHARED_SECRET || "";
 
+/** Headers for forwarding to /debug/* (we only forward the secret there) */
 function jsonHeaders() {
   const h: Record<string, string> = { "Content-Type": "application/json" };
-  if (SHARED_SECRET) h["X-Shared-Secret"] = SHARED_SECRET; // affects /debug/* forwards only
+  if (SHARED_SECRET) h["X-Shared-Secret"] = SHARED_SECRET;
   return h;
 }
 
-// Descriptor ChatGPT fetches when you create the connector
-app.get("/mcp", (_req: Request, res: Response) => {
+/** Descriptor the ChatGPT connector fetches */
+app.get("/mcp", (_req, res) => {
+  console.log("[mcp] descriptor served");
   res.json({
     name: "offbook-mcp",
     version: "0.1.0",
@@ -118,8 +125,8 @@ app.get("/mcp", (_req: Request, res: Response) => {
   });
 });
 
-// Tool invoker: forwards to existing /debug/* endpoints
-app.post("/mcp/call", async (req: Request, res: Response) => {
+/** Tool invoker → forwards to existing /debug/* endpoints */
+app.post("/mcp/call", async (req, res) => {
   const body = req.body as ToolCall;
   try {
     let r;
@@ -131,11 +138,13 @@ app.post("/mcp/call", async (req: Request, res: Response) => {
           body: JSON.stringify({ title: body.args.title, text: body.args.text }),
         });
         break;
+
       case "list_scenes": {
         const url = `${FORWARD_BASE}/debug/scenes?script_id=${encodeURIComponent(body.args.script_id)}`;
         r = await request(url, { method: "GET", headers: jsonHeaders() });
         break;
       }
+
       case "set_voice":
         r = await request(`${FORWARD_BASE}/debug/set_voice`, {
           method: "POST",
@@ -143,6 +152,7 @@ app.post("/mcp/call", async (req: Request, res: Response) => {
           body: JSON.stringify({ script_id: body.args.script_id, voice_map: body.args.voice_map }),
         });
         break;
+
       case "render_reader":
         r = await request(`${FORWARD_BASE}/debug/render`, {
           method: "POST",
@@ -155,28 +165,43 @@ app.post("/mcp/call", async (req: Request, res: Response) => {
           }),
         });
         break;
+
       case "render_status": {
         const url = `${FORWARD_BASE}/debug/render_status?render_id=${encodeURIComponent(body.args.render_id)}`;
         r = await request(url, { method: "GET", headers: jsonHeaders() });
         break;
       }
+
       default:
         return res.status(400).json({ error: "unknown_tool" });
     }
 
     const status = r.statusCode || 500;
     const text = await r.body.text();
-    try {
-      return res.status(status).json(JSON.parse(text));
-    } catch {
-      return res.status(status).send(text);
-    }
+    try { return res.status(status).json(JSON.parse(text)); }
+    catch { return res.status(status).send(text); }
   } catch (err: any) {
     return res.status(500).json({ error: "mcp_forward_error", message: String(err?.message || err) });
   }
 });
+// ============= END MCP SHIM =============
 
-// ---------- Start ----------
+// --- Default UI route
+app.get("/", (_req, res) => {
+  res.sendFile(path.join(publicDir, "app-tabs.html"));
+});
+
+// --- Error safety nets (avoid process crash → 502)
+process.on("uncaughtException", (err) => {
+  console.error("[fatal] uncaughtException:", err);
+});
+process.on("unhandledRejection", (reason) => {
+  console.error("[fatal] unhandledRejection:", reason);
+});
+
+// --- Start server
 app.listen(PORT, HOST, () => {
   console.log(`[offbook] listening on http://${HOST}:${PORT}`);
 });
+
+export default app;
