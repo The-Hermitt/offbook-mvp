@@ -339,22 +339,39 @@ JANE: Ready?"></textarea>
       micBadge: document.getElementById("micBadge"),
     };
 
-    let idx = 0;           // current line index in filtered list
+    let idx = 0;
     let playing = false;
     let voices = [];
 
     const isParenOnly = (t)=> /^\(.*\)$/.test((t||"").trim());
+
+    // Conservative boilerplate filter: only strip short/obvious footers & page marks.
     const isBoilerplate = (t)=>{
       const s = (t||"").trim();
       const low = s.toLowerCase();
-      if (!s) return true;                                   // empty
-      if (/^page\s*\d+(\s*of\s*\d+)?$/.test(low)) return true; // "Page 2 of 6"
-      if (/^\d+$/.test(s)) return true;                        // lone number
-      if (/^cont'?d\.?$/i.test(s) || /^continued/i.test(s)) return true;
-      if (low.includes("sides by breakdown services")) return true;
-      if (low.includes("actors access")) return true;
+
+      // Empty or separators
+      if(!s) return true;
+      if(/^[-–—]+$/.test(s)) return true;
+
+      // Lone page numbers (len <= 4) or "Page X of Y"
+      if((/^\d{1,4}$/.test(s)) && s.length<=4) return true;
+      if(/^page\s*\d+(\s*of\s*\d+)?$/i.test(s)) return true;
+
+      // Short cont'd markers ONLY if very short
+      if((/^cont'?d\.?$/i.test(s) || /^continued$/i.test(s)) && s.length<=10) return true;
+
+      // Footer phrases: only if reasonably short (avoid killing real dialogue)
+      const footerHit =
+        (low.includes("sides by breakdown services") ||
+         low.includes("actors access") ||
+         low.includes("do not share") ||
+         low.includes("copyright")) && s.length <= 80;
+      if(footerHit) return true;
+
       return false;
     };
+
     const isDashy = (txt)=>{
       const s=(txt||"").trim();
       return /—/.test(s) || /--/.test(s) || /[-—–]\s*$/.test(s);
@@ -362,7 +379,6 @@ JANE: Ready?"></textarea>
 
     function rehearseLines(){
       const sc = S.scenes[0]; if(!sc) return [];
-      // Hide NARRATOR + pure parentheticals + boilerplate
       return sc.lines.filter(ln =>
         ln.speaker !== "NARRATOR" &&
         !isParenOnly(ln.text) &&
@@ -404,7 +420,7 @@ JANE: Ready?"></textarea>
       return new Promise(res=>{ u.onend = ()=>res(void 0); u.onerror = ()=>res(void 0); });
     }
 
-    // ----- Speech Recognition (feature-detected) -----
+    // ----- Speech Recognition -----
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     const sr = SR ? new SR() : null;
     let srEnabled = false;
@@ -412,9 +428,16 @@ JANE: Ready?"></textarea>
     let myLineStartMs = 0;
     let advanceLock = false;
 
-    const MIN_MS = 700;             // minimum speech duration to advance (normal)
-    const MIN_MS_DASHY = 900;       // minimum for em-dash/broken thoughts
-    const MIN_INTERIM_CHARS = 6;    // don’t jump on tiny blurts
+    // Tunables:
+    // Normal lines: be deliberate
+    const MIN_MS = 1000;            // min time speaking before advance
+    const MIN_INTERIM_MS = 600;     // min time before we'll accept an interim
+    const MIN_INTERIM_CHARS = 10;   // interim must be "real" speech
+
+    // Em-dash lines: quick cut-in for partner
+    const DASHY_FINAL_MS = 350;     // final result after brief speech
+    const DASHY_INTERIM_MS = 250;   // allow interim cut-in after ~250ms
+    const DASHY_INTERIM_CHARS = 2;  // even a couple chars is enough to signal the cut
 
     function onMyLine(){
       const list = rehearseLines(); if(!list.length) return false;
@@ -441,7 +464,7 @@ JANE: Ready?"></textarea>
       clearMyLineTimers();
       try{ sr.stop(); }catch{}
       if(!playing) playing = true;
-      step(true); // immediately speak partner
+      step(true);
     }
 
     function updateMicBadge(){
@@ -451,8 +474,8 @@ JANE: Ready?"></textarea>
     }
 
     if(sr){
-      sr.continuous = true;         // keep hot
-      sr.interimResults = true;     // allow faster feel, but we gate it
+      sr.continuous = true;
+      sr.interimResults = true;
       sr.lang = "en-US";
 
       sr.onstart = ()=>{ srActive = true; updateMicBadge(); };
@@ -460,36 +483,33 @@ JANE: Ready?"></textarea>
       sr.onerror = ()=>{ srActive = false; updateMicBadge(); };
 
       sr.onresult = (ev)=>{
-        if(!E.chkAdvanceOnSpeech.checked) return;
-        if(!onMyLine()) return;
+        if(!E.chkAdvanceOnSpeech.checked || !onMyLine()) return;
         maybeSetMyLineStart();
 
         const now = performance.now();
         const elapsed = now - (myLineStartMs||now);
-        const isFinal = ev.results?.[ev.results.length-1]?.isFinal === true;
-
-        // length of latest transcript (rough signal that user actually spoke)
-        let latest = "";
-        try{ latest = (ev.results?.[ev.results.length-1]?.[0]?.transcript||"").trim(); }catch{}
+        const last = ev.results?.[ev.results.length-1];
+        const isFinal = !!last?.isFinal;
+        const latest = (last?.[0]?.transcript||"").trim();
         const dashy = currentIsDashy();
 
-        // Gate advancing:
-        // - dashy lines: only on final or speechend, after MIN_MS_DASHY
-        // - normal lines: on final after MIN_MS, OR on interim after small delay+chars
         if(dashy){
-          if(isFinal && elapsed >= MIN_MS_DASHY) advanceFromMyLine();
+          if(isFinal && elapsed >= DASHY_FINAL_MS) return advanceFromMyLine();
+          if(latest.length >= DASHY_INTERIM_CHARS && elapsed >= DASHY_INTERIM_MS) return advanceFromMyLine();
         }else{
-          if(isFinal && elapsed >= MIN_MS) advanceFromMyLine();
-          else if(latest.length >= MIN_INTERIM_CHARS && elapsed >= 400) advanceFromMyLine();
+          if(isFinal && elapsed >= MIN_MS) return advanceFromMyLine();
+          if(latest.length >= MIN_INTERIM_CHARS && elapsed >= MIN_INTERIM_MS) return advanceFromMyLine();
         }
       };
 
       sr.onspeechend = ()=>{
-        if(!E.chkAdvanceOnSpeech.checked) return;
-        if(!onMyLine()) return;
+        if(!E.chkAdvanceOnSpeech.checked || !onMyLine()) return;
         const elapsed = performance.now() - (myLineStartMs||performance.now());
-        const need = currentIsDashy() ? MIN_MS_DASHY : MIN_MS;
-        if(elapsed >= need) advanceFromMyLine();
+        if(currentIsDashy()){
+          if(elapsed >= DASHY_FINAL_MS) advanceFromMyLine();
+        }else{
+          if(elapsed >= MIN_MS) advanceFromMyLine();
+        }
       };
     }
 
@@ -512,13 +532,11 @@ JANE: Ready?"></textarea>
       highlightCurrent();
 
       if(ln.speaker===my){
-        // mic mode: keep playing and listen—advanceFromMyLine() will call step(true)
         if(sr && srEnabled && E.chkAdvanceOnSpeech.checked){
-          advanceLock = false;      // allow this turn to advance
+          advanceLock = false;
           maybeListenForMyLine();
           return;
         }
-        // manual mode: pause here
         if(playMode && E.chkAutoAdvance.checked){ playing=false; E.btnPlay.textContent="Play"; }
       }else{
         await synthSpeak(ln.text);
