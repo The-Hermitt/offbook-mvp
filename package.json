@@ -1,42 +1,26 @@
 {
-  "name": "offbook-appsdk",
-  "version": "1.0.0",
-  "type": "module",
+  "name": "offbook-mvp",
+  "version": "0.2.1",
   "private": true,
-  "engines": {
-    "node": ">=20"
-  },
+  "type": "module",
   "scripts": {
-    "dev": "PORT=${PORT:-3010} tsx watch src/server.ts",
-    "start": "PORT=${PORT:-3010} node --no-warnings --experimental-import-meta-resolve node_modules/tsx/dist/cli.mjs src/server.ts",
-    "build": "echo \"skipping tsc build (tsx runs TS directly)\""
+    "build": "tsc -p tsconfig.json",
+    "start": "cross-env PORT=3010 SHARED_SECRET=1976 tsx ./src/server.ts",
+    "dev": "cross-env NODE_ENV=development tsx watch ./src/server.ts",
+    "health": "node -e \"fetch('http://localhost:'+(process.env.PORT||3010)+'/health').then(r=>r.text()).then(console.log).catch(e=>{console.error(e);process.exit(1)})\""
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.0.4",
-    "@napi-rs/canvas": "^0.1.80",
-    "better-sqlite3": "^12.4.1",
-    "canvas": "^3.2.0",
     "cors": "^2.8.5",
-    "dotenv": "^16.3.1",
-    "express": "^4.18.2",
-    "mime": "^3.0.0",
-    "morgan": "^1.10.1",
-    "multer": "^1.4.5-lts.1",
-    "nanoid": "^5.0.4",
-    "node-fetch": "^2.7.0",
-    "openai": "^4.104.0",
-    "pdf-parse": "^2.4.5",
-    "pdfjs-dist": "^3.11.174",
-    "tesseract.js": "^5.1.1",
-    "undici": "^6.22.0",
-    "zod": "^3.22.4"
+    "express": "^4.19.2",
+    "multer": "^1.4.5-lts.2",
+    "pdf-parse": "^1.1.1",
+    "undici": "^6.19.4"
   },
   "devDependencies": {
-    "@types/better-sqlite3": "^7.6.8",
-    "@types/cors": "^2.8.17",
     "@types/express": "^4.17.21",
-    "@types/node": "^20.10.6",
-    "tsx": "^4.7.0",
-    "typescript": "^5.3.3"
+    "@types/multer": "^1.4.12",
+    "cross-env": "^7.0.3",
+    "tsx": "^4.19.1",
+    "typescript": "^5.6.3"
   }
 }

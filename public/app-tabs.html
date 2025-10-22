@@ -2,397 +2,282 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>OffBook — Rehearsal MVP</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
   <style>
-    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin:0; }
-    header { padding:12px 16px; border-bottom:1px solid #eee; }
-    .tabs { position:fixed; bottom:0; left:0; right:0; border-top:1px solid #eee; display:flex; background:#fff; }
-    .tab-btn { flex:1; padding:12px; text-align:center; cursor:pointer; }
-    .tab-btn.active { font-weight:600; }
-    main { padding:16px; padding-bottom:72px; }
-    .panel { display:none; }
-    .panel.active { display:block; }
-    .row { display:flex; gap:8px; align-items:center; margin:8px 0; }
-    .role-row { display:flex; justify-content:space-between; align-items:center; padding:8px 0; border-bottom:1px dashed #eee; }
-    .btn { padding:8px 12px; border:1px solid #ccc; border-radius:6px; cursor:pointer; background:#fff; }
-    .btn[disabled]{ opacity:0.6; cursor:not-allowed; }
-    .danger { color:#b00020; }
-    .hint { color:#666; font-size:12px; }
-    .banner { background:#fff7e6; border:1px solid #ffe0a3; padding:8px 12px; border-radius:6px; margin:8px 0; }
-    label { font-weight:600; }
-    select, input[type="text"], textarea { width:100%; padding:8px; border:1px solid #ccc; border-radius:6px; }
-    textarea { min-height:120px; }
+    :root { --bg:#0b0c0f; --panel:#111318; --panel-2:#151823; --text:#eaf0ff; --muted:#a7b0c5; --border:#252a36; --focus:#3b82f6; --accent:#3b82f6; --danger:#ef4444; --maxw:720px; }
+    *{ box-sizing:border-box } html,body{ margin:0; padding:0; background:var(--bg); color:var(--text); font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial }
+    header{ padding:14px 16px; font-weight:700; letter-spacing:.2px }
+    main{ padding:12px 12px 84px; max-width:var(--maxw); margin:0 auto }
+    .card{ background:var(--panel); border:1px solid var(--border); border-radius:14px; padding:12px }
+    h3,h4{ margin:6px 0 10px } .hint{ color:var(--muted); font-size:12px; line-height:1.4 }
+    label{ display:block; font-size:12px; color:var(--muted); margin:8px 0 6px }
+    input[type="text"],textarea,select{ width:100%; border:1px solid var(--border); background:#0c0f16; color:var(--text); border-radius:10px; padding:10px 12px; font-size:15px }
+    textarea{ min-height:140px; line-height:1.35 }
+    .btn{ display:inline-flex; align-items:center; justify-content:center; background:var(--accent); color:#fff; border:none; padding:12px 14px; border-radius:12px; font-weight:700; font-size:15px; min-height:44px }
+    .btn.secondary{ background:transparent; color:var(--text); border:1px solid var(--border) }
+    .btn.ghost{ background:transparent; color:var(--muted); border:1px dashed var(--border) }
+    .row{ display:flex; gap:8px } .row>*{ flex:1 }
+    .spacer8{ height:8px } .spacer12{ height:12px }
+    .tabbar{ position:fixed; bottom:0; left:0; right:0; background:var(--panel-2); border-top:1px solid var(--border); padding:0 8px }
+    .tabbar-inner{ max-width:var(--maxw); margin:0 auto; display:grid; grid-template-columns:repeat(6,1fr) }
+    .tabbar button{ appearance:none; border:none; background:transparent; color:var(--muted); padding:10px 4px; font-size:12px; font-weight:600 }
+    .tabbar button.active{ color:var(--text); background:rgba(255,255,255,.02); border-radius:8px }
+    .screen{ display:none } .screen.active{ display:block }
+    .inner-tabs{ display:flex; gap:8px }
+    .inner-tabs button{ flex:1; border:1px solid var(--border); background:transparent; color:var(--text); padding:10px; border-radius:10px; font-weight:700 }
+    .inner-tabs button.active{ background:var(--panel-2); border-color:var(--focus) }
+    pre.status{ white-space:pre-wrap; word-break:break-word; background:#0c0f16; border:1px dashed var(--border); border-radius:10px; padding:8px; color:var(--muted); min-height:22px }
+    .pill{ display:inline-block; padding:6px 10px; border-radius:999px; border:1px solid var(--border); background:#0f1420; font-size:12px; margin-right:6px }
+    .small{ font-size:12px; color:var(--muted) }
   </style>
 </head>
 <body>
-  <header>
-    <strong>OffBook</strong> — Rehearsal MVP
-  </header>
+  <header>🎭 OffBook — Rehearsal MVP</header>
 
   <main>
-    <!-- Import -->
-    <section id="panel-import" class="panel active">
-      <h2>Import</h2>
+    <!-- IMPORT -->
+    <section id="screen-import" class="screen active">
+      <div class="card">
+        <h3>Import</h3>
+        <p class="hint">Two ways to import. <b>Paste Script Text</b> is most reliable; <b>Upload PDF</b> attempts to extract text, with an OCR fallback for scanned PDFs.</p>
+        <div class="spacer8"></div>
 
-      <div class="banner hint" id="guard-msg" style="display:none"></div>
+        <div class="inner-tabs" role="tablist">
+          <button id="tab-text" class="active" role="tab" aria-controls="panel-text" aria-selected="true">Paste Script Text</button>
+          <button id="tab-pdf" role="tab" aria-controls="panel-pdf" aria-selected="false">Upload PDF</button>
+        </div>
+        <div class="spacer12"></div>
 
-      <h3>Paste Script Text</h3>
-      <form id="form-text">
-        <div class="row">
-          <input type="text" id="text-title" placeholder="Title (e.g., Sides)" required />
+        <!-- TEXT PANEL -->
+        <div id="panel-text" role="tabpanel" aria-labelledby="tab-text">
+          <label>Title</label>
+          <input id="titleText" type="text" placeholder="My Sides" />
+          <label>Paste script here</label>
+          <textarea id="scriptText" placeholder="JANE: Hi.
+GABE: Hey.
+JANE: Ready?"></textarea>
+          <div class="spacer8"></div>
+          <div class="row">
+            <button id="btnTextUpload" class="btn">Continue → Assign</button>
+            <button id="btnTextClear" class="btn secondary">Clear</button>
+          </div>
+          <div class="spacer12"></div>
+          <label>Status</label>
+          <pre id="status" class="status"></pre>
         </div>
-        <div class="row">
-          <textarea id="text-body" placeholder="NAME: Dialogue" required></textarea>
-        </div>
-        <div class="row">
-          <button class="btn" id="btn-text">Upload Text</button>
-        </div>
-      </form>
 
-      <h3>Upload PDF</h3>
-      <form id="form-pdf">
-        <div class="row">
-          <input type="text" id="pdf-title" placeholder="Title" required />
+        <!-- PDF PANEL -->
+        <div id="panel-pdf" role="tabpanel" aria-labelledby="tab-pdf" hidden>
+          <label>Title</label>
+          <input id="titlePdf" type="text" placeholder="My PDF Sides" />
+          <label>PDF File</label>
+          <input id="pdfFile" type="file" accept="application/pdf" />
+          <div class="spacer8"></div>
+          <div class="row">
+            <button id="btnPdfUpload" class="btn">Upload & Continue</button>
+            <button id="btnPdfOcr" class="btn ghost" title="Use OCR if your PDF is scanned images" disabled>Try OCR (slow)</button>
+          </div>
+          <div class="spacer12"></div>
+          <label>Status</label>
+          <pre id="statusPdf" class="status"></pre>
+          <div class="small">Tip: OCR processes the first 3 pages by default for speed.</div>
         </div>
-        <div class="row">
-          <input type="file" id="pdf-file" accept="application/pdf" required />
-        </div>
-        <div class="row">
-          <button class="btn" id="btn-pdf">Upload PDF</button>
-        </div>
-        <div class="hint">If the PDF is scanned/image-only, enable OCR on the server build when available.</div>
-      </form>
-
-      <div id="import-error" class="danger"></div>
-    </section>
-
-    <!-- Assign -->
-    <section id="panel-assign" class="panel">
-      <h2>Assign</h2>
-      <div class="row">
-        <label for="meRole">I am…</label>
-        <select id="meRole"></select>
       </div>
-      <div id="roles-wrap"></div>
-      <div class="row">
-        <button class="btn" id="btn-assign-continue">Continue</button>
+    </section>
+
+    <!-- ASSIGN -->
+    <section id="screen-assign" class="screen">
+      <div class="card">
+        <h3>Assign</h3>
+        <div><span class="pill" id="pillScript">script: —</span> <span class="pill" id="pillScenes">scenes: 0</span></div>
+        <div class="spacer8"></div>
+        <label>I am…</label>
+        <select id="selectRole"></select>
+        <div class="spacer8"></div>
+        <div id="voicePickers"></div>
+        <div class="spacer8"></div>
+        <button id="btnSaveAssign" class="btn">Save Voices</button>
       </div>
-      <div id="assign-error" class="danger"></div>
     </section>
 
-    <!-- Rehearse (placeholder) -->
-    <section id="panel-rehearse" class="panel">
-      <h2>Rehearse</h2>
-      <p class="hint">Reader rendering happens here in the next step.</p>
-    </section>
-
-    <!-- Record / Gallery / Settings (placeholders) -->
-    <section id="panel-record" class="panel"><h2>Record</h2></section>
-    <section id="panel-gallery" class="panel"><h2>Gallery</h2></section>
-    <section id="panel-settings" class="panel"><h2>Settings</h2></section>
+    <!-- Stubs -->
+    <section id="screen-rehearse" class="screen"><div class="card"><h3>Rehearse</h3><p class="hint">Render reader track next.</p></div></section>
+    <section id="screen-record" class="screen"><div class="card"><h3>Record</h3><p class="hint">3-2-1 countdown; camera+mic required for Store.</p></div></section>
+    <section id="screen-gallery" class="screen"><div class="card"><h3>Gallery</h3><p class="hint">Saved takes will appear here.</p></div></section>
+    <section id="screen-settings" class="screen"><div class="card"><h3>Settings</h3><p class="hint">Defaults & storage (future).</p></div></section>
   </main>
 
-  <nav class="tabs">
-    <div class="tab-btn active" data-tab="import">Import</div>
-    <div class="tab-btn" data-tab="assign">Assign</div>
-    <div class="tab-btn" data-tab="rehearse">Rehearse</div>
-    <div class="tab-btn" data-tab="record">Record</div>
-    <div class="tab-btn" data-tab="gallery">Gallery</div>
-    <div class="tab-btn" data-tab="settings">Settings</div>
+  <!-- Bottom bar -->
+  <nav class="tabbar" role="tablist" aria-label="App sections">
+    <div class="tabbar-inner">
+      <button data-tab="import" class="active" role="tab" aria-selected="true">Import</button>
+      <button data-tab="assign" role="tab" aria-selected="false">Assign</button>
+      <button data-tab="rehearse" role="tab" aria-selected="false">Rehearse</button>
+      <button data-tab="record" role="tab" aria-selected="false">Record</button>
+      <button data-tab="gallery" role="tab" aria-selected="false">Gallery</button>
+      <button data-tab="settings" role="tab" aria-selected="false">Settings</button>
+    </div>
   </nav>
 
-<script>
-(function(){
-  // ---------- Config / helpers ----------
-  const qs = new URLSearchParams(location.search);
-  const secret = qs.get('secret') || '';
-  const baseUrl = ''; // same-origin; leave empty unless hosting API elsewhere
+  <!-- Vendor: pdf.js + tesseract.js (browser) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.6.82/pdf.min.mjs" type="module"></script>
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 
-  const VOICES = ["alloy","verse","aria","coral","sage"];
+  <script type="module">
+    const qs = new URLSearchParams(location.search);
+    const secret = qs.get("secret") || "";
+    const JSON_HDRS = { "Content-Type":"application/json" };
+    if (secret) JSON_HDRS["X-Shared-Secret"] = secret;
 
-  const AppState = {
-    scriptId: localStorage.getItem('offbook.scriptId') || null,
-    scenes: null,
-    roles: null,
-    meRole: null,
-    voiceMap: {} // role -> voice (for partner roles only)
-  };
-
-  function absolutePath(p){
-    if (!p.startsWith('/')) return '/' + p;
-    return p;
-  }
-
-  async function apiFetch(path, opts={}){
-    const url = baseUrl + absolutePath(path);
-    const headers = new Headers(opts.headers || {});
-    if (secret) headers.set('X-Shared-Secret', secret);
-
-    const isFormData = (opts.body && typeof FormData !== 'undefined' && opts.body instanceof FormData);
-    // Only set Content-Type for JSON payloads
-    if (!isFormData && opts.body && typeof opts.body === 'object' && !(opts.body instanceof Blob)) {
-      headers.set('Content-Type','application/json');
-      opts.body = JSON.stringify(opts.body);
+    function showScreen(name){
+      document.querySelectorAll(".screen").forEach(s=>s.classList.remove("active"));
+      document.getElementById("screen-"+name).classList.add("active");
+      document.querySelectorAll(".tabbar button").forEach(b=>b.classList.remove("active"));
+      const btn=document.querySelector(`.tabbar button[data-tab="${name}"]`);
+      if(btn) btn.classList.add("active");
     }
+    document.querySelectorAll(".tabbar button").forEach(b=>b.addEventListener("click",()=>showScreen(b.dataset.tab)));
 
-    const resp = await fetch(url, { method: opts.method || 'GET', headers, body: opts.body });
-    if (!resp.ok) {
-      const text = await resp.text().catch(()=>String(resp.status));
-      throw new Error(`HTTP ${resp.status} ${resp.statusText} — ${text}`);
-    }
-    // Try JSON, fallback text
-    const ct = resp.headers.get('content-type') || '';
-    if (ct.includes('application/json')) return resp.json();
-    return resp.text();
-  }
+    const tabText=document.getElementById("tab-text");
+    const tabPdf=document.getElementById("tab-pdf");
+    const panelText=document.getElementById("panel-text");
+    const panelPdf=document.getElementById("panel-pdf");
+    tabText.addEventListener("click",()=>{ tabText.classList.add("active"); tabPdf.classList.remove("active"); panelText.hidden=false; panelPdf.hidden=true; });
+    tabPdf.addEventListener("click",()=>{ tabPdf.classList.add("active"); tabText.classList.remove("active"); panelPdf.hidden=false; panelText.hidden=true; });
 
-  function showError(el, msg){
-    el.textContent = msg || '';
-  }
+    const S={ script_id:"", scenes:[], role:"", voice_map:{} };
+    const setStatus = msg => document.getElementById("status").textContent = msg || "";
+    const setStatusPdf = msg => document.getElementById("statusPdf").textContent = msg || "";
 
-  function setActiveTab(id){
-    document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
-    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-    document.getElementById(`panel-${id}`).classList.add('active');
-    document.querySelector(`.tab-btn[data-tab="${id}"]`).classList.add('active');
-  }
-
-  function gotoTab(id){
-    // Guards
-    if (['assign','rehearse','record','gallery'].includes(id) && !AppState.scriptId) {
-      const guard = document.getElementById('guard-msg');
-      guard.style.display = 'block';
-      guard.textContent = 'Import a script first (paste text or upload PDF).';
-      setActiveTab('import');
-      return;
-    }
-    setActiveTab(id);
-    if (id === 'assign') renderAssign();
-  }
-
-  // Role normalization
-  function normalizeRole(name){
-    if (!name) return '';
-    let s = String(name);
-    s = s.replace(/\(.*?\)/g, '');     // strip parentheticals
-    s = s.replace(/\s+/g, ' ').trim(); // collapse spaces
-    s = s.toUpperCase();
-    // discard obvious non-speakers
-    if (/^(INT|EXT|SCENE)\b/.test(s)) return '';
-    if (/^[A-Z ]+$/.test(s) && s.length > 28) return ''; // long all-caps likely action
-    return s;
-  }
-
-  function rolesFromScenes(scenes){
-    const set = new Set();
-    for (const sc of (scenes||[])) {
-      for (const line of (sc.lines||[])) {
-        const n = normalizeRole(line.speaker);
-        if (n) set.add(n);
-      }
-    }
-    return Array.from(set);
-  }
-
-  function renderAssign(){
-    const meSel = document.getElementById('meRole');
-    const wrap = document.getElementById('roles-wrap');
-    const err = document.getElementById('assign-error');
-    showError(err,'');
-
-    // Populate "I am..." if needed
-    if (!AppState.roles || AppState.roles.length === 0) {
-      wrap.innerHTML = '<div class="banner">No roles detected. Try pasting as <strong>NAME: Dialogue</strong> or upload a clearer PDF.</div>';
-      return;
-    }
-
-    // Build options
-    meSel.innerHTML = '';
-    const placeholder = document.createElement('option');
-    placeholder.value = '';
-    placeholder.textContent = 'Select your role';
-    meSel.appendChild(placeholder);
-
-    for (const r of AppState.roles) {
-      const o = document.createElement('option');
-      o.value = r;
-      o.textContent = r;
-      meSel.appendChild(o);
-    }
-
-    // Preserve selection if present
-    if (AppState.meRole && AppState.roles.includes(AppState.meRole)) {
-      meSel.value = AppState.meRole;
-    }
-
-    // Render partner role voice rows
-    function drawRows(){
-      wrap.innerHTML = '';
-      const me = AppState.meRole || '';
-      const partners = AppState.roles.filter(r => r !== me);
-      if (me && partners.length === 0) {
-        wrap.innerHTML = '<div class="banner">Only one role found. Add another character to assign AI voices.</div>';
-        return;
-      }
-      for (const role of partners) {
-        const row = document.createElement('div');
-        row.className = 'role-row';
-
-        const label = document.createElement('div');
-        label.textContent = role;
-
-        const select = document.createElement('select');
-        select.className = 'voiceForRole';
-        select.dataset.role = role;
-
-        for (const v of VOICES) {
-          const opt = document.createElement('option');
-          opt.value = v;
-          opt.textContent = v;
-          select.appendChild(opt);
-        }
-        const chosen = AppState.voiceMap[role] || 'alloy';
-        select.value = chosen;
-        select.addEventListener('change', () => {
-          AppState.voiceMap[role] = select.value;
-        });
-
-        row.appendChild(label);
-        row.appendChild(select);
-        wrap.appendChild(row);
-      }
-
-      // Prune voiceMap keys that are now "me"
-      if (me && AppState.voiceMap[me]) delete AppState.voiceMap[me];
-    }
-
-    drawRows();
-
-    // Change handler triggers re-render
-    meSel.onchange = () => {
-      const chosen = normalizeRole(meSel.value);
-      AppState.meRole = chosen || null;
-      drawRows();
-    };
-  }
-
-  // ---------- Import: Text ----------
-  document.getElementById('form-text').addEventListener('submit', async (e)=>{
-    e.preventDefault();
-    const btn = document.getElementById('btn-text');
-    const err = document.getElementById('import-error');
-    showError(err,'');
-    btn.disabled = true;
-
-    try {
-      const title = (document.getElementById('text-title').value || '').trim();
-      const text  = (document.getElementById('text-body').value || '').trim();
-      const up = await apiFetch('/debug/upload_script_text', {
-        method:'POST',
-        body: { title, text }
-      });
-      const sid = up.script_id;
-      if (!sid) throw new Error('No script_id returned');
-      AppState.scriptId = sid;
-      localStorage.setItem('offbook.scriptId', sid);
-
-      const sc = await apiFetch(`/debug/scenes?script_id=${encodeURIComponent(sid)}`);
-      AppState.scenes = sc.scenes || [];
-      AppState.roles  = rolesFromScenes(AppState.scenes);
-      AppState.meRole = null;
-      AppState.voiceMap = {};
-      gotoTab('assign');
-    } catch(ex) {
-      showError(err, ex.message || String(ex));
-    } finally {
-      btn.disabled = false;
-    }
-  });
-
-  // ---------- Import: PDF ----------
-  document.getElementById('form-pdf').addEventListener('submit', async (e)=>{
-    e.preventDefault();
-    const btn = document.getElementById('btn-pdf');
-    const err = document.getElementById('import-error');
-    showError(err,'');
-    btn.disabled = true;
-    try {
-      const file = document.getElementById('pdf-file').files[0];
-      const title = (document.getElementById('pdf-title').value || '').trim();
-      if (!file) throw new Error('Choose a PDF file.');
-      const fd = new FormData();
-      fd.append('pdf', file);
-      fd.append('title', title);
-
-      const up = await apiFetch('/debug/upload_script_upload', {
-        method:'POST',
-        body: fd
-      });
-      const sid = up.script_id;
-      if (!sid) throw new Error('No script_id returned');
-      AppState.scriptId = sid;
-      localStorage.setItem('offbook.scriptId', sid);
-
-      const sc = await apiFetch(`/debug/scenes?script_id=${encodeURIComponent(sid)}`);
-      AppState.scenes = sc.scenes || [];
-      AppState.roles  = rolesFromScenes(AppState.scenes);
-      AppState.meRole = null;
-      AppState.voiceMap = {};
-      gotoTab('assign');
-    } catch(ex) {
-      showError(err, ex.message || String(ex));
-    } finally {
-      btn.disabled = false;
-    }
-  });
-
-  // ---------- Assign: Continue ----------
-  document.getElementById('btn-assign-continue').addEventListener('click', async ()=>{
-    const err = document.getElementById('assign-error');
-    showError(err,'');
-    if (!AppState.scriptId) return showError(err,'Missing script id.');
-    if (!AppState.roles || AppState.roles.length === 0) return showError(err,'No roles found.');
-    if (!AppState.meRole) return showError(err,'Select your role first.');
-
-    // Ensure we have voices for all partner roles
-    const partners = AppState.roles.filter(r => r !== AppState.meRole);
-    for (const r of partners) {
-      if (!AppState.voiceMap[r]) AppState.voiceMap[r] = 'alloy';
-    }
-
-    try {
-      await apiFetch('/debug/set_voice', {
-        method:'POST',
-        body: {
-          script_id: AppState.scriptId,
-          voice_map: AppState.voiceMap
-        }
-      });
-      gotoTab('rehearse');
-    } catch(ex) {
-      showError(err, ex.message || String(ex));
-    }
-  });
-
-  // ---------- Tabs ----------
-  document.querySelectorAll('.tab-btn').forEach(btn=>{
-    btn.addEventListener('click', ()=>{
-      gotoTab(btn.dataset.tab);
+    // Paste Text
+    document.getElementById("btnTextUpload").addEventListener("click", async ()=>{
+      const title=document.getElementById("titleText").value||"Sides";
+      const text=document.getElementById("scriptText").value||"";
+      setStatus("Uploading text…");
+      try{
+        const r=await fetch("/debug/upload_script_text",{method:"POST",headers:JSON_HDRS,body:JSON.stringify({title,text})});
+        const j=await r.json().catch(()=>({}));
+        if(!r.ok){ setStatus("Error "+r.status+": "+JSON.stringify(j)); return; }
+        setStatus(`OK scenes=${j.scene_count} speakers=${(j.speakers||[]).join(", ")}`);
+        S.script_id=j.script_id; await loadScenes(); showScreen("assign");
+      }catch(e){ setStatus("Network error: "+e); }
     });
-  });
+    document.getElementById("btnTextClear").addEventListener("click",()=>{
+      document.getElementById("titleText").value=""; document.getElementById("scriptText").value=""; setStatus("");
+    });
 
-  // If a script is already present (from earlier), allow going straight to Assign
-  if (AppState.scriptId && (!AppState.roles || AppState.roles.length === 0)) {
-    // Try to refetch scenes to rebuild roles
-    apiFetch(`/debug/scenes?script_id=${encodeURIComponent(AppState.scriptId)}`)
-      .then(sc => {
-        AppState.scenes = sc.scenes || [];
-        AppState.roles  = rolesFromScenes(AppState.scenes);
-      })
-      .catch(()=>{ /* ignore */ });
-  }
-})();
-</script>
+    // PDF upload (server text extraction)
+    const btnPdfUpload = document.getElementById("btnPdfUpload");
+    const btnPdfOcr = document.getElementById("btnPdfOcr");
+    btnPdfUpload.addEventListener("click", async ()=>{
+      const title=document.getElementById("titlePdf").value||"PDF Sides";
+      const file=document.getElementById("pdfFile").files[0];
+      if(!file){ setStatusPdf("Choose a PDF first."); return; }
+      const fd=new FormData(); fd.append("title",title); fd.append("pdf",file);
+      const headers={}; if(secret) headers["X-Shared-Secret"]=secret;
+
+      setStatusPdf("Uploading PDF…");
+      try{
+        const r=await fetch("/debug/upload_script_upload",{method:"POST",headers,body:fd});
+        const j=await r.json().catch(()=>({}));
+        if(!r.ok){ setStatusPdf("Error "+r.status+": "+JSON.stringify(j)); return; }
+        const sp=(j.speakers||[]).join(", ");
+        const note=j.note?(" note="+j.note):"";
+        setStatusPdf(`OK scenes=${j.scene_count} speakers=${sp||"(none)"} textLen=${j.textLen||0}${note}`);
+        if(j.note==="image-only"||j.note==="parse-error"){ btnPdfOcr.disabled=false; btnPdfOcr.focus(); return; }
+        S.script_id=j.script_id; await loadScenes(); showScreen("assign");
+      }catch(e){ setStatusPdf("Network error: "+e); }
+    });
+
+    // Client-side OCR fallback (first 3 pages by default)
+    btnPdfOcr.addEventListener("click", async ()=>{
+      const file=document.getElementById("pdfFile").files[0];
+      if(!file){ setStatusPdf("Choose a PDF first."); return; }
+      btnPdfOcr.disabled=true; setStatusPdf("OCR: loading…");
+
+      try{
+        const buf = await file.arrayBuffer();
+        // Load pdf.js (module already loaded by <script type="module"> above)
+        const pdfjsLib = await import("https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.6.82/pdf.min.mjs");
+        const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+
+        const maxPages = Math.min(pdf.numPages, 3); // first 3 pages for speed
+        let ocrText = "";
+        for(let p=1;p<=maxPages;p++){
+          setStatusPdf(`OCR: rendering page ${p}/${maxPages}…`);
+          const page = await pdf.getPage(p);
+          const viewport = page.getViewport({ scale: 2.0 }); // 2x for better OCR
+          const canvas = document.createElement("canvas");
+          const ctx = canvas.getContext("2d");
+          canvas.width = Math.ceil(viewport.width);
+          canvas.height = Math.ceil(viewport.height);
+          await page.render({ canvasContext: ctx, viewport }).promise;
+
+          setStatusPdf(`OCR: recognizing page ${p}/${maxPages}…`);
+          const { data: { text } } = await Tesseract.recognize(canvas, "eng", { logger:()=>{} });
+          ocrText += "\n" + text;
+        }
+
+        const title=document.getElementById("titlePdf").value||"PDF OCR Sides";
+        setStatusPdf("OCR: posting recognized text…");
+        const r=await fetch("/debug/upload_script_text",{method:"POST",headers:JSON_HDRS,body:JSON.stringify({title,text:ocrText})});
+        const j=await r.json().catch(()=>({}));
+        if(!r.ok){ setStatusPdf("Error "+r.status+": "+JSON.stringify(j)); return; }
+        setStatusPdf(`OCR OK scenes=${j.scene_count} speakers=${(j.speakers||[]).join(", ")}`);
+        S.script_id=j.script_id; await loadScenes(); showScreen("assign");
+      }catch(e){
+        setStatusPdf("OCR error: "+e);
+        btnPdfOcr.disabled=false;
+      }
+    });
+
+    async function loadScenes(){
+      const r=await fetch("/debug/scenes?script_id="+encodeURIComponent(S.script_id),{headers:JSON_HDRS});
+      const j=await r.json().catch(()=>({}));
+      if(!r.ok){ setStatus("Error "+r.status+": "+JSON.stringify(j)); return; }
+      S.scenes=j.scenes||[]; hydrateAssign();
+    }
+    function uniqueRoles(){
+      const names=new Set(); for(const sc of (S.scenes||[])) for(const ln of (sc.lines||[])) names.add(ln.speaker);
+      return Array.from(names).filter(n=>n&&n!=="SYSTEM"&&n!=="NARRATOR");
+    }
+    function hydrateAssign(){
+      document.getElementById("pillScript").textContent="script: "+(S.script_id||"—");
+      document.getElementById("pillScenes").textContent="scenes: "+(S.scenes?.length||0);
+      const roles=uniqueRoles();
+      const select=document.getElementById("selectRole");
+      select.innerHTML=roles.map(r=>`<option value="${r}">${r}</option>`).join("");
+      if(!S.role&&roles.length) S.role=roles[0];
+      select.value=S.role||"";
+      select.onchange=()=>{ S.role=select.value; buildVoicePickers(); };
+      buildVoicePickers();
+    }
+    function buildVoicePickers(){
+      const box=document.getElementById("voicePickers"); box.innerHTML="";
+      const presets=["alloy","verse","aria","solar","narrator"];
+      const partners=uniqueRoles().filter(n=>n!==S.role);
+      partners.forEach(name=>{
+        const wrap=document.createElement("div"); wrap.className="card"; wrap.style.marginTop="8px";
+        wrap.innerHTML=`<div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+          <strong>${name}</strong>
+          <select data-name="${name}">${presets.map(v=>`<option value="${v}" ${((S.voice_map[name]||presets[0])===v)?"selected":""}>${v}</option>`).join("")}</select>
+        </div>`;
+        box.appendChild(wrap);
+      });
+      box.querySelectorAll("select").forEach(el=>{
+        el.addEventListener("change",(e)=>{ const sel=e.target; S.voice_map[sel.getAttribute("data-name")]=sel.value; });
+      });
+    }
+    document.getElementById("btnSaveAssign").addEventListener("click", async ()=>{
+      if(!S.script_id){ setStatus("Upload a script first."); return; }
+      const roles=uniqueRoles().filter(r=>r!==S.role);
+      for(const r of roles) if(!S.voice_map[r]) S.voice_map[r]="alloy";
+      const resp=await fetch("/debug/set_voice",{method:"POST",headers:JSON_HDRS,body:JSON.stringify({script_id:S.script_id,voice_map:S.voice_map})});
+      const j=await resp.json().catch(()=>({}));
+      if(!resp.ok){ setStatus("Error "+resp.status+": "+JSON.stringify(j)); return; }
+      setStatus("Voices saved. Proceed to Rehearse."); showScreen("rehearse");
+    });
+  </script>
 </body>
 </html>
