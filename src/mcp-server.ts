@@ -1,49 +1,181 @@
-import express from "express";
-import path from "path";
-import cors from "cors";
-import morgan from "morgan";
-import { fileURLToPath } from "url";
-import { initHttpRoutes } from "./http-routes";
+// src/mcp-server.ts
+// Minimal MCP HTTP shim for local/dev.
+// Exposes GET /mcp (descriptor) and POST /mcp/call to forward to existing /debug/* routes.
+// No auth on MCP itself; if SHARED_SECRET is set, it's forwarded to /debug/* calls.
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+import type { Express, Request, Response } from "express";
+import { request } from "undici";
 
-const app = express();
+type ToolCall =
+  | { tool: "upload_script"; args: { title: string; text?: string } } // text path (PDF is not wired via MCP in this shim)
+  | { tool: "list_scenes"; args: { script_id: string } }
+  | { tool: "set_voice"; args: { script_id: string; voice_map: Record<string, string> } }
+  | { tool: "render_reader"; args: { script_id: string; scene_id: string; role: string; pace?: string } }
+  | { tool: "render_status"; args: { render_id: string } };
 
-// --- Core middleware
-app.use(cors());
-app.use(express.json({ limit: "2mb" }));
-app.use(express.urlencoded({ extended: true }));
-app.use(morgan("tiny"));
+const SHARED_SECRET = process.env.SHARED_SECRET || "";
+const FORWARD_BASE =
+  process.env.MCP_FORWARD_BASE || `http://127.0.0.1:${process.env.PORT || 3010}`;
 
-// --- Static (UI)
-const publicDir = path.join(__dirname, "..", "public");
-app.use(express.static(publicDir));
+export function initMcpServer(app: Express) {
+  // Descriptor for ChatGPT to fetch during connector creation
+  app.get("/mcp", (_req: Request, res: Response) => {
+    res.json({
+      name: "offbook-mcp",
+      version: "0.1.0",
+      description:
+        "OffBook MCP shim – forwards tool calls to existing /debug/* endpoints.",
+      transport: "http",
+      tools: [
+        {
+          name: "upload_script",
+          description:
+            "Upload script as plain text. Returns { script_id, scene_count }.",
+          input_schema: {
+            type: "object",
+            required: ["title", "text"],
+            properties: {
+              title: { type: "string" },
+              text: { type: "string" },
+            },
+          },
+        },
+        {
+          name: "list_scenes",
+          description:
+            "List parsed scenes for a given script_id. Returns { script_id, scenes:[...] }.",
+          input_schema: {
+            type: "object",
+            required: ["script_id"],
+            properties: {
+              script_id: { type: "string" },
+            },
+          },
+        },
+        {
+          name: "set_voice",
+          description:
+            "Set AI voices per role. Returns { ok:true }.",
+          input_schema: {
+            type: "object",
+            required: ["script_id", "voice_map"],
+            properties: {
+              script_id: { type: "string" },
+              voice_map: {
+                type: "object",
+                additionalProperties: { type: "string" },
+              },
+            },
+          },
+        },
+        {
+          name: "render_reader",
+          description:
+            "Render partner-only reader track. Returns { render_id, status }.",
+          input_schema: {
+            type: "object",
+            required: ["script_id", "scene_id", "role"],
+            properties: {
+              script_id: { type: "string" },
+              scene_id: { type: "string" },
+              role: { type: "string" },
+              pace: { type: "string", enum: ["slow", "normal", "fast"], default: "normal" },
+            },
+          },
+        },
+        {
+          name: "render_status",
+          description:
+            "Check render status. Returns { status, download_url? }.",
+          input_schema: {
+            type: "object",
+            required: ["render_id"],
+            properties: {
+              render_id: { type: "string" },
+            },
+          },
+        },
+      ],
+    });
+  });
 
-// --- Health endpoints
-app.get("/health", (_req, res) => {
-  res.json({ ok: true });
-});
+  // Tool invoker – forwards to /debug/* routes that already exist
+  app.post("/mcp/call", async (req: Request, res: Response) => {
+    const body = req.body as ToolCall;
+    try {
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+      };
+      if (SHARED_SECRET) headers["X-Shared-Secret"] = SHARED_SECRET;
 
-app.get("/health/tts", (_req, res) => {
-  const hasKey = !!process.env.OPENAI_API_KEY;
-  res.json({ provider: "openai", has_key: hasKey });
-});
+      let r;
+      switch (body.tool) {
+        case "upload_script": {
+          // text path only (most reliable); PDF upload is UI-only for now
+          r = await request(`${FORWARD_BASE}/debug/upload_script_text`, {
+            method: "POST",
+            headers,
+            body: JSON.stringify({
+              title: body.args.title,
+              text: body.args.text || "",
+            }),
+          });
+          break;
+        }
+        case "list_scenes": {
+          const url = `${FORWARD_BASE}/debug/scenes?script_id=${encodeURIComponent(
+            body.args.script_id
+          )}`;
+          r = await request(url, { method: "GET", headers });
+          break;
+        }
+        case "set_voice": {
+          r = await request(`${FORWARD_BASE}/debug/set_voice`, {
+            method: "POST",
+            headers,
+            body: JSON.stringify({
+              script_id: body.args.script_id,
+              voice_map: body.args.voice_map,
+            }),
+          });
+          break;
+        }
+        case "render_reader": {
+          r = await request(`${FORWARD_BASE}/debug/render`, {
+            method: "POST",
+            headers,
+            body: JSON.stringify({
+              script_id: body.args.script_id,
+              scene_id: body.args.scene_id,
+              role: body.args.role,
+              pace: body.args.pace || "normal",
+            }),
+          });
+          break;
+        }
+        case "render_status": {
+          const url = `${FORWARD_BASE}/debug/render_status?render_id=${encodeURIComponent(
+            body.args.render_id
+          )}`;
+          r = await request(url, { method: "GET", headers });
+          break;
+        }
+        default:
+          return res.status(400).json({ error: "Unknown tool" });
+      }
 
-// --- App / Debug / API routes
-initHttpRoutes(app);
-
-// --- 404 fallback for non-static, non-API requests
-app.use((req, res, _next) => {
-  if (req.path.startsWith("/api") || req.path.startsWith("/debug")) {
-    return res.status(404).send("Not Found");
-  }
-  // serve UI index if someone hits unknown paths in public
-  res.sendFile(path.join(publicDir, "app-tabs.html"));
-});
-
-const PORT = process.env.PORT ? Number(process.env.PORT) : 3000;
-app.listen(PORT, () => {
-  // eslint-disable-next-line no-console
-  console.log(`OffBook server listening on :${PORT}`);
-});
+      const text = await r.body.text();
+      const status = r.statusCode || 500;
+      // Try to parse JSON; fall back to text
+      try {
+        return res.status(status).json(JSON.parse(text));
+      } catch {
+        return res.status(status).send(text);
+      }
+    } catch (err: any) {
+      return res
+        .status(500)
+        .json({ error: "mcp_forward_error", message: String(err?.message || err) });
+    }
+  });
+}
