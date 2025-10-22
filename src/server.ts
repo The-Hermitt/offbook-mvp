@@ -1,6 +1,5 @@
-mkdir -p src && cp -f src/server.ts src/server.ts.bak 2>/dev/null || true
 cat > src/server.ts <<'EOF'
-// src/server.ts
+// src/server.ts (MCP-enabled)
 import express from "express";
 import path from "path";
 import cors from "cors";
@@ -54,6 +53,7 @@ function jsonHeaders() {
   return h;
 }
 
+// Full descriptor ChatGPT fetches
 app.get("/mcp", (_req, res) => {
   console.log("[mcp] descriptor served");
   res.json({
@@ -119,6 +119,7 @@ app.get("/mcp", (_req, res) => {
   });
 });
 
+// Tool invoker → forwards to your existing /debug/* endpoints
 app.post("/mcp/call", async (req, res) => {
   const body = req.body as ToolCall;
   try {
