@@ -39,6 +39,10 @@
     .controls .btn{ min-width:88px }
     .kbd{ font-size:11px; color:var(--muted) }
     .playing{ outline:2px solid var(--focus) }
+    .badge{ font-size:11px; padding:4px 8px; border-radius:999px; border:1px solid var(--border); background:#0f1420; color:var(--muted) }
+    .badge.ok{ color:#5ce38c; border-color:#1f4; }
+    .badge.warn{ color:#f4c542; border-color:#d9b23d; }
+    .badge.err{ color:#ff7b7b; border-color:#e96; }
   </style>
 </head>
 <body>
@@ -114,8 +118,10 @@ JANE: Ready?"></textarea>
     <section id="screen-rehearse" class="screen">
       <div class="card">
         <h3>Rehearse</h3>
-        <div class="hint">Partner lines are auto-spoken with your chosen voices. You speak your lines out loud. <span class="kbd">Space=Play/Pause</span> <span class="kbd">↑/↓=Prev/Next</span></div>
+        <div class="hint">Partner lines are auto-spoken with your chosen voices. You speak your lines out loud.
+          <span class="kbd">Space=Play/Pause</span> <span class="kbd">↑/↓=Prev/Next</span></div>
         <div class="spacer12"></div>
+
         <div class="controls">
           <button id="btnPlay" class="btn">Play</button>
           <button id="btnPrev" class="btn secondary">Prev</button>
@@ -128,6 +134,14 @@ JANE: Ready?"></textarea>
           </select>
           <label class="small"><input type="checkbox" id="chkAutoAdvance" checked /> Auto-advance partner lines</label>
         </div>
+
+        <div class="spacer8"></div>
+        <div class="controls">
+          <button id="btnMic" class="btn secondary">Mic: Off</button>
+          <label class="small"><input type="checkbox" id="chkAdvanceOnSpeech" /> Auto-advance on my speech</label>
+          <span id="micBadge" class="badge warn">speech recognition: checking…</span>
+        </div>
+
         <div class="spacer12"></div>
         <div id="lines"></div>
       </div>
@@ -312,7 +326,7 @@ JANE: Ready?"></textarea>
       showScreen("rehearse");
     });
 
-    // ---------- Rehearse (local TTS) ----------
+    // ---------- Rehearse (local TTS + speech recognition) ----------
     const E = {
       linesWrap: document.getElementById("lines"),
       btnPlay: document.getElementById("btnPlay"),
@@ -320,6 +334,9 @@ JANE: Ready?"></textarea>
       btnNext: document.getElementById("btnNext"),
       selPace: document.getElementById("selPace"),
       chkAutoAdvance: document.getElementById("chkAutoAdvance"),
+      btnMic: document.getElementById("btnMic"),
+      chkAdvanceOnSpeech: document.getElementById("chkAdvanceOnSpeech"),
+      micBadge: document.getElementById("micBadge"),
     };
 
     let idx = 0;           // current line index in filtered list
@@ -327,11 +344,30 @@ JANE: Ready?"></textarea>
     let voices = [];
 
     const isParenOnly = (t)=> /^\(.*\)$/.test((t||"").trim());
+    const isBoilerplate = (t)=>{
+      const s = (t||"").trim();
+      const low = s.toLowerCase();
+      if (!s) return true;                                   // empty
+      if (/^page\s*\d+(\s*of\s*\d+)?$/.test(low)) return true; // "Page 2 of 6"
+      if (/^\d+$/.test(s)) return true;                        // lone number
+      if (/^cont'?d\.?$/i.test(s) || /^continued/i.test(s)) return true;
+      if (low.includes("sides by breakdown services")) return true;
+      if (low.includes("actors access")) return true;
+      return false;
+    };
+    const isDashy = (txt)=>{
+      const s=(txt||"").trim();
+      return /—/.test(s) || /--/.test(s) || /[-—–]\s*$/.test(s);
+    };
 
     function rehearseLines(){
       const sc = S.scenes[0]; if(!sc) return [];
-      // Hide NARRATOR + pure parentheticals
-      return sc.lines.filter(ln => ln.speaker !== "NARRATOR" && !isParenOnly(ln.text));
+      // Hide NARRATOR + pure parentheticals + boilerplate
+      return sc.lines.filter(ln =>
+        ln.speaker !== "NARRATOR" &&
+        !isParenOnly(ln.text) &&
+        !isBoilerplate(ln.text)
+      );
     }
 
     function hydrateRehearse(){
@@ -348,6 +384,7 @@ JANE: Ready?"></textarea>
       E.linesWrap.innerHTML = rows;
       idx = 0;
       highlightCurrent();
+      updateMicBadge();
     }
 
     function highlightCurrent(){
@@ -367,6 +404,106 @@ JANE: Ready?"></textarea>
       return new Promise(res=>{ u.onend = ()=>res(void 0); u.onerror = ()=>res(void 0); });
     }
 
+    // ----- Speech Recognition (feature-detected) -----
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const sr = SR ? new SR() : null;
+    let srEnabled = false;
+    let srActive = false;
+    let myLineStartMs = 0;
+    let advanceLock = false;
+
+    const MIN_MS = 700;             // minimum speech duration to advance (normal)
+    const MIN_MS_DASHY = 900;       // minimum for em-dash/broken thoughts
+    const MIN_INTERIM_CHARS = 6;    // don’t jump on tiny blurts
+
+    function onMyLine(){
+      const list = rehearseLines(); if(!list.length) return false;
+      const my = S.role || uniqueRoles()[0] || "";
+      const ln = list[idx];
+      return !!(ln && ln.speaker === my);
+    }
+    function currentIsDashy(){
+      const list = rehearseLines(); if(!list.length) return false;
+      const ln = list[idx]; return !!ln && isDashy(ln.text);
+    }
+    function maybeSetMyLineStart(){
+      if(onMyLine() && !myLineStartMs) myLineStartMs = performance.now();
+    }
+    function clearMyLineTimers(){ myLineStartMs = 0; advanceLock = false; }
+
+    function advanceFromMyLine(){
+      if(advanceLock) return;
+      if(!onMyLine()) return;
+      advanceLock = true;
+      const list = rehearseLines(); if(!list.length) return;
+      idx = Math.min(idx+1, list.length-1);
+      highlightCurrent();
+      clearMyLineTimers();
+      try{ sr.stop(); }catch{}
+      if(!playing) playing = true;
+      step(true); // immediately speak partner
+    }
+
+    function updateMicBadge(){
+      if(!sr){ E.micBadge.textContent = "speech recognition: not supported"; E.micBadge.className="badge err"; E.btnMic.disabled = true; return; }
+      E.micBadge.textContent = srEnabled ? (srActive ? "listening…" : "ready") : "off";
+      E.micBadge.className = "badge " + (srEnabled ? (srActive ? "ok" : "warn") : "warn");
+    }
+
+    if(sr){
+      sr.continuous = true;         // keep hot
+      sr.interimResults = true;     // allow faster feel, but we gate it
+      sr.lang = "en-US";
+
+      sr.onstart = ()=>{ srActive = true; updateMicBadge(); };
+      sr.onend   = ()=>{ srActive = false; updateMicBadge(); if(srEnabled && onMyLine()){ try{ sr.start(); }catch{} } };
+      sr.onerror = ()=>{ srActive = false; updateMicBadge(); };
+
+      sr.onresult = (ev)=>{
+        if(!E.chkAdvanceOnSpeech.checked) return;
+        if(!onMyLine()) return;
+        maybeSetMyLineStart();
+
+        const now = performance.now();
+        const elapsed = now - (myLineStartMs||now);
+        const isFinal = ev.results?.[ev.results.length-1]?.isFinal === true;
+
+        // length of latest transcript (rough signal that user actually spoke)
+        let latest = "";
+        try{ latest = (ev.results?.[ev.results.length-1]?.[0]?.transcript||"").trim(); }catch{}
+        const dashy = currentIsDashy();
+
+        // Gate advancing:
+        // - dashy lines: only on final or speechend, after MIN_MS_DASHY
+        // - normal lines: on final after MIN_MS, OR on interim after small delay+chars
+        if(dashy){
+          if(isFinal && elapsed >= MIN_MS_DASHY) advanceFromMyLine();
+        }else{
+          if(isFinal && elapsed >= MIN_MS) advanceFromMyLine();
+          else if(latest.length >= MIN_INTERIM_CHARS && elapsed >= 400) advanceFromMyLine();
+        }
+      };
+
+      sr.onspeechend = ()=>{
+        if(!E.chkAdvanceOnSpeech.checked) return;
+        if(!onMyLine()) return;
+        const elapsed = performance.now() - (myLineStartMs||performance.now());
+        const need = currentIsDashy() ? MIN_MS_DASHY : MIN_MS;
+        if(elapsed >= need) advanceFromMyLine();
+      };
+    }
+
+    async function maybeListenForMyLine(){
+      if(!sr || !srEnabled) return;
+      if(onMyLine()){
+        maybeSetMyLineStart();
+        if(!srActive){ try{ sr.start(); }catch{} }
+      } else {
+        clearMyLineTimers();
+        if(srActive){ try{ sr.stop(); }catch{} }
+      }
+    }
+
     async function step(playMode){
       const list = rehearseLines(); if(!list.length) return;
       const pace = Number(E.selPace.value||0);
@@ -375,9 +512,14 @@ JANE: Ready?"></textarea>
       highlightCurrent();
 
       if(ln.speaker===my){
-        if(playMode && E.chkAutoAdvance.checked){
-          playing=false; E.btnPlay.textContent="Play";
+        // mic mode: keep playing and listen—advanceFromMyLine() will call step(true)
+        if(sr && srEnabled && E.chkAdvanceOnSpeech.checked){
+          advanceLock = false;      // allow this turn to advance
+          maybeListenForMyLine();
+          return;
         }
+        // manual mode: pause here
+        if(playMode && E.chkAutoAdvance.checked){ playing=false; E.btnPlay.textContent="Play"; }
       }else{
         await synthSpeak(ln.text);
         if(pace>0) await new Promise(r=>setTimeout(r, pace));
@@ -385,20 +527,25 @@ JANE: Ready?"></textarea>
       }
     }
 
+    // Controls
     E.btnPlay.addEventListener("click", ()=>{
       playing = !playing;
       E.btnPlay.textContent = playing ? "Pause" : "Play";
-      if(playing) step(true); else window.speechSynthesis?.cancel();
+      if(playing) step(true); else { window.speechSynthesis?.cancel(); if(srActive) try{ sr.stop(); }catch{}; clearMyLineTimers(); }
     });
     E.btnPrev.addEventListener("click", ()=>{
       const list = rehearseLines(); if(!list.length) return;
+      try{ if(srActive) sr.stop(); }catch{}
+      clearMyLineTimers();
       idx = Math.max(0, idx-1); highlightCurrent();
-      if(playing) step(true);
+      if(playing) step(true); else maybeListenForMyLine();
     });
     E.btnNext.addEventListener("click", ()=>{
       const list = rehearseLines(); if(!list.length) return;
+      try{ if(srActive) sr.stop(); }catch{}
+      clearMyLineTimers();
       idx = Math.min(list.length-1, idx+1); highlightCurrent();
-      if(playing) step(true);
+      if(playing) step(true); else maybeListenForMyLine();
     });
     document.addEventListener("keydown",(e)=>{
       if(document.getElementById("screen-rehearse").classList.contains("active")){
@@ -408,12 +555,24 @@ JANE: Ready?"></textarea>
       }
     });
 
+    E.btnMic.addEventListener("click", ()=>{
+      if(!sr){ updateMicBadge(); return; }
+      srEnabled = !srEnabled;
+      E.btnMic.textContent = srEnabled ? "Mic: On" : "Mic: Off";
+      if(srEnabled){ try{ sr.start(); }catch{}; setTimeout(()=>maybeListenForMyLine(),250); }
+      else{ try{ sr.stop(); }catch{}; clearMyLineTimers(); }
+      updateMicBadge();
+    });
+
     // preload voices
     if(window.speechSynthesis){
       const loadVoices=()=>{ voices = window.speechSynthesis.getVoices()||[]; };
       window.speechSynthesis.onvoiceschanged = loadVoices;
       loadVoices();
     }
+
+    // Initial badge state
+    updateMicBadge();
   </script>
 </body>
 </html>
