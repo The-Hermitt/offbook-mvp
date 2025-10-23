@@ -13,12 +13,13 @@
     h3,h4{ margin:6px 0 10px } .hint{ color:var(--muted); font-size:12px; line-height:1.4 }
     label{ display:block; font-size:12px; color:var(--muted); margin:8px 0 6px }
     input[type="text"],textarea,select{ width:100%; border:1px solid var(--border); background:#0c0f16; color:var(--text); border-radius:10px; padding:10px 12px; font-size:15px }
-    textarea{ min-height:140px; line-height:1.35 }
+    textarea{ min-height:120px; line-height:1.35 }
     .btn{ display:inline-flex; align-items:center; justify-content:center; background:var(--accent); color:#fff; border:none; padding:12px 14px; border-radius:12px; font-weight:700; font-size:15px; min-height:44px; cursor:pointer }
     .btn.secondary{ background:transparent; color:var(--text); border:1px solid var(--border) }
     .btn.ghost{ background:transparent; color:var(--muted); border:1px dashed var(--border) }
+    .btn.sm{ padding:8px 10px; font-size:12px; border-radius:10px; min-height:32px }
     .row{ display:flex; gap:8px } .row>*{ flex:1 }
-    .spacer8{ height:8px } .spacer12{ height:12px } .spacer16{ height:16px }
+    .spacer6{ height:6px } .spacer8{ height:8px } .spacer12{ height:12px } .spacer16{ height:16px }
     .tabbar{ position:fixed; bottom:0; left:0; right:0; background:var(--panel-2); border-top:1px solid var(--border); padding:0 8px }
     .tabbar-inner{ max-width:var(--maxw); margin:0 auto; display:grid; grid-template-columns:repeat(6,1fr) }
     .tabbar button{ appearance:none; border:none; background:transparent; color:var(--muted); padding:10px 4px; font-size:12px; font-weight:600 }
@@ -27,26 +28,24 @@
     .inner-tabs{ display:flex; gap:8px }
     .inner-tabs button{ flex:1; border:1px solid var(--border); background:transparent; color:var(--text); padding:10px; border-radius:10px; font-weight:700 }
     .inner-tabs button.active{ background:var(--panel-2); border-color:var(--focus) }
-    pre.status{ white-space:pre-wrap; word-break:break-word; background:#0c0f16; border:1px dashed var(--border); border-radius:10px; padding:8px; color:var(--muted); min-height:22px }
+    pre.status{ white-space:pre-wrap; word-break:break-word; background:#0c0f16; border:1px dashed var(--border); border-radius:10px; padding:8px; color:#a7b0c5; min-height:22px }
     .pill{ display:inline-block; padding:6px 10px; border-radius:999px; border:1px solid var(--border); background:#0f1420; font-size:12px; margin-right:6px }
     .small{ font-size:12px; color:var(--muted) }
     /* Rehearse */
     .line{ padding:10px; border-radius:10px; border:1px solid var(--border); margin-bottom:8px; background:#0c0f16; position:relative }
     .line.me{ border-color:#2f6df6; background:#0e1220 }
     .line .who{ font-weight:700; margin-bottom:6px }
-    .line .text{ line-height:1.4 }
     .controls{ display:flex; gap:8px; align-items:center; flex-wrap:wrap }
-    .controls .btn{ min-width:88px }
-    .kbd{ font-size:11px; color:var(--muted) }
     .playing{ outline:2px solid var(--focus) }
     .badge{ font-size:11px; padding:4px 8px; border-radius:999px; border:1px solid var(--border); background:#0f1420; color:#a7b0c5 }
-    .badge.ok{ color:#5ce38c; border-color:#1f4; }
-    .badge.warn{ color:#f4c542; border-color:#d9b23d; }
-    .badge.err{ color:#ff7b7b; border-color:#e96; }
+    .badge.ok{ color:#5ce38c } .badge.warn{ color:#f4c542 } .badge.err{ color:#ff7b7b }
     .editbar{ position:absolute; top:6px; right:6px; display:flex; gap:6px }
     .chip{ font-size:11px; padding:4px 8px; border-radius:999px; border:1px solid var(--border); background:#0f1420; color:#a7b0c5; cursor:pointer; user-select:none }
     .chip.danger{ border-color:#e96; color:#ff7b7b }
     .text[contenteditable="true"]{ outline:1px dashed var(--focus); border-radius:6px; padding:4px }
+    .inline-slot{ display:none; align-items:center; justify-content:center; margin:8px 0 10px }
+    .inline-slot .ghostline{ width:100%; border:1px dashed var(--border); border-radius:10px; padding:10px }
+    .inline-form{ width:100%; background:#0c0f16; border:1px solid var(--border); border-radius:12px; padding:10px; margin-top:8px }
   </style>
 </head>
 <body>
@@ -58,8 +57,6 @@
       <div class="card">
         <h3>Import</h3>
         <p class="hint">Two ways to import. <b>Paste Script Text</b> is most reliable; <b>Upload PDF</b> extracts text with an OCR fallback for scanned PDFs.</p>
-        <div class="spacer8"></div>
-
         <div class="inner-tabs" role="tablist">
           <button id="tab-text" class="active" role="tab" aria-controls="panel-text" aria-selected="true">Paste Script Text</button>
           <button id="tab-pdf" role="tab" aria-controls="panel-pdf" aria-selected="false">Upload PDF</button>
@@ -122,8 +119,7 @@ JANE: Ready?"></textarea>
     <section id="screen-rehearse" class="screen">
       <div class="card">
         <h3>Rehearse</h3>
-        <div class="hint">Partner lines auto-speak. You say your lines out loud.
-          <span class="kbd">Space=Play/Pause</span> <span class="kbd">↑/↓=Prev/Next</span></div>
+        <div class="hint">Partner lines auto-speak. You say your lines out loud. <span class="kbd">Space=Play/Pause</span> <span class="kbd">↑/↓=Prev/Next</span></div>
         <div class="spacer12"></div>
 
         <div class="controls">
@@ -131,23 +127,19 @@ JANE: Ready?"></textarea>
           <button id="btnPrev" class="btn secondary">Prev</button>
           <button id="btnNext" class="btn secondary">Next</button>
           <select id="selPace" title="Partner pacing">
-            <option value="0">No gap</option>
-            <option value="250" selected>+250 ms</option>
-            <option value="500">+500 ms</option>
-            <option value="1000">+1 s</option>
+            <option value="0" selected>No gap</option>
+            <option value="80">+80 ms</option>
+            <option value="160">+160 ms</option>
+            <option value="300">+300 ms</option>
           </select>
-          <!-- keep in DOM for layout; hide via script and force ON -->
-          <label class="small" id="autoAdvPartnerWrap"><input type="checkbox" id="chkAutoAdvance" checked /> Auto-advance partner</label>
         </div>
 
         <div class="spacer8"></div>
         <div class="controls">
-          <button id="btnMic" class="btn secondary">Mic: Off</button>
-          <!-- kept, hidden by script; logic stays always-on -->
-          <label class="small" id="advOnSpeechWrap" style="display:none"><input type="checkbox" id="chkAdvanceOnSpeech" checked /> Auto-advance on my speech</label>
+          <button id="btnMic" class="btn secondary" aria-pressed="false">Mic: Off</button>
           <span id="micBadge" class="badge warn">off</span>
           <span class="badge">Edit mode: <span id="editModeState">Off</span></span>
-          <button id="btnToggleEditMode" class="btn secondary">Toggle Edit Mode</button>
+          <button id="btnToggleEditMode" class="btn secondary" aria-pressed="false">Toggle Edit Mode</button>
         </div>
 
         <div class="spacer12"></div>
@@ -161,7 +153,6 @@ JANE: Ready?"></textarea>
     <section id="screen-settings" class="screen"><div class="card"><h3>Settings</h3><p class="hint">Defaults & storage (future).</p></div></section>
   </main>
 
-  <!-- Bottom bar -->
   <nav class="tabbar" role="tablist" aria-label="App sections">
     <div class="tabbar-inner">
       <button data-tab="import" class="active" role="tab" aria-selected="true">Import</button>
@@ -173,444 +164,238 @@ JANE: Ready?"></textarea>
     </div>
   </nav>
 
-  <!-- Vendor: pdf.js + tesseract.js (browser) -->
+  <!-- Vendor -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.6.82/pdf.min.mjs" type="module"></script>
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 
   <!-- App -->
   <script type="module">
-    // ---------- Utilities ----------
     const qs = new URLSearchParams(location.search);
-    const secret = qs.get("secret") || "";
+    const secret = qs.get("secret") || "1976";
     const JSON_HDRS = { "Content-Type":"application/json", ...(secret?{"X-Shared-Secret":secret}:{}) };
+    const $ = (s,r=document)=>r.querySelector(s);
+    const $$ = (s,r=document)=>Array.from(r.querySelectorAll(s));
+    const isEditableTarget = (ev)=>{ const t=ev.target, tag=(t.tagName||"").toLowerCase(); return t.isContentEditable||tag==="input"||tag==="textarea"||tag==="select"; };
 
-    const $ = (sel,root=document)=>root.querySelector(sel);
-    const $$ = (sel,root=document)=>Array.from(root.querySelectorAll(sel));
-
-    // ---------- Tabs ----------
-    function showScreen(name){
-      $$(".screen").forEach(s=>s.classList.remove("active"));
-      $("#screen-"+name).classList.add("active");
-      $$(".tabbar button").forEach(b=>b.classList.remove("active"));
-      const btn=$(`.tabbar button[data-tab="${name}"]`); if(btn) btn.classList.add("active");
-    }
+    function showScreen(name){ $$(".screen").forEach(s=>s.classList.remove("active")); $("#screen-"+name).classList.add("active"); $$(".tabbar button").forEach(b=>b.classList.remove("active")); const btn=$(`.tabbar button[data-tab="${name}"]`); if(btn) btn.classList.add("active"); }
     $$(".tabbar button").forEach(b=>b.addEventListener("click",()=>showScreen(b.dataset.tab)));
-
-    const tabText=$("#tab-text"), tabPdf=$("#tab-pdf");
-    const panelText=$("#panel-text"), panelPdf=$("#panel-pdf");
+    const tabText=$("#tab-text"), tabPdf=$("#tab-pdf"), panelText=$("#panel-text"), panelPdf=$("#panel-pdf");
     tabText.addEventListener("click",()=>{ tabText.classList.add("active"); tabPdf.classList.remove("active"); panelText.hidden=false; panelPdf.hidden=true; });
     tabPdf.addEventListener("click",()=>{ tabPdf.classList.add("active"); tabText.classList.remove("active"); panelPdf.hidden=false; panelText.hidden=true; });
 
-    // ---------- App State ----------
     const S={ script_id:"", scenes:[], role:"", voice_map:{}, editMode:false };
 
-    // ---------- Import Sanitize ----------
     function sanitizeScriptText(raw){
       const lines = String(raw||"").split(/\r?\n/);
-      const drop = [
-        /sides\s+by\s+breakdown\s+services/i,
-        /actors\s+access/i,
-        /do\s+not\s+share/i,
-        /copyright/i,
-        /^page\s+\d+(\s*of\s*\d+)?$/i,
-        /^https?:\/\/\S+/i,
-        /^\s*(INT\.|EXT\.|SCENE)\b/i,
-        /^[A-Z0-9 .,'&/()-]{6,}\s*$/   // all-caps action/headers
-      ];
-      const kept=[];
-      for (const ln of lines){
-        const t=ln.trim();
-        if (!t){ kept.push(""); continue; }
-        if (drop.some(rx=>rx.test(t))) continue;
-        if (/^\(.*\)$/.test(t)) continue;  // parenthetical-only
-        kept.push(ln);
-      }
-      return kept.join("\n");
+      const drop=[/sides\s+by\s+breakdown\s+services/i,/actors\s+access/i,/do\s+not\s+share/i,/copyright/i,/^page\s+\d+(\s*of\s*\d+)?$/i,/^https?:\/\/\S+/i,/^\s*(INT\.|EXT\.|SCENE)\b/i,/^[A-Z0-9 .,'&/()-]{6,}\s*$/];
+      const kept=[]; for(const ln of lines){ const t=ln.trim(); if(!t){ kept.push(""); continue; } if(drop.some(rx=>rx.test(t))) continue; if(/^\(.*\)$/.test(t)) continue; kept.push(ln); } return kept.join("\n");
     }
 
-    // ---------- Import: Text ----------
+    // Import Text
     const setStatus = msg => $("#status").textContent = msg || "";
     $("#btnTextUpload").addEventListener("click", async ()=>{
       const title=$("#titleText").value||"Sides";
-      const raw=$("#scriptText").value||"";
-      const text=sanitizeScriptText(raw);
+      const text=sanitizeScriptText($("#scriptText").value||"");
       setStatus("Uploading text…");
-      try{
-        const r=await fetch("/debug/upload_script_text",{method:"POST",headers:JSON_HDRS,body:JSON.stringify({title,text})});
-        const j=await r.json().catch(()=>({}));
-        if(!r.ok){ setStatus("Error "+r.status+": "+JSON.stringify(j)); return; }
-        setStatus(`OK scenes=${j.scene_count} speakers=${(j.speakers||[]).join(", ")}`);
-        S.script_id=j.script_id; await loadScenes(); showScreen("assign");
-      }catch(e){ setStatus("Network error: "+e); }
+      try{ const r=await fetch("/debug/upload_script_text",{method:"POST",headers:JSON_HDRS,body:JSON.stringify({title,text})}); const j=await r.json().catch(()=>({})); if(!r.ok){ setStatus("Error "+r.status+": "+JSON.stringify(j)); return; } setStatus(`OK scenes=${j.scene_count} speakers=${(j.speakers||[]).join(", ")}`); S.script_id=j.script_id; await loadScenes(); showScreen("assign"); }catch(e){ setStatus("Network error: "+e); }
     });
     $("#btnTextClear").addEventListener("click",()=>{ $("#titleText").value=""; $("#scriptText").value=""; setStatus(""); });
 
-    // ---------- Import: PDF ----------
+    // Import PDF (unchanged)
     const setStatusPdf = msg => $("#statusPdf").textContent = msg || "";
-    const btnPdfUpload=$("#btnPdfUpload"), btnPdfOcr=$("#btnPdfOcr");
-    btnPdfUpload.addEventListener("click", async ()=>{
-      const title=$("#titlePdf").value||"PDF Sides";
-      const file=$("#pdfFile").files[0];
-      if(!file){ setStatusPdf("Choose a PDF first."); return; }
+    $("#btnPdfUpload").addEventListener("click", async ()=>{
+      const title=$("#titlePdf").value||"PDF Sides"; const file=$("#pdfFile").files[0]; if(!file){ setStatusPdf("Choose a PDF first."); return; }
       const fd=new FormData(); fd.append("title",title); fd.append("pdf",file);
       const hdrs={}; if(secret) hdrs["X-Shared-Secret"]=secret;
       setStatusPdf("Uploading PDF…");
-      try{
-        const r=await fetch("/debug/upload_script_upload",{method:"POST",headers:hdrs,body:fd});
-        const j=await r.json().catch(()=>({}));
-        if(!r.ok){ setStatusPdf("Error "+r.status+": "+JSON.stringify(j)); return; }
-        const sp=(j.speakers||[]).join(", "); const note=j.note?(" note="+j.note):"";
-        setStatusPdf(`OK scenes=${j.scene_count} speakers=${sp||"(none)"} textLen=${j.textLen||0}${note}`);
-        if(j.note==="image-only"||j.note==="parse-error"){ btnPdfOcr.disabled=false; btnPdfOcr.focus(); return; }
-        S.script_id=j.script_id; await loadScenes(); showScreen("assign");
-      }catch(e){ setStatusPdf("Network error: "+e); }
-    });
-    btnPdfOcr.addEventListener("click", async ()=>{
-      const file=$("#pdfFile").files[0];
-      if(!file){ setStatusPdf("Choose a PDF first."); return; }
-      btnPdfOcr.disabled=true; setStatusPdf("OCR: loading…");
-      try{
-        const buf = await file.arrayBuffer();
-        const pdfjsLib = await import("https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.6.82/pdf.min.mjs");
-        const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
-        const maxPages = Math.min(pdf.numPages, 3);
-        let ocrText = "";
-        for(let p=1;p<=maxPages;p++){
-          setStatusPdf(`OCR: rendering ${p}/${maxPages}…`);
-          const page = await pdf.getPage(p);
-          const viewport = page.getViewport({ scale: 2.0 });
-          const canvas = document.createElement("canvas");
-          const ctx = canvas.getContext("2d");
-          canvas.width = Math.ceil(viewport.width);
-          canvas.height = Math.ceil(viewport.height);
-          await page.render({ canvasContext: ctx, viewport }).promise;
-          setStatusPdf(`OCR: recognizing ${p}/${maxPages}…`);
-          const { data: { text } } = await Tesseract.recognize(canvas, "eng");
-          ocrText += "\n" + text;
-        }
-        const title=$("#titlePdf").value||"PDF OCR Sides";
-        setStatusPdf("OCR: uploading recognized text…");
-        const clean = sanitizeScriptText(ocrText);
-        const r=await fetch("/debug/upload_script_text",{method:"POST",headers:JSON_HDRS,body:JSON.stringify({title,text:clean})});
-        const j=await r.json().catch(()=>({}));
-        if(!r.ok){ setStatusPdf("Error "+r.status+": "+JSON.stringify(j)); return; }
-        setStatusPdf(`OCR OK scenes=${j.scene_count} speakers=${(j.speakers||[]).join(", ")}`);
-        S.script_id=j.script_id; await loadScenes(); showScreen("assign");
-      }catch(e){ setStatusPdf("OCR error: "+e); btnPdfOcr.disabled=false; }
+      try{ const r=await fetch("/debug/upload_script_upload",{method:"POST",headers:hdrs,body:fd}); const j=await r.json().catch(()=>({})); if(!r.ok){ setStatusPdf("Error "+r.status+": "+JSON.stringify(j)); return; } const sp=(j.speakers||[]).join(", "); const note=j.note?(" note="+j.note):""; setStatusPdf(`OK scenes=${j.scene_count} speakers=${sp||"(none)"} textLen=${j.textLen||0}${note}`); if(j.note==="image-only"||j.note==="parse-error"){ $("#btnPdfOcr").disabled=false; $("#btnPdfOcr").focus(); return; } S.script_id=j.script_id; await loadScenes(); showScreen("assign"); }catch(e){ setStatusPdf("Network error: "+e); }
     });
 
-    // ---------- Scenes / Roles ----------
     async function loadScenes(){
       const r=await fetch("/debug/scenes?script_id="+encodeURIComponent(S.script_id),{headers:JSON_HDRS});
-      const j=await r.json().catch(()=>({}));
-      if(!r.ok) return;
-      S.scenes = j.scenes||[];
-      hydrateAssign();
-      hydrateRehearse();
+      const j=await r.json().catch(()=>({})); if(!r.ok) return;
+      S.scenes=j.scenes||[]; hydrateAssign(); hydrateRehearse(); applyEditModeUI();
     }
-    function uniqueRoles(){
-      const names=new Set(); for(const sc of (S.scenes||[])) for(const ln of (sc.lines||[])) names.add(ln.speaker);
-      return Array.from(names).filter(n=>n&&n!=="SYSTEM"&&n!=="NARRATOR");
-    }
+    function uniqueRoles(){ const names=new Set(); for(const sc of (S.scenes||[])) for(const ln of (sc.lines||[])) names.add(ln.speaker); return Array.from(names).filter(n=>n&&n!=="SYSTEM"&&n!=="NARRATOR"); }
     function hydrateAssign(){
-      $("#pillScript").textContent="script: "+(S.script_id||"—");
-      $("#pillScenes").textContent="scenes: "+(S.scenes?.length||0);
-      const roles=uniqueRoles();
-      const sel=$("#selectRole");
-      sel.innerHTML=roles.map(r=>`<option value="${r}">${r}</option>`).join("");
-      if(!S.role&&roles.length) S.role=roles[0];
-      sel.value=S.role||"";
-      sel.onchange=()=>{ S.role=sel.value; buildVoicePickers(); hydrateRehearse(); };
+      $("#pillScript").textContent="script: "+(S.script_id||"—"); $("#pillScenes").textContent="scenes: "+(S.scenes?.length||0);
+      const roles=uniqueRoles(); const sel=$("#selectRole");
+      sel.innerHTML=roles.map(r=>`<option value="${r}">${r}</option>`).join(""); if(!S.role&&roles.length) S.role=roles[0]; sel.value=S.role||"";
+      sel.onchange=()=>{ S.role=sel.value; buildVoicePickers(); hydrateRehearse(); applyEditModeUI(); };
       buildVoicePickers();
     }
     function buildVoicePickers(){
-      const box=$("#voicePickers"); box.innerHTML="";
-      const presets=["alloy","verse","aria","solar","narrator"];
-      const partners=uniqueRoles().filter(n=>n!==S.role);
-      partners.forEach(name=>{
-        const wrap=document.createElement("div"); wrap.className="card"; wrap.style.marginTop="8px";
-        wrap.innerHTML=`<div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
-          <strong>${name}</strong>
-          <select data-name="${name}">${presets.map(v=>`<option value="${v}" ${((S.voice_map[name]||presets[0])===v)?"selected":""}>${v}</option>`).join("")}</select>
-        </div>`;
-        box.appendChild(wrap);
-      });
-      box.querySelectorAll("select").forEach(el=>{
-        el.addEventListener("change",(e)=>{ const sel=e.target; S.voice_map[sel.getAttribute("data-name")]=sel.value; });
-      });
+      const box=$("#voicePickers"); box.innerHTML=""; const presets=["alloy","verse","aria","solar","narrator"]; const partners=uniqueRoles().filter(n=>n!==S.role);
+      partners.forEach(name=>{ const wrap=document.createElement("div"); wrap.className="card"; wrap.style.marginTop="8px"; wrap.innerHTML=`<div style="display:flex;align-items:center;justify-content:space-between;gap:10px"><strong>${name}</strong><select data-name="${name}">${presets.map(v=>`<option value="${v}" ${((S.voice_map[name]||presets[0])===v)?"selected":""}>${v}</option>`).join("")}</select></div>`; box.appendChild(wrap); });
+      box.querySelectorAll("select").forEach(el=>el.addEventListener("change",(e)=>{ const sel=e.target; S.voice_map[sel.getAttribute("data-name")]=sel.value; }));
     }
     $("#btnSaveAssign").addEventListener("click", async ()=>{
-      if(!S.script_id) return;
-      const roles=uniqueRoles().filter(r=>r!==S.role);
-      for(const r of roles) if(!S.voice_map[r]) S.voice_map[r]="alloy";
-      await fetch("/debug/set_voice",{method:"POST",headers:JSON_HDRS,body:JSON.stringify({script_id:S.script_id,voice_map:S.voice_map})});
-      showScreen("rehearse");
+      if(!S.script_id) return; const roles=uniqueRoles().filter(r=>r!==S.role); for(const r of roles) if(!S.voice_map[r]) S.voice_map[r]="alloy";
+      await fetch("/debug/set_voice",{method:"POST",headers:JSON_HDRS,body:JSON.stringify({script_id:S.script_id,voice_map:S.voice_map})}); showScreen("rehearse");
     });
 
-    // ---------- Rehearse ----------
-    const E = {
-      linesWrap: $("#lines"),
-      btnPlay: $("#btnPlay"),
-      btnPrev: $("#btnPrev"),
-      btnNext: $("#btnNext"),
-      selPace: $("#selPace"),
-      chkAutoAdvance: $("#chkAutoAdvance"),
-      autoAdvPartnerWrap: $("#autoAdvPartnerWrap"),
-      btnMic: $("#btnMic"),
-      chkAdvanceOnSpeech: $("#chkAdvanceOnSpeech"),
-      advOnSpeechWrap: $("#advOnSpeechWrap"),
-      micBadge: $("#micBadge"),
-      btnToggleEditMode: $("#btnToggleEditMode"),
-      editModeState: $("#editModeState"),
-    };
+    // Rehearse UI build
+    const E={ linesWrap:$("#lines"), btnPlay:$("#btnPlay"), btnPrev:$("#btnPrev"), btnNext:$("#btnNext"), selPace:$("#selPace"), btnMic:$("#btnMic"), micBadge:$("#micBadge"), btnToggleEditMode:$("#btnToggleEditMode"), editModeState:$("#editModeState"), inlineForm:null, currentSlotPlace:null };
+    let idx=0, playing=false;
 
-    // Force partner auto-advance ON and hide toggle from user
-    const AUTO_ADV_PARTNER = true;
-    if (E.autoAdvPartnerWrap) E.autoAdvPartnerWrap.style.display = "none";
-    if (E.chkAutoAdvance) E.chkAutoAdvance.checked = true;
+    const isParenOnly=t=>/^\(.*\)$/.test((t||"").trim());
+    const isBoilerplate=t=>{ const s=(t||"").trim(), low=s.toLowerCase(); if(!s) return true; if(/^[-–—]+$/.test(s)) return true; if(/^\d{1,4}$/.test(s)) return true; if(/^page\s*\d+(\s*of\s*\d+)?$/i.test(s)) return true; if((/^cont'?d\.?$/i.test(s)||/^continued$/i.test(s))&&s.length<=10) return true; if(/^https?:\/\/\S+/i.test(s)) return true; return (low.includes("sides by breakdown services")||low.includes("actors access")||low.includes("do not share")||low.includes("copyright")) && s.length<=80; };
+    const endsWithDash=txt=>/(—|--|-)\s*$/.test((txt||"").trim());
 
-    // Always-on advance-on-speech (keep hidden control for layout)
-    const ADVANCE_ON_SPEECH = true;
-    if (E.advOnSpeechWrap) E.advOnSpeechWrap.style.display = "none";
-    if (E.chkAdvanceOnSpeech) E.chkAdvanceOnSpeech.checked = true;
-
-    let idx=0, playing=false, voices=[];
-    const isParenOnly = (t)=> /^\(.*\)$/.test((t||"").trim());
-    const isBoilerplate = (t)=>{
-      const s=(t||"").trim(), low=s.toLowerCase();
-      if(!s) return true;
-      if(/^[-–—]+$/.test(s)) return true;
-      if((/^\d{1,4}$/.test(s)) && s.length<=4) return true;
-      if(/^page\s*\d+(\s*of\s*\d+)?$/i.test(s)) return true;
-      if((/^cont'?d\.?$/i.test(s) || /^continued$/i.test(s)) && s.length<=10) return true;
-      const footerHit=(low.includes("sides by breakdown services")||low.includes("actors access")||low.includes("do not share")||low.includes("copyright")) && s.length<=80;
-      return footerHit;
-    };
-
-    // Only treat as interrupt if dash is AT END of line
-    const endsWithDash = (txt)=>{
-      const s=(txt||"").trim();
-      return /(—|--|-)\s*$/.test(s); // end-only
-    };
-
-    // Build filtered list WITH original indexes so edits map correctly
-    function buildFiltered(scene){
-      const out=[];
-      for(let i=0;i<(scene?.lines?.length||0);i++){
-        const ln=scene.lines[i];
-        if(!ln) continue;
-        if(ln.speaker==="NARRATOR") continue;
-        if(isParenOnly(ln.text)) continue;
-        if(isBoilerplate(ln.text)) continue;
-        out.push({ orig:i, speaker:ln.speaker, text:ln.text });
-      }
-      return out;
-    }
-
+    function buildFiltered(scene){ const out=[]; for(let i=0;i<(scene?.lines?.length||0);i++){ const ln=scene.lines[i]; if(!ln) continue; if(ln.speaker==="NARRATOR") continue; if(isParenOnly(ln.text)) continue; if(isBoilerplate(ln.text)) continue; out.push({orig:i,speaker:ln.speaker,text:ln.text}); } return out; }
     function getScene(){ return S.scenes[0]; }
     function myName(){ return S.role||uniqueRoles()[0]||""; }
+
+    function inlineSlot(place){ return `<div class="inline-slot" data-place="${place}"><div class="ghostline"><button class="btn ghost sm" data-add-button>+ Add here</button></div></div>`; }
 
     function hydrateRehearse(){
       const scene=getScene(); const list=buildFiltered(scene);
       if(!list.length){ E.linesWrap.innerHTML="<p class='hint'>Import a script first.</p>"; return; }
-      const rows=list.map((ln,i)=>{
-        const me=ln.speaker===myName();
-        return `<div class="line ${me?"me":""}" data-i="${i}" data-orig="${ln.orig}">
-          <div class="editbar">
-            <span class="chip" data-act="edit" data-i="${i}">Edit</span>
-            <span class="chip danger" data-act="del" data-i="${i}">Delete</span>
-          </div>
-          <div class="who">${ln.speaker}</div>
-          <div class="text" data-i="${i}" contenteditable="false">${ln.text}</div>
-        </div>`;
-      }).join("");
-      E.linesWrap.innerHTML=rows;
-      idx=0; highlightCurrent(); wireEditTools(); updateMicBadge(); updateEditModeUI();
+      let html=inlineSlot(0);
+      list.forEach((ln,i)=>{ const me=ln.speaker===myName(); html+=`<div class="line ${me?"me":""}" data-i="${i}" data-orig="${ln.orig}">
+        <div class="editbar" style="display:${S.editMode?'flex':'none'}"><span class="chip" data-act="edit" data-i="${i}">Edit</span><span class="chip danger" data-act="del" data-i="${i}">Delete</span></div>
+        <div class="who">${ln.speaker}</div><div class="text" data-i="${i}" contenteditable="false">${ln.text}</div></div>`; html+=inlineSlot(ln.orig+1); });
+      E.linesWrap.innerHTML=html; idx=Math.max(0,Math.min(idx,list.length-1)); wireEditTools(); wireSlots(); highlightCurrent(); applyEditModeUI();
     }
-
     function wireEditTools(){
-      $$(".chip",E.linesWrap).forEach(ch=>{
-        ch.onclick=()=>{
-          const act=ch.getAttribute("data-act");
-          const iFiltered=+ch.getAttribute("data-i");
-          const scene=getScene(); if(!scene) return;
-          const node=$(`.line[data-i="${iFiltered}"]`,E.linesWrap);
-          const orig=+node.getAttribute("data-orig");
-          if(Number.isNaN(orig)) return;
-
-          if(act==="edit"){
-            if(!S.editMode) return;
-            const t=$(`.text[data-i="${iFiltered}"]`,E.linesWrap);
-            const editing=t.getAttribute("contenteditable")==="true";
-            if(editing){
-              t.setAttribute("contenteditable","false");
-              scene.lines[orig].text = t.innerText.trim();
-              hydrateRehearse();
-            }else{
-              t.setAttribute("contenteditable","true"); t.focus(); placeCaretEnd(t);
-            }
-          }else if(act==="del"){
-            if(!S.editMode) return;
-            scene.lines.splice(orig,1);
-            hydrateRehearse();
-          }
-        };
+      $$(".chip",E.linesWrap).forEach(ch=>ch.onclick=(ev)=>{ ev.stopPropagation(); const act=ch.getAttribute("data-act"); const iF=+ch.getAttribute("data-i"); const sc=getScene(); if(!sc) return;
+        const node=$(`.line[data-i="${iF}"]`,E.linesWrap); const orig=+node.getAttribute("data-orig"); if(Number.isNaN(orig)) return;
+        if(act==="edit"){ if(!S.editMode) return; const t=$(`.text[data-i="${iF}"]`,E.linesWrap); const editing=t.getAttribute("contenteditable")==="true";
+          if(editing){ t.setAttribute("contenteditable","false"); sc.lines[orig].text=t.innerText.trim(); hydrateRehearse(); } else { t.setAttribute("contenteditable","true"); t.focus(); placeCaretEnd(t); }
+        } else if(act==="del"){ if(!S.editMode) return; sc.lines.splice(orig,1); hydrateRehearse(); }
       });
     }
-
+    function wireSlots(){ $$('[data-add-button]',E.linesWrap).forEach(btn=>btn.onclick=(ev)=>{ if(!S.editMode) return; ev.stopPropagation(); const slot=btn.closest('.inline-slot'); openInlineForm(slot, Number(slot.getAttribute("data-place"))); }); }
     function placeCaretEnd(el){ const r=document.createRange(); r.selectNodeContents(el); r.collapse(false); const s=window.getSelection(); s.removeAllRanges(); s.addRange(r); }
-    function updateEditModeUI(){ E.editModeState.textContent=S.editMode?"On":"Off"; $$(".editbar",E.linesWrap).forEach(b=>b.style.display=S.editMode?"flex":"none"); $$(".text",E.linesWrap).forEach(t=>t.setAttribute("contenteditable","false")); }
+    function highlightCurrent(){ $$(".line",E.linesWrap).forEach(el=>el.classList.remove("playing")); const cur=$(`.line[data-i="${idx}"]`,E.linesWrap); if(cur) cur.classList.add("playing"); cur?.scrollIntoView({block:"center",behavior:(!S.editMode?"smooth":"auto")}); }
 
-    function highlightCurrent(){
-      $$(".line",E.linesWrap).forEach(el=>el.classList.remove("playing"));
-      const cur=$(`.line[data-i="${idx}"]`,E.linesWrap);
-      if(cur){ cur.classList.add("playing"); cur.scrollIntoView({block:"center",behavior:"smooth"}); }
+    function buildInlineForm(){ const div=document.createElement("div"); div.className="inline-form"; div.innerHTML=`<div><label>Speaker</label><select class="addSpeaker"></select></div><div class="spacer6"></div><label>Line text</label><textarea class="addText" placeholder="Type the line…"></textarea><div class="spacer6"></div><div class="row"><button class="btn addCommit">Add</button><button class="btn secondary addCancel">Cancel</button></div>`; div.addEventListener('keydown',e=>e.stopPropagation()); div.addEventListener('click',e=>e.stopPropagation()); return div; }
+    function openInlineForm(slotEl, place){ const sc=getScene(); if(!sc) return; if(!E.inlineForm){ E.inlineForm=buildInlineForm(); } else { try{ E.inlineForm.remove(); }catch{} } slotEl.appendChild(E.inlineForm); E.currentSlotPlace=place; const sel=E.inlineForm.querySelector(".addSpeaker"); const roles=uniqueRoles(); sel.innerHTML=roles.map(r=>`<option value="${r}">${r}</option>`).join("")+`<option value="__custom">Custom…</option>`;
+      const ta=E.inlineForm.querySelector(".addText"); const add=E.inlineForm.querySelector(".addCommit"); const cancelBtn=E.inlineForm.querySelector(".addCancel");
+      pauseForEdit(true);
+      const cancel=()=>{ try{ E.inlineForm.remove(); }catch{}; E.currentSlotPlace=null; pauseForEdit(false); };
+      cancelBtn.onclick=e=>{ e.preventDefault(); cancel(); };
+      add.onclick=e=>{ e.preventDefault(); let sp=sel.value; if(sp==="__custom"){ sp=prompt("Speaker name?")||""; } const text=(ta.value||"").trim(); if(!sp||!text) return; const idxPlace=Math.max(0,Math.min(place,sc.lines.length)); sc.lines.splice(idxPlace,0,{speaker:sp,text}); cancel(); hydrateRehearse(); const after=buildFiltered(sc); const newPos=after.findIndex(x=>x.orig===place); if(newPos>=0){ idx=newPos; highlightCurrent(); } };
+      setTimeout(()=>ta.focus(),10);
     }
+    function pauseForEdit(on){ if(on){ playing=false; E.btnPlay.textContent="Play"; window.speechSynthesis?.cancel(); try{ sr?.stop(); }catch{} } else { maybeListenForMyLine(); } }
 
-    function synthSpeak(text){
-      if(!window.speechSynthesis) return;
-      window.speechSynthesis.cancel();
-      const u=new SpeechSynthesisUtterance(text);
-      const v=(window.speechSynthesis.getVoices()||[]).find(v=>/en(-|_)?/.test(v.lang));
-      if(v) u.voice=v; u.rate=1.0; u.pitch=1.0;
-      window.speechSynthesis.speak(u);
-      return new Promise(res=>{ u.onend=()=>res(); u.onerror=()=>res(); });
-    }
+    // TTS
+    function synthSpeak(text){ if(!window.speechSynthesis) return; window.speechSynthesis.cancel(); const u=new SpeechSynthesisUtterance(text); const v=(window.speechSynthesis.getVoices()||[]).find(v=>/en(-|_)?/.test(v.lang)); if(v) u.voice=v; u.rate=1.0; u.pitch=1.0; window.speechSynthesis.speak(u); return new Promise(res=>{ u.onend=()=>res(); u.onerror=()=>res(); }); }
 
-    // ----- Speech Recognition -----
+    // ---- Speech Recognition (permission only via Mic button) + Silence Debounce + Last-Word Cues
     const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
     const sr=SR?new SR():null;
-    let srEnabled=false, srActive=false, myLineStartMs=0, advanceLock=false, advanceCoolUntil=0;
+    let srToggleOn=false, srPermGranted=false, srActive=false;
+    let myLineStartMs=0, advanceLock=false, advanceCoolUntil=0;
+    let latestTranscript="", silenceTimer=null;
 
-    // Faster handoff for short lines; natural otherwise
-    function expectedMinMsFor(text){
-      const t=(text||"").trim();
-      if(t.length<=6) return 150;       // “What?”, “Yeah!”, “No.”
-      if(t.length<=15) return 350;
-      if(t.length<=40) return 800;
-      return 1000;
-    }
-    const SHORT_INTERIM_MS = 120;
-    const SHORT_INTERIM_CHARS = 1;
-    const MIN_INTERIM_CHARS=10, INTERIM_GRACE_MS=650;
-    const AFTER_ADV_COOLDOWN_MS=320;
+    function minElapsedFor(text){ const t=(text||"").trim(); if(t.length<=6) return 40; if(t.length<=15) return 100; if(t.length<=40) return 220; return 360; }
+    function silenceDebounceFor(text){ const t=(text||"").trim(); if(t.length<=6) return 120; if(t.length<=15) return 160; if(t.length<=40) return 200; return 260; }
+    const AFTER_ADV_COOLDOWN_MS=80;
+    const FAST_INTERIM_CHARS=10;
+
+    function tokens(s){ return (s||"").toLowerCase().replace(/[^a-z0-9' ]+/g," ").split(/\s+/).filter(Boolean); }
+    function lastCueWords(text){ const tks=tokens(text).filter(w=>!["uh","um"].includes(w)); if(!tks.length) return ""; const take=Math.min(2,tks.length); return tks.slice(-take).join(" "); }
+    function transcriptContainsCue(tr){ const cue=lastCueWords(current()?.text||""); if(!cue) return false; return tokens(tr).join(" ").includes(cue); }
 
     function filtered(){ return buildFiltered(getScene()); }
     function current(){ return filtered()[idx]; }
     function onMyLine(){ const ln=current(); return !!ln && ln.speaker===myName(); }
-    function isShort(t){ return (t||"").trim().length<=6; }
     function maybeSetMyLineStart(){ if(onMyLine() && !myLineStartMs) myLineStartMs=performance.now(); }
-    function clearMyLineTimers(){ myLineStartMs=0; advanceLock=false; }
+    function clearMyLineTimers(){ myLineStartMs=0; advanceLock=false; latestTranscript=""; if(silenceTimer){ clearTimeout(silenceTimer); silenceTimer=null; } }
 
-    function updateMicBadge(){
-      if(!sr){ E.micBadge.textContent="speech recognition: not supported"; E.micBadge.className="badge err"; E.btnMic.disabled=true; return; }
-      E.micBadge.textContent = srEnabled ? (srActive ? "listening…" : "ready") : "off";
-      E.micBadge.className = "badge " + (srEnabled ? (srActive ? "ok" : "warn") : "warn");
-    }
+    function updateMicBadge(){ if(!sr){ E.micBadge.textContent="speech recognition: not supported"; E.micBadge.className="badge err"; E.btnMic.disabled=true; return; } const label=!srToggleOn?"off":(srActive?"listening…":(srPermGranted?"ready":"needs permission")); E.micBadge.textContent=label; E.micBadge.className="badge "+(!srToggleOn?"warn":(srActive?"ok":(srPermGranted?"warn":"err"))); E.btnMic.textContent=srToggleOn?"Mic: On":"Mic: Off"; E.btnMic.setAttribute("aria-pressed",srToggleOn?"true":"false"); }
 
-    function advanceFromMyLine(){
-      const now=performance.now();
-      if(advanceLock || now<advanceCoolUntil) return;
-      if(!onMyLine()) return;
-      advanceLock=true;
+    async function requestMicPermissionOnce(){ if(srPermGranted) return true; try{ const s=await navigator.mediaDevices.getUserMedia({audio:true}); s.getTracks().forEach(t=>t.stop()); srPermGranted=true; return true; }catch{ srPermGranted=false; return false; } finally{ updateMicBadge(); } }
 
-      const list=filtered(); if(!list.length) return;
-      idx=Math.min(idx+1,list.length-1);
-      highlightCurrent();
-      clearMyLineTimers();
-      try{ sr?.stop(); }catch{}
+    function advanceFromMyLine(){ const now=performance.now(); if(advanceLock||now<advanceCoolUntil) return; if(!onMyLine()) return; advanceLock=true; const list=filtered(); if(!list.length) return; idx=Math.min(idx+1,list.length-1); highlightCurrent(); clearMyLineTimers(); try{ sr?.stop(); }catch{} const next=current(); advanceCoolUntil=now+AFTER_ADV_COOLDOWN_MS; if(next && next.speaker===myName()){ if(srToggleOn && srPermGranted){ setTimeout(()=>{ if(sr && !srActive) try{ sr.start(); }catch{}; },30); } } else { if(!playing) playing=true; step(true); } }
 
-      const next=current();
-      advanceCoolUntil=now+AFTER_ADV_COOLDOWN_MS;
-
-      if(next && next.speaker===myName()){
-        // Back-to-back "my" lines: keep listening, no partner cue
-        if(srEnabled){ setTimeout(()=>{ if(sr && !srActive) try{ sr.start(); }catch{}; },80); }
-      }else{
-        if(!playing) playing=true;
-        step(true);
-      }
+    function armSilenceDebounce(){
+      if(silenceTimer) clearTimeout(silenceTimer);
+      const need = silenceDebounceFor(current()?.text||"");
+      silenceTimer = setTimeout(()=>{
+        if(!(onMyLine() && srToggleOn && srPermGranted)) return;
+        const elapsed=performance.now()-(myLineStartMs||performance.now());
+        // only advance if we likely heard the last cue OR we've spoken long enough
+        if(transcriptContainsCue(latestTranscript) || elapsed>=minElapsedFor(current()?.text||"")+60){
+          advanceFromMyLine();
+        }
+      }, need);
     }
 
     if(sr){
-      sr.continuous=true; sr.interimResults=true; sr.lang="en-US";
+      sr.continuous=false; sr.interimResults=true; sr.lang="en-US";
       sr.onstart=()=>{ srActive=true; updateMicBadge(); };
-      sr.onend=()=>{ srActive=false; updateMicBadge(); if(srEnabled && onMyLine()){ try{ sr.start(); }catch{} } };
+      sr.onend=()=>{ srActive=false; updateMicBadge(); if(srToggleOn && srPermGranted && onMyLine() && !(E.inlineForm&&E.inlineForm.isConnected)){ try{ sr.start(); }catch{} } };
       sr.onerror=()=>{ srActive=false; updateMicBadge(); };
 
       sr.onresult=(ev)=>{
-        if(!(ADVANCE_ON_SPEECH && onMyLine())) return;
+        if(!(onMyLine() && srToggleOn && srPermGranted)) return;
         maybeSetMyLineStart();
         const now=performance.now(); if(now<advanceCoolUntil) return;
-        const last=ev.results?.[ev.results.length-1]; const isFinal=!!last?.isFinal;
-        const latest=(last?.[0]?.transcript||"").trim();
         const ln=current(); if(!ln) return;
+        const elapsed=now-(myLineStartMs||now);
 
-        // Short lines: extremely fast interim or quick final
-        if(isShort(ln.text)){
-          if(latest.length>=SHORT_INTERIM_CHARS && (now-(myLineStartMs||now))>=SHORT_INTERIM_MS) return advanceFromMyLine();
-          if(isFinal && (now-(myLineStartMs||now))>=expectedMinMsFor(ln.text)) return advanceFromMyLine();
-          return;
-        }
+        const last=ev.results?.[ev.results.length-1];
+        const alt=last?.[0]; const isFinal=!!last?.isFinal;
+        latestTranscript=(alt?.transcript||"").trim();
 
-        // Interrupt only if dash AT END of your line
-        if(isFinal && endsWithDash(ln.text) && (now-(myLineStartMs||now))>=Math.min(expectedMinMsFor(ln.text),350)){
+        // Early overlap only with em-dash
+        if(!isFinal && endsWithDash(ln.text) && elapsed>=100){ return advanceFromMyLine(); }
+
+        // Confident interim + contains last cue → advance
+        if(!isFinal && latestTranscript.length>=FAST_INTERIM_CHARS && transcriptContainsCue(latestTranscript) && elapsed>=Math.max(60,minElapsedFor(ln.text))){
           return advanceFromMyLine();
         }
 
-        // Normal lines
-        if(isFinal && (now-(myLineStartMs||now))>=expectedMinMsFor(ln.text)) return advanceFromMyLine();
-        if(latest.length>=MIN_INTERIM_CHARS && (now-(myLineStartMs||now))>=INTERIM_GRACE_MS) return advanceFromMyLine();
+        // Final result → advance fast
+        if(isFinal && elapsed>=Math.max(70,minElapsedFor(ln.text))){
+          return advanceFromMyLine();
+        }
+
+        // Keep debounce armed to beat iOS's late onspeechend
+        armSilenceDebounce();
       };
 
-      sr.onspeechend=()=>{
-        if(!(ADVANCE_ON_SPEECH && onMyLine())) return;
-        const ln=current(); if(!ln) return;
-        const need=expectedMinMsFor(ln.text);
-        const elapsed=performance.now()-(myLineStartMs||performance.now());
-        if(elapsed>=need) advanceFromMyLine();
-      };
+      sr.onspeechend=()=>{ if(!(onMyLine() && srToggleOn && srPermGranted)) return; const ln=current(); if(!ln) return; const elapsed=performance.now()-(myLineStartMs||performance.now()); if(elapsed>=minElapsedFor(ln.text)) return advanceFromMyLine(); };
     }
 
     async function maybeListenForMyLine(){
-      if(!sr || !srEnabled) return;
-      if(onMyLine()){
-        maybeSetMyLineStart();
-        if(!srActive){ try{ sr.start(); }catch{} }
-      }else{
-        clearMyLineTimers();
-        if(srActive){ try{ sr.stop(); }catch{} }
-      }
+      if(!sr || !srToggleOn || !srPermGranted || (E.inlineForm&&E.inlineForm.isConnected)) return;
+      if(onMyLine()){ maybeSetMyLineStart(); if(!srActive){ try{ sr.start(); }catch{} } }
+      else { clearMyLineTimers(); if(srActive){ try{ sr.stop(); }catch{} } }
     }
 
     async function step(playMode){
       const list=filtered(); if(!list.length) return;
-      const pace=Number(E.selPace.value||0);
+      const pace=Number($("#selPace").value||0);
       const ln=current(); if(!ln){ playing=false; E.btnPlay.textContent="Play"; return; }
       highlightCurrent();
 
       if(ln.speaker===myName()){
-        if(sr && srEnabled && ADVANCE_ON_SPEECH){ advanceLock=false; maybeListenForMyLine(); return; }
-        if(playMode && AUTO_ADV_PARTNER===true){ playing=false; E.btnPlay.textContent="Play"; }
+        if(sr && srToggleOn && srPermGranted){ advanceLock=false; maybeListenForMyLine(); return; }
+        if(playMode){ playing=false; E.btnPlay.textContent="Play"; }
       }else{
         await synthSpeak(ln.text);
         if(pace>0) await new Promise(r=>setTimeout(r,pace));
-        if(playing && AUTO_ADV_PARTNER===true){ idx=Math.min(idx+1,list.length-1); step(true); }
+        if(playing){ idx=Math.min(idx+1,list.length-1); step(true); }
       }
     }
 
-    // Controls
-    E.btnPlay.addEventListener("click",()=>{ playing=!playing; E.btnPlay.textContent=playing?"Pause":"Play"; if(playing) step(true); else { window.speechSynthesis?.cancel(); if(srActive) try{ sr.stop(); }catch{}; clearMyLineTimers(); }});
-    E.btnPrev.addEventListener("click",()=>{ const list=filtered(); if(!list.length) return; try{ if(srActive) sr.stop(); }catch{}; clearMyLineTimers(); idx=Math.max(0,idx-1); highlightCurrent(); if(playing) step(true); else maybeListenForMyLine(); });
-    E.btnNext.addEventListener("click",()=>{ const list=filtered(); if(!list.length) return; try{ if(srActive) sr.stop(); }catch{}; clearMyLineTimers(); idx=Math.min(list.length-1,idx+1); highlightCurrent(); if(playing) step(true); else maybeListenForMyLine(); });
-    document.addEventListener("keydown",(e)=>{ if($("#screen-rehearse").classList.contains("active")){ if(e.code==="Space"){ e.preventDefault(); E.btnPlay.click(); } if(e.code==="ArrowUp"){ e.preventDefault(); E.btnPrev.click(); } if(e.code==="ArrowDown"){ e.preventDefault(); E.btnNext.click(); } }});
-    E.btnMic.addEventListener("click",()=>{ if(!sr){ updateMicBadge(); return; } srEnabled=!srEnabled; E.btnMic.textContent=srEnabled?"Mic: On":"Mic: Off"; if(srEnabled){ try{ sr.start(); }catch{}; setTimeout(()=>maybeListenForMyLine(),200); } else { try{ sr.stop(); }catch{}; clearMyLineTimers(); } updateMicBadge(); });
-    E.btnToggleEditMode.addEventListener("click",()=>{ S.editMode=!S.editMode; updateEditModeUI(); });
+    // Controls & hotkeys
+    $("#btnPlay").addEventListener("click",()=>{ playing=!playing; $("#btnPlay").textContent=playing?"Pause":"Play"; if(playing){ step(true); } else { window.speechSynthesis?.cancel(); try{ sr?.stop(); }catch{}; clearMyLineTimers(); }});
+    $("#btnPrev").addEventListener("click",()=>{ const list=filtered(); if(!list.length) return; try{ sr?.stop(); }catch{}; clearMyLineTimers(); idx=Math.max(0,idx-1); highlightCurrent(); if(playing) step(true); else maybeListenForMyLine(); });
+    $("#btnNext").addEventListener("click",()=>{ const list=filtered(); if(!list.length) return; try{ sr?.stop(); }catch{}; clearMyLineTimers(); idx=Math.min(list.length-1,idx+1); highlightCurrent(); if(playing) step(true); else maybeListenForMyLine(); });
+    document.addEventListener("keydown",(e)=>{ if(!$("#screen-rehearse").classList.contains("active")) return; if(isEditableTarget(e) || (E.inlineForm && E.inlineForm.isConnected)) return; if(e.code==="Space"){ e.preventDefault(); $("#btnPlay").click(); } else if(e.code==="ArrowUp"){ e.preventDefault(); $("#btnPrev").click(); } else if(e.code==="ArrowDown"){ e.preventDefault(); $("#btnNext").click(); } });
 
-    // initial state
-    if (E.autoAdvPartnerWrap) E.autoAdvPartnerWrap.style.display="none";
-    if (E.advOnSpeechWrap) E.advOnSpeechWrap.style.display="none";
-    updateEditModeUI(); updateMicBadge();
+    $("#btnToggleEditMode").addEventListener("click",()=>{ S.editMode=!S.editMode; applyEditModeUI(); });
+    function applyEditModeUI(){ $("#btnToggleEditMode").setAttribute("aria-pressed",S.editMode?"true":"false"); $("#editModeState").textContent=S.editMode?"On":"Off"; $$(".editbar",E.linesWrap).forEach(el=>el.style.display=S.editMode?"flex":"none"); $$(".inline-slot",E.linesWrap).forEach(el=>el.style.display=S.editMode?"flex":"none"); if(!S.editMode && E.inlineForm && E.inlineForm.isConnected){ try{ E.inlineForm.remove(); }catch{}; E.currentSlotPlace=null; } }
+
+    $("#btnMic").addEventListener("click", async ()=>{ if(!sr){ updateMicBadge(); return; } if(!srToggleOn){ const ok=await requestMicPermissionOnce(); srToggleOn=ok; if(ok){ await maybeListenForMyLine(); } } else { srToggleOn=false; try{ sr.stop(); }catch{}; clearMyLineTimers(); } updateMicBadge(); });
+
+    // Initial render
+    hydrateRehearse(); applyEditModeUI(); updateMicBadge();
   </script>
 </body>
 </html>
