@@ -270,7 +270,7 @@ JANE: Ready?"></textarea>
     /* ------- TTS -------- */
     function synthSpeak(text){ if(!window.speechSynthesis) return; window.speechSynthesis.cancel(); const u=new SpeechSynthesisUtterance(text); const v=(window.speechSynthesis.getVoices()||[]).find(v=>/en(-|_)?/.test(v.lang)); if(v) u.voice=v; u.rate=1.0; u.pitch=1.0; window.speechSynthesis.speak(u); return new Promise(res=>{ u.onend=()=>res(); u.onerror=()=>res(); }); }
 
-    /* ------- Speech Recognition: conservative + progress gating ------- */
+    /* ------- Speech Recognition: final-dash gating + progress gating ------- */
     const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
     const sr=SR?new SR():null;
     let srToggleOn=false, srPermGranted=false, srActive=false;
@@ -309,7 +309,8 @@ JANE: Ready?"></textarea>
     function minElapsedFor(text){ const t=(text||"").trim(); if(t.length<=6) return 180; if(t.length<=15) return 220; if(t.length<=40) return 300; return 420; }
     function silenceDebounceFor(text){ const t=(text||"").trim(); if(t.length<=6) return 180; if(t.length<=15) return 220; if(t.length<=40) return 260; return 320; }
     const AFTER_ADV_COOLDOWN_MS=140, FAST_INTERIM_CHARS=12, WATCHDOG_MS=300, NORESULT_RESTART_MS=1500;
-    const MIN_PROGRESS_FOR_SILENCE = 0.35; // <-- prevents early hop on repeated openers like “Sorry. I just”
+    const MIN_PROGRESS_FOR_SILENCE = 0.35; // avoid early hop on repeated openers like “Sorry. I just”
+    const PROGRESS_FOR_FINAL_DASH = 0.82;  // must be near the end to honor the last em dash
 
     function tokens(s){ return (s||"").toLowerCase().replace(/[^a-z0-9' ]+/g," ").split(/\s+/).filter(Boolean); }
     function lastCueWords(text){ const tks=tokens(text).filter(w=>!["uh","um"].includes(w)); if(!tks.length) return ""; const take=Math.min(2,tks.length); return tks.slice(-take).join(" "); }
@@ -364,7 +365,6 @@ JANE: Ready?"></textarea>
         const asrQuiet = (now - (lastResultAt||firstEnergyAt)) > 500;
         const progressOk = progressRatio(current()?.text||"", latestTranscript) >= MIN_PROGRESS_FOR_SILENCE;
 
-        // Only advance on silence if we have either the cue OR both (ASR is quiet AND we’ve actually progressed into the line)
         if(quietLongEnough && (cueOk || (asrQuiet && progressOk))){
           advanceFromMyLine();
         }
@@ -389,8 +389,9 @@ JANE: Ready?"></textarea>
         latestTranscript=(alt?.transcript||"").trim();
         lastResultAt=now;
 
-        // Early overlap only with em-dash and after a small real floor, and at least a couple words spoken
-        if(!isFinal && endsWithDash(ln.text) && elapsed>=180 && tokens(latestTranscript).length>=2){
+        // EARLY ADVANCE ONLY ON THE FINAL EM DASH:
+        // require: line ends with dash, small elapsed floor, a couple words spoken, and progress near end.
+        if(!isFinal && endsWithDash(ln.text) && elapsed>=180 && tokens(latestTranscript).length>=2 && progressRatio(ln.text, latestTranscript) >= PROGRESS_FOR_FINAL_DASH){
           return advanceFromMyLine();
         }
 
