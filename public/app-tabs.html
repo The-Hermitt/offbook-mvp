@@ -48,13 +48,15 @@
     .inline-slot .ghostline{ width:100%; border:1px dashed var(--border); border-radius:10px; padding:10px }
     .inline-form{ width:100%; background:#0c0f16; border:1px solid var(--border); border-radius:12px; padding:10px; margin-top:8px }
 
-    /* NEW: sticky toolbar inside Rehearse card */
+    /* Sticky toolbar */
     .toolbar{ position:sticky; top:0; z-index:30; margin:-12px -12px 10px; padding:12px env(safe-area-inset-right) 12px env(safe-area-inset-left);
       background:linear-gradient(180deg, rgba(11,12,15,0.98) 0%, rgba(11,12,15,0.94) 100%); border-bottom:1px solid var(--border); border-top-left-radius:12px; border-top-right-radius:12px; }
     .toolbar .controls{ justify-content:space-between }
     .toolbar .left, .toolbar .right{ display:flex; gap:8px; align-items:center; flex-wrap:wrap }
     .btn.icon{ min-width:auto; padding:12px; }
-    .btn.icon::before{ content:"⟲"; font-weight:900; }
+    /* BIGGER icon */
+    .btn.icon::before{ content:"⟲"; font-weight:900; font-size:20px; line-height:1; display:block; }
+
   </style>
 </head>
 <body>
@@ -268,7 +270,7 @@ JANE: Ready?"></textarea>
     /* ------- TTS -------- */
     function synthSpeak(text){ if(!window.speechSynthesis) return; window.speechSynthesis.cancel(); const u=new SpeechSynthesisUtterance(text); const v=(window.speechSynthesis.getVoices()||[]).find(v=>/en(-|_)?/.test(v.lang)); if(v) u.voice=v; u.rate=1.0; u.pitch=1.0; window.speechSynthesis.speak(u); return new Promise(res=>{ u.onend=()=>res(); u.onerror=()=>res(); }); }
 
-    /* ------- SR runtime (from previous stable build cue3) ------- */
+    /* ------- Speech Recognition: conservative + progress gating ------- */
     const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
     const sr=SR?new SR():null;
     let srToggleOn=false, srPermGranted=false, srActive=false;
@@ -307,10 +309,13 @@ JANE: Ready?"></textarea>
     function minElapsedFor(text){ const t=(text||"").trim(); if(t.length<=6) return 180; if(t.length<=15) return 220; if(t.length<=40) return 300; return 420; }
     function silenceDebounceFor(text){ const t=(text||"").trim(); if(t.length<=6) return 180; if(t.length<=15) return 220; if(t.length<=40) return 260; return 320; }
     const AFTER_ADV_COOLDOWN_MS=140, FAST_INTERIM_CHARS=12, WATCHDOG_MS=300, NORESULT_RESTART_MS=1500;
+    const MIN_PROGRESS_FOR_SILENCE = 0.35; // <-- prevents early hop on repeated openers like “Sorry. I just”
 
     function tokens(s){ return (s||"").toLowerCase().replace(/[^a-z0-9' ]+/g," ").split(/\s+/).filter(Boolean); }
     function lastCueWords(text){ const tks=tokens(text).filter(w=>!["uh","um"].includes(w)); if(!tks.length) return ""; const take=Math.min(2,tks.length); return tks.slice(-take).join(" "); }
     function transcriptContainsCue(tr){ const cue=lastCueWords(current()?.text||""); if(!cue) return false; return tokens(tr).join(" ").includes(cue); }
+    function norm(s){ return (s||"").toLowerCase().replace(/[^a-z0-9' ]+/g," ").trim(); }
+    function progressRatio(lineText, tr){ const a=norm(lineText); const b=norm(tr); if(!a) return 0; return Math.min(1, b.length / a.length); }
 
     function filtered(){ return buildFiltered(getScene()); }
     function current(){ return filtered()[idx]; }
@@ -328,6 +333,7 @@ JANE: Ready?"></textarea>
       if(!onMyLine()) return;
       const elapsed=now-(myLineStartMs||now);
       if(elapsed < minElapsedFor(current()?.text||"")) return;
+
       advanceLock=true;
       const list=filtered(); if(!list.length) return;
       idx=Math.min(idx+1,list.length-1);
@@ -352,8 +358,16 @@ JANE: Ready?"></textarea>
         const now=performance.now();
         const elapsed=now-(myLineStartMs||now);
         if(!firstEnergyAt || elapsed < minElapsedFor(current()?.text||"")) return;
-        const quiet = !speaking && (now - Math.max(lastResultAt||firstEnergyAt, firstEnergyAt)) > 400;
-        if( quiet || transcriptContainsCue(latestTranscript) ){ advanceFromMyLine(); }
+
+        const quietLongEnough = !speaking && (now - Math.max(lastResultAt||firstEnergyAt, firstEnergyAt)) >= need;
+        const cueOk = transcriptContainsCue(latestTranscript);
+        const asrQuiet = (now - (lastResultAt||firstEnergyAt)) > 500;
+        const progressOk = progressRatio(current()?.text||"", latestTranscript) >= MIN_PROGRESS_FOR_SILENCE;
+
+        // Only advance on silence if we have either the cue OR both (ASR is quiet AND we’ve actually progressed into the line)
+        if(quietLongEnough && (cueOk || (asrQuiet && progressOk))){
+          advanceFromMyLine();
+        }
       }, need);
     }
 
@@ -369,28 +383,42 @@ JANE: Ready?"></textarea>
         const now=performance.now(); if(now<advanceCoolUntil) return;
         const ln=current(); if(!ln) return;
         const elapsed=now-(myLineStartMs||now);
+
         const last=ev.results?.[ev.results.length-1];
         const alt=last?.[0]; const isFinal=!!last?.isFinal;
         latestTranscript=(alt?.transcript||"").trim();
         lastResultAt=now;
 
-        if(!isFinal && endsWithDash(ln.text) && elapsed>=180){ return advanceFromMyLine(); }
-        if(!isFinal && latestTranscript.length>=12 && transcriptContainsCue(latestTranscript) && elapsed>=minElapsedFor(ln.text)+120){ return advanceFromMyLine(); }
-        if(isFinal && elapsed>=minElapsedFor(ln.text)){ return advanceFromMyLine(); }
+        // Early overlap only with em-dash and after a small real floor, and at least a couple words spoken
+        if(!isFinal && endsWithDash(ln.text) && elapsed>=180 && tokens(latestTranscript).length>=2){
+          return advanceFromMyLine();
+        }
+
+        // Confident interim + includes last cue → but only after safer floor
+        if(!isFinal && latestTranscript.length>=FAST_INTERIM_CHARS && transcriptContainsCue(latestTranscript) && elapsed>=minElapsedFor(ln.text)+120){
+          return advanceFromMyLine();
+        }
+
+        // Final result → after normal floor
+        if(isFinal && elapsed>=minElapsedFor(ln.text)){
+          return advanceFromMyLine();
+        }
+
         armSilenceDebounce();
       };
     }
 
+    // Gentle watchdog
     setInterval(()=>{
       if(!(sr && srToggleOn && srPermGranted)) return;
       if(!(onMyLine()) || (E.inlineForm&&E.inlineForm.isConnected)) return;
       const now=performance.now();
       if(!srActive){ try{ sr.start(); }catch{} }
-      if(speaking && firstEnergyAt && now - Math.max(lastResultAt||firstEnergyAt, firstEnergyAt) > 1500){
+      if(speaking && firstEnergyAt && now - Math.max(lastResultAt||firstEnergyAt, firstEnergyAt) > NORESULT_RESTART_MS){
         try{ sr.stop(); }catch{};
         try{ sr.start(); }catch{};
       }
-    }, 300);
+    }, WATCHDOG_MS);
 
     async function maybeListenForMyLine(){
       if(!sr || !srToggleOn || !srPermGranted || (E.inlineForm&&E.inlineForm.isConnected)) return;
