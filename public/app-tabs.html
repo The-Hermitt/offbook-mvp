@@ -35,6 +35,7 @@
     .line{ padding:10px; border-radius:10px; border:1px solid var(--border); margin-bottom:8px; background:#0c0f16; position:relative }
     .line.me{ border-color:#2f6df6; background:#0e1220 }
     .line .who{ font-weight:700; margin-bottom:6px }
+    .line .text{ line-height:1.4 }
     .controls{ display:flex; gap:8px; align-items:center; flex-wrap:wrap }
     .playing{ outline:2px solid var(--focus) }
     .badge{ font-size:11px; padding:4px 8px; border-radius:999px; border:1px solid var(--border); background:#0f1420; color:#a7b0c5 }
@@ -170,6 +171,7 @@ JANE: Ready?"></textarea>
 
   <!-- App -->
   <script type="module">
+    /* ------- helpers ------- */
     const qs = new URLSearchParams(location.search);
     const secret = qs.get("secret") || "1976";
     const JSON_HDRS = { "Content-Type":"application/json", ...(secret?{"X-Shared-Secret":secret}:{}) };
@@ -179,6 +181,7 @@ JANE: Ready?"></textarea>
 
     function showScreen(name){ $$(".screen").forEach(s=>s.classList.remove("active")); $("#screen-"+name).classList.add("active"); $$(".tabbar button").forEach(b=>b.classList.remove("active")); const btn=$(`.tabbar button[data-tab="${name}"]`); if(btn) btn.classList.add("active"); }
     $$(".tabbar button").forEach(b=>b.addEventListener("click",()=>showScreen(b.dataset.tab)));
+
     const tabText=$("#tab-text"), tabPdf=$("#tab-pdf"), panelText=$("#panel-text"), panelPdf=$("#panel-pdf");
     tabText.addEventListener("click",()=>{ tabText.classList.add("active"); tabPdf.classList.remove("active"); panelText.hidden=false; panelPdf.hidden=true; });
     tabPdf.addEventListener("click",()=>{ tabPdf.classList.add("active"); tabText.classList.remove("active"); panelPdf.hidden=false; panelText.hidden=true; });
@@ -191,7 +194,7 @@ JANE: Ready?"></textarea>
       const kept=[]; for(const ln of lines){ const t=ln.trim(); if(!t){ kept.push(""); continue; } if(drop.some(rx=>rx.test(t))) continue; if(/^\(.*\)$/.test(t)) continue; kept.push(ln); } return kept.join("\n");
     }
 
-    // Import Text
+    /* ------- import (unchanged) ------- */
     const setStatus = msg => $("#status").textContent = msg || "";
     $("#btnTextUpload").addEventListener("click", async ()=>{
       const title=$("#titleText").value||"Sides";
@@ -201,7 +204,6 @@ JANE: Ready?"></textarea>
     });
     $("#btnTextClear").addEventListener("click",()=>{ $("#titleText").value=""; $("#scriptText").value=""; setStatus(""); });
 
-    // Import PDF (unchanged)
     const setStatusPdf = msg => $("#statusPdf").textContent = msg || "";
     $("#btnPdfUpload").addEventListener("click", async ()=>{
       const title=$("#titlePdf").value||"PDF Sides"; const file=$("#pdfFile").files[0]; if(!file){ setStatusPdf("Choose a PDF first."); return; }
@@ -217,24 +219,11 @@ JANE: Ready?"></textarea>
       S.scenes=j.scenes||[]; hydrateAssign(); hydrateRehearse(); applyEditModeUI();
     }
     function uniqueRoles(){ const names=new Set(); for(const sc of (S.scenes||[])) for(const ln of (sc.lines||[])) names.add(ln.speaker); return Array.from(names).filter(n=>n&&n!=="SYSTEM"&&n!=="NARRATOR"); }
-    function hydrateAssign(){
-      $("#pillScript").textContent="script: "+(S.script_id||"—"); $("#pillScenes").textContent="scenes: "+(S.scenes?.length||0);
-      const roles=uniqueRoles(); const sel=$("#selectRole");
-      sel.innerHTML=roles.map(r=>`<option value="${r}">${r}</option>`).join(""); if(!S.role&&roles.length) S.role=roles[0]; sel.value=S.role||"";
-      sel.onchange=()=>{ S.role=sel.value; buildVoicePickers(); hydrateRehearse(); applyEditModeUI(); };
-      buildVoicePickers();
-    }
-    function buildVoicePickers(){
-      const box=$("#voicePickers"); box.innerHTML=""; const presets=["alloy","verse","aria","solar","narrator"]; const partners=uniqueRoles().filter(n=>n!==S.role);
-      partners.forEach(name=>{ const wrap=document.createElement("div"); wrap.className="card"; wrap.style.marginTop="8px"; wrap.innerHTML=`<div style="display:flex;align-items:center;justify-content:space-between;gap:10px"><strong>${name}</strong><select data-name="${name}">${presets.map(v=>`<option value="${v}" ${((S.voice_map[name]||presets[0])===v)?"selected":""}>${v}</option>`).join("")}</select></div>`; box.appendChild(wrap); });
-      box.querySelectorAll("select").forEach(el=>el.addEventListener("change",(e)=>{ const sel=e.target; S.voice_map[sel.getAttribute("data-name")]=sel.value; }));
-    }
-    $("#btnSaveAssign").addEventListener("click", async ()=>{
-      if(!S.script_id) return; const roles=uniqueRoles().filter(r=>r!==S.role); for(const r of roles) if(!S.voice_map[r]) S.voice_map[r]="alloy";
-      await fetch("/debug/set_voice",{method:"POST",headers:JSON_HDRS,body:JSON.stringify({script_id:S.script_id,voice_map:S.voice_map})}); showScreen("rehearse");
-    });
+    function hydrateAssign(){ $("#pillScript").textContent="script: "+(S.script_id||"—"); $("#pillScenes").textContent="scenes: "+(S.scenes?.length||0); const roles=uniqueRoles(); const sel=$("#selectRole"); sel.innerHTML=roles.map(r=>`<option value="${r}">${r}</option>`).join(""); if(!S.role&&roles.length) S.role=roles[0]; sel.value=S.role||""; sel.onchange=()=>{ S.role=sel.value; buildVoicePickers(); hydrateRehearse(); applyEditModeUI(); }; buildVoicePickers(); }
+    function buildVoicePickers(){ const box=$("#voicePickers"); box.innerHTML=""; const presets=["alloy","verse","aria","solar","narrator"]; const partners=uniqueRoles().filter(n=>n!==S.role); partners.forEach(name=>{ const wrap=document.createElement("div"); wrap.className="card"; wrap.style.marginTop="8px"; wrap.innerHTML=`<div style="display:flex;align-items:center;justify-content:space-between;gap:10px"><strong>${name}</strong><select data-name="${name}">${presets.map(v=>`<option value="${v}" ${((S.voice_map[name]||presets[0])===v)?"selected":""}>${v}</option>`).join("")}</select></div>`; box.appendChild(wrap); }); box.querySelectorAll("select").forEach(el=>el.addEventListener("change",(e)=>{ const sel=e.target; S.voice_map[sel.getAttribute("data-name")]=sel.value; })); }
+    $("#btnSaveAssign").addEventListener("click", async ()=>{ if(!S.script_id) return; const roles=uniqueRoles().filter(r=>r!==S.role); for(const r of roles) if(!S.voice_map[r]) S.voice_map[r]="alloy"; await fetch("/debug/set_voice",{method:"POST",headers:JSON_HDRS,body:JSON.stringify({script_id:S.script_id,voice_map:S.voice_map})}); showScreen("rehearse"); });
 
-    // Rehearse UI build
+    /* ------- rehearse build ------- */
     const E={ linesWrap:$("#lines"), btnPlay:$("#btnPlay"), btnPrev:$("#btnPrev"), btnNext:$("#btnNext"), selPace:$("#selPace"), btnMic:$("#btnMic"), micBadge:$("#micBadge"), btnToggleEditMode:$("#btnToggleEditMode"), editModeState:$("#editModeState"), inlineForm:null, currentSlotPlace:null };
     let idx=0, playing=false;
 
@@ -257,43 +246,69 @@ JANE: Ready?"></textarea>
         <div class="who">${ln.speaker}</div><div class="text" data-i="${i}" contenteditable="false">${ln.text}</div></div>`; html+=inlineSlot(ln.orig+1); });
       E.linesWrap.innerHTML=html; idx=Math.max(0,Math.min(idx,list.length-1)); wireEditTools(); wireSlots(); highlightCurrent(); applyEditModeUI();
     }
-    function wireEditTools(){
-      $$(".chip",E.linesWrap).forEach(ch=>ch.onclick=(ev)=>{ ev.stopPropagation(); const act=ch.getAttribute("data-act"); const iF=+ch.getAttribute("data-i"); const sc=getScene(); if(!sc) return;
-        const node=$(`.line[data-i="${iF}"]`,E.linesWrap); const orig=+node.getAttribute("data-orig"); if(Number.isNaN(orig)) return;
-        if(act==="edit"){ if(!S.editMode) return; const t=$(`.text[data-i="${iF}"]`,E.linesWrap); const editing=t.getAttribute("contenteditable")==="true";
-          if(editing){ t.setAttribute("contenteditable","false"); sc.lines[orig].text=t.innerText.trim(); hydrateRehearse(); } else { t.setAttribute("contenteditable","true"); t.focus(); placeCaretEnd(t); }
-        } else if(act==="del"){ if(!S.editMode) return; sc.lines.splice(orig,1); hydrateRehearse(); }
-      });
-    }
+    function wireEditTools(){ $$(".chip",E.linesWrap).forEach(ch=>ch.onclick=(ev)=>{ ev.stopPropagation(); const act=ch.getAttribute("data-act"); const iF=+ch.getAttribute("data-i"); const sc=getScene(); if(!sc) return; const node=$(`.line[data-i="${iF}"]`,E.linesWrap); const orig=+node.getAttribute("data-orig"); if(Number.isNaN(orig)) return; if(act==="edit"){ if(!S.editMode) return; const t=$(`.text[data-i="${iF}"]`,E.linesWrap); const editing=t.getAttribute("contenteditable")==="true"; if(editing){ t.setAttribute("contenteditable","false"); sc.lines[orig].text=t.innerText.trim(); hydrateRehearse(); } else { t.setAttribute("contenteditable","true"); t.focus(); placeCaretEnd(t); } } else if(act==="del"){ if(!S.editMode) return; sc.lines.splice(orig,1); hydrateRehearse(); } }); }
     function wireSlots(){ $$('[data-add-button]',E.linesWrap).forEach(btn=>btn.onclick=(ev)=>{ if(!S.editMode) return; ev.stopPropagation(); const slot=btn.closest('.inline-slot'); openInlineForm(slot, Number(slot.getAttribute("data-place"))); }); }
     function placeCaretEnd(el){ const r=document.createRange(); r.selectNodeContents(el); r.collapse(false); const s=window.getSelection(); s.removeAllRanges(); s.addRange(r); }
-    function highlightCurrent(){ $$(".line",E.linesWrap).forEach(el=>el.classList.remove("playing")); const cur=$(`.line[data-i="${idx}"]`,E.linesWrap); if(cur) cur.classList.add("playing"); cur?.scrollIntoView({block:"center",behavior:(!S.editMode?"smooth":"auto")}); }
+    function highlightCurrent(){ $$(".line",E.linesWrap).forEach(el=>el.classList.remove("playing")); const cur=$(`.line[data-i="${idx}"]`,E.linesWrap); if(cur){ cur.classList.add("playing"); cur.scrollIntoView({block:"center",behavior:(!S.editMode?"smooth":"auto")}); } }
 
     function buildInlineForm(){ const div=document.createElement("div"); div.className="inline-form"; div.innerHTML=`<div><label>Speaker</label><select class="addSpeaker"></select></div><div class="spacer6"></div><label>Line text</label><textarea class="addText" placeholder="Type the line…"></textarea><div class="spacer6"></div><div class="row"><button class="btn addCommit">Add</button><button class="btn secondary addCancel">Cancel</button></div>`; div.addEventListener('keydown',e=>e.stopPropagation()); div.addEventListener('click',e=>e.stopPropagation()); return div; }
-    function openInlineForm(slotEl, place){ const sc=getScene(); if(!sc) return; if(!E.inlineForm){ E.inlineForm=buildInlineForm(); } else { try{ E.inlineForm.remove(); }catch{} } slotEl.appendChild(E.inlineForm); E.currentSlotPlace=place; const sel=E.inlineForm.querySelector(".addSpeaker"); const roles=uniqueRoles(); sel.innerHTML=roles.map(r=>`<option value="${r}">${r}</option>`).join("")+`<option value="__custom">Custom…</option>`;
-      const ta=E.inlineForm.querySelector(".addText"); const add=E.inlineForm.querySelector(".addCommit"); const cancelBtn=E.inlineForm.querySelector(".addCancel");
-      pauseForEdit(true);
-      const cancel=()=>{ try{ E.inlineForm.remove(); }catch{}; E.currentSlotPlace=null; pauseForEdit(false); };
-      cancelBtn.onclick=e=>{ e.preventDefault(); cancel(); };
-      add.onclick=e=>{ e.preventDefault(); let sp=sel.value; if(sp==="__custom"){ sp=prompt("Speaker name?")||""; } const text=(ta.value||"").trim(); if(!sp||!text) return; const idxPlace=Math.max(0,Math.min(place,sc.lines.length)); sc.lines.splice(idxPlace,0,{speaker:sp,text}); cancel(); hydrateRehearse(); const after=buildFiltered(sc); const newPos=after.findIndex(x=>x.orig===place); if(newPos>=0){ idx=newPos; highlightCurrent(); } };
-      setTimeout(()=>ta.focus(),10);
-    }
+    function openInlineForm(slotEl, place){ const sc=getScene(); if(!sc) return; if(!E.inlineForm){ E.inlineForm=buildInlineForm(); } else { try{ E.inlineForm.remove(); }catch{} } slotEl.appendChild(E.inlineForm); E.currentSlotPlace=place; const sel=E.inlineForm.querySelector(".addSpeaker"); const roles=uniqueRoles(); sel.innerHTML=roles.map(r=>`<option value="${r}">${r}</option>`).join("")+`<option value="__custom">Custom…</option>`; const ta=E.inlineForm.querySelector(".addText"); const add=E.inlineForm.querySelector(".addCommit"); const cancelBtn=E.inlineForm.querySelector(".addCancel"); pauseForEdit(true); const cancel=()=>{ try{ E.inlineForm.remove(); }catch{}; E.currentSlotPlace=null; pauseForEdit(false); }; cancelBtn.onclick=e=>{ e.preventDefault(); cancel(); }; add.onclick=e=>{ e.preventDefault(); let sp=sel.value; if(sp==="__custom"){ sp=prompt("Speaker name?")||""; } const text=(ta.value||"").trim(); if(!sp||!text) return; const idxPlace=Math.max(0,Math.min(place,sc.lines.length)); sc.lines.splice(idxPlace,0,{speaker:sp,text}); cancel(); hydrateRehearse(); const after=buildFiltered(sc); const newPos=after.findIndex(x=>x.orig===place); if(newPos>=0){ idx=newPos; highlightCurrent(); } }; setTimeout(()=>ta.focus(),10); }
     function pauseForEdit(on){ if(on){ playing=false; E.btnPlay.textContent="Play"; window.speechSynthesis?.cancel(); try{ sr?.stop(); }catch{} } else { maybeListenForMyLine(); } }
 
-    // TTS
+    /* ------- TTS -------- */
     function synthSpeak(text){ if(!window.speechSynthesis) return; window.speechSynthesis.cancel(); const u=new SpeechSynthesisUtterance(text); const v=(window.speechSynthesis.getVoices()||[]).find(v=>/en(-|_)?/.test(v.lang)); if(v) u.voice=v; u.rate=1.0; u.pitch=1.0; window.speechSynthesis.speak(u); return new Promise(res=>{ u.onend=()=>res(); u.onerror=()=>res(); }); }
 
-    // ---- Speech Recognition (permission only via Mic button) + Silence Debounce + Last-Word Cues
+    /* ------- Speech Recognition with steady guardrails ------- */
     const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
     const sr=SR?new SR():null;
     let srToggleOn=false, srPermGranted=false, srActive=false;
-    let myLineStartMs=0, advanceLock=false, advanceCoolUntil=0;
-    let latestTranscript="", silenceTimer=null;
+    let myLineStartMs=0, firstEnergyAt=0, advanceLock=false, advanceCoolUntil=0;
+    let latestTranscript="", silenceTimer=null, lastResultAt=0;
 
-    function minElapsedFor(text){ const t=(text||"").trim(); if(t.length<=6) return 40; if(t.length<=15) return 100; if(t.length<=40) return 220; return 360; }
-    function silenceDebounceFor(text){ const t=(text||"").trim(); if(t.length<=6) return 120; if(t.length<=15) return 160; if(t.length<=40) return 200; return 260; }
-    const AFTER_ADV_COOLDOWN_MS=80;
-    const FAST_INTERIM_CHARS=10;
+    // Energy monitor (smoothed)
+    let micStream=null, audioCtx=null, analyser=null, energy=0, speaking=false, lastEnergyAt=0, lastSilenceAt=0;
+    const ENERGY_TALK_THRESH=0.035;  // higher floor to ignore breaths
+    const ENERGY_SILENCE_THRESH=0.020;
+
+    function rms(buf){ let sum=0; for(let i=0;i<buf.length;i++){ const v=buf[i]/128-1; sum+=v*v; } return Math.sqrt(sum/buf.length); }
+    function startMicMonitor(){
+      if(micStream) return;
+      navigator.mediaDevices.getUserMedia({audio:true}).then(stream=>{
+        micStream=stream;
+        audioCtx=new (window.AudioContext||window.webkitAudioContext)();
+        const src=audioCtx.createMediaStreamSource(stream);
+        analyser=audioCtx.createAnalyser(); analyser.fftSize=2048;
+        src.connect(analyser);
+        const data=new Uint8Array(analyser.fftSize);
+        const tick=()=>{
+          if(!analyser) return;
+          analyser.getByteTimeDomainData(data);
+          const v=rms(data);
+          energy = energy*0.85 + v*0.15; // smooth
+          const now=performance.now();
+          if(energy>ENERGY_TALK_THRESH){
+            if(!speaking){ firstEnergyAt=now; }
+            speaking=true; lastEnergyAt=now;
+          }else if(energy<ENERGY_SILENCE_THRESH){
+            if(now-(lastEnergyAt||now)>140){ speaking=false; lastSilenceAt=now; }
+          }
+          requestAnimationFrame(tick);
+        };
+        tick();
+      }).catch(()=>{ /* ignore */ });
+    }
+    function stopMicMonitor(){
+      try{ micStream?.getTracks().forEach(t=>t.stop()); }catch{}
+      micStream=null;
+      try{ audioCtx?.close(); }catch{}
+      audioCtx=null; analyser=null; energy=0; speaking=false;
+    }
+
+    function minElapsedFor(text){ const t=(text||"").trim(); if(t.length<=6) return 180; if(t.length<=15) return 220; if(t.length<=40) return 300; return 420; }
+    function silenceDebounceFor(text){ const t=(text||"").trim(); if(t.length<=6) return 180; if(t.length<=15) return 220; if(t.length<=40) return 260; return 320; }
+    const AFTER_ADV_COOLDOWN_MS=140;
+    const FAST_INTERIM_CHARS=12;
+    const WATCHDOG_MS=300, NORESULT_RESTART_MS=1500;
 
     function tokens(s){ return (s||"").toLowerCase().replace(/[^a-z0-9' ]+/g," ").split(/\s+/).filter(Boolean); }
     function lastCueWords(text){ const tks=tokens(text).filter(w=>!["uh","um"].includes(w)); if(!tks.length) return ""; const take=Math.min(2,tks.length); return tks.slice(-take).join(" "); }
@@ -303,27 +318,58 @@ JANE: Ready?"></textarea>
     function current(){ return filtered()[idx]; }
     function onMyLine(){ const ln=current(); return !!ln && ln.speaker===myName(); }
     function maybeSetMyLineStart(){ if(onMyLine() && !myLineStartMs) myLineStartMs=performance.now(); }
-    function clearMyLineTimers(){ myLineStartMs=0; advanceLock=false; latestTranscript=""; if(silenceTimer){ clearTimeout(silenceTimer); silenceTimer=null; } }
+    function clearMyLineTimers(){ myLineStartMs=0; firstEnergyAt=0; advanceLock=false; latestTranscript=""; lastResultAt=0; if(silenceTimer){ clearTimeout(silenceTimer); silenceTimer=null; } }
 
     function updateMicBadge(){ if(!sr){ E.micBadge.textContent="speech recognition: not supported"; E.micBadge.className="badge err"; E.btnMic.disabled=true; return; } const label=!srToggleOn?"off":(srActive?"listening…":(srPermGranted?"ready":"needs permission")); E.micBadge.textContent=label; E.micBadge.className="badge "+(!srToggleOn?"warn":(srActive?"ok":(srPermGranted?"warn":"err"))); E.btnMic.textContent=srToggleOn?"Mic: On":"Mic: Off"; E.btnMic.setAttribute("aria-pressed",srToggleOn?"true":"false"); }
 
     async function requestMicPermissionOnce(){ if(srPermGranted) return true; try{ const s=await navigator.mediaDevices.getUserMedia({audio:true}); s.getTracks().forEach(t=>t.stop()); srPermGranted=true; return true; }catch{ srPermGranted=false; return false; } finally{ updateMicBadge(); } }
 
-    function advanceFromMyLine(){ const now=performance.now(); if(advanceLock||now<advanceCoolUntil) return; if(!onMyLine()) return; advanceLock=true; const list=filtered(); if(!list.length) return; idx=Math.min(idx+1,list.length-1); highlightCurrent(); clearMyLineTimers(); try{ sr?.stop(); }catch{} const next=current(); advanceCoolUntil=now+AFTER_ADV_COOLDOWN_MS; if(next && next.speaker===myName()){ if(srToggleOn && srPermGranted){ setTimeout(()=>{ if(sr && !srActive) try{ sr.start(); }catch{}; },30); } } else { if(!playing) playing=true; step(true); } }
+    function advanceFromMyLine(){
+      const now=performance.now();
+      if(advanceLock||now<advanceCoolUntil) return;
+      if(!onMyLine()) return;
+      // must have actually spoken at least minElapsed
+      const elapsed=now-(myLineStartMs||now);
+      if(elapsed < minElapsedFor(current()?.text||"")) return;
+
+      advanceLock=true;
+      const list=filtered(); if(!list.length) return;
+      idx=Math.min(idx+1,list.length-1);
+      highlightCurrent();
+      clearMyLineTimers();
+      try{ sr?.stop(); }catch{}
+      const next=current();
+      advanceCoolUntil=now+AFTER_ADV_COOLDOWN_MS;
+      if(next && next.speaker===myName()){
+        if(srToggleOn && srPermGranted){ setTimeout(()=>{ if(sr && !srActive) try{ sr.start(); }catch{}; },80); }
+      }else{
+        if(!playing) playing=true;
+        step(true);
+      }
+    }
 
     function armSilenceDebounce(){
       if(silenceTimer) clearTimeout(silenceTimer);
       const need = silenceDebounceFor(current()?.text||"");
       silenceTimer = setTimeout(()=>{
         if(!(onMyLine() && srToggleOn && srPermGranted)) return;
-        const elapsed=performance.now()-(myLineStartMs||performance.now());
-        // only advance if we likely heard the last cue OR we've spoken long enough
-        if(transcriptContainsCue(latestTranscript) || elapsed>=minElapsedFor(current()?.text||"")+60){
+        const now=performance.now();
+        const elapsed=now-(myLineStartMs||now);
+
+        // Only consider if we clearly spoke first
+        if(!firstEnergyAt || elapsed < minElapsedFor(current()?.text||"")) return;
+
+        const quietLongEnough = !speaking && (now - Math.max(lastEnergyAt||0, firstEnergyAt)) >= need;
+        const cueOk = transcriptContainsCue(latestTranscript);
+        const asrQuiet = (now - (lastResultAt||firstEnergyAt)) > 400;
+
+        if(quietLongEnough && (cueOk || asrQuiet)){
           advanceFromMyLine();
         }
       }, need);
     }
 
+    // SpeechRecognition wiring
     if(sr){
       sr.continuous=false; sr.interimResults=true; sr.lang="en-US";
       sr.onstart=()=>{ srActive=true; updateMicBadge(); };
@@ -340,31 +386,49 @@ JANE: Ready?"></textarea>
         const last=ev.results?.[ev.results.length-1];
         const alt=last?.[0]; const isFinal=!!last?.isFinal;
         latestTranscript=(alt?.transcript||"").trim();
+        lastResultAt=now;
 
-        // Early overlap only with em-dash
-        if(!isFinal && endsWithDash(ln.text) && elapsed>=100){ return advanceFromMyLine(); }
+        // Only allow early overlap with em-dash and after a small real floor
+        if(!isFinal && endsWithDash(ln.text) && elapsed>=180){ return advanceFromMyLine(); }
 
-        // Confident interim + contains last cue → advance
-        if(!isFinal && latestTranscript.length>=FAST_INTERIM_CHARS && transcriptContainsCue(latestTranscript) && elapsed>=Math.max(60,minElapsedFor(ln.text))){
+        // Confident interim + includes last cue → but only after safer floor
+        if(!isFinal && latestTranscript.length>=FAST_INTERIM_CHARS && transcriptContainsCue(latestTranscript) && elapsed>=minElapsedFor(ln.text)+120){
           return advanceFromMyLine();
         }
 
-        // Final result → advance fast
-        if(isFinal && elapsed>=Math.max(70,minElapsedFor(ln.text))){
+        // Final result → after normal floor
+        if(isFinal && elapsed>=minElapsedFor(ln.text)){
           return advanceFromMyLine();
         }
 
-        // Keep debounce armed to beat iOS's late onspeechend
         armSilenceDebounce();
       };
-
-      sr.onspeechend=()=>{ if(!(onMyLine() && srToggleOn && srPermGranted)) return; const ln=current(); if(!ln) return; const elapsed=performance.now()-(myLineStartMs||performance.now()); if(elapsed>=minElapsedFor(ln.text)) return advanceFromMyLine(); };
     }
+
+    // Watchdog: gentle
+    setInterval(()=>{
+      if(!(sr && srToggleOn && srPermGranted)) return;
+      if(!(onMyLine()) || (E.inlineForm&&E.inlineForm.isConnected)) return;
+
+      const now=performance.now();
+      if(!srActive){ try{ sr.start(); }catch{} }
+
+      // Only restart if we've been speaking for a while and ASR went totally quiet
+      if(speaking && firstEnergyAt && now - Math.max(lastResultAt||firstEnergyAt, firstEnergyAt) > NORESULT_RESTART_MS){
+        try{ sr.stop(); }catch{};
+        try{ sr.start(); }catch{};
+      }
+    }, WATCHDOG_MS);
 
     async function maybeListenForMyLine(){
       if(!sr || !srToggleOn || !srPermGranted || (E.inlineForm&&E.inlineForm.isConnected)) return;
-      if(onMyLine()){ maybeSetMyLineStart(); if(!srActive){ try{ sr.start(); }catch{} } }
-      else { clearMyLineTimers(); if(srActive){ try{ sr.stop(); }catch{} } }
+      if(onMyLine()){
+        maybeSetMyLineStart();
+        if(!srActive){ try{ sr.start(); }catch{} }
+      }else{
+        clearMyLineTimers();
+        if(srActive){ try{ sr.stop(); }catch{} }
+      }
     }
 
     async function step(playMode){
@@ -392,9 +456,23 @@ JANE: Ready?"></textarea>
     $("#btnToggleEditMode").addEventListener("click",()=>{ S.editMode=!S.editMode; applyEditModeUI(); });
     function applyEditModeUI(){ $("#btnToggleEditMode").setAttribute("aria-pressed",S.editMode?"true":"false"); $("#editModeState").textContent=S.editMode?"On":"Off"; $$(".editbar",E.linesWrap).forEach(el=>el.style.display=S.editMode?"flex":"none"); $$(".inline-slot",E.linesWrap).forEach(el=>el.style.display=S.editMode?"flex":"none"); if(!S.editMode && E.inlineForm && E.inlineForm.isConnected){ try{ E.inlineForm.remove(); }catch{}; E.currentSlotPlace=null; } }
 
-    $("#btnMic").addEventListener("click", async ()=>{ if(!sr){ updateMicBadge(); return; } if(!srToggleOn){ const ok=await requestMicPermissionOnce(); srToggleOn=ok; if(ok){ await maybeListenForMyLine(); } } else { srToggleOn=false; try{ sr.stop(); }catch{}; clearMyLineTimers(); } updateMicBadge(); });
+    // Mic button: permission + energy monitor lifetime
+    $("#btnMic").addEventListener("click", async ()=>{
+      if(!sr){ updateMicBadge(); return; }
+      if(!srToggleOn){
+        const ok=await requestMicPermissionOnce();
+        srToggleOn=ok;
+        if(ok){ startMicMonitor(); await maybeListenForMyLine(); }
+      }else{
+        srToggleOn=false;
+        try{ sr.stop(); }catch{}
+        clearMyLineTimers();
+        stopMicMonitor();
+      }
+      updateMicBadge();
+    });
 
-    // Initial render
+    // initial
     hydrateRehearse(); applyEditModeUI(); updateMicBadge();
   </script>
 </body>
