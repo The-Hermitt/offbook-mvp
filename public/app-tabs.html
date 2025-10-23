@@ -31,7 +31,7 @@
     .pill{ display:inline-block; padding:6px 10px; border-radius:999px; border:1px solid var(--border); background:#0f1420; font-size:12px; margin-right:6px }
     .small{ font-size:12px; color:var(--muted) }
     /* Rehearse */
-    .line{ padding:10px; border-radius:10px; border:1px solid var(--border); margin-bottom:8px; background:#0c0f16 }
+    .line{ padding:10px; border-radius:10px; border:1px solid var(--border); margin-bottom:8px; background:#0c0f16; position:relative }
     .line.me{ border-color:#2f6df6; background:#0e1220 }
     .line .who{ font-weight:700; margin-bottom:6px }
     .line .text{ line-height:1.4 }
@@ -39,10 +39,14 @@
     .controls .btn{ min-width:88px }
     .kbd{ font-size:11px; color:var(--muted) }
     .playing{ outline:2px solid var(--focus) }
-    .badge{ font-size:11px; padding:4px 8px; border-radius:999px; border:1px solid var(--border); background:#0f1420; color:var(--muted) }
+    .badge{ font-size:11px; padding:4px 8px; border-radius:999px; border:1px solid var(--border); background:#0f1420; color:#a7b0c5 }
     .badge.ok{ color:#5ce38c; border-color:#1f4; }
     .badge.warn{ color:#f4c542; border-color:#d9b23d; }
     .badge.err{ color:#ff7b7b; border-color:#e96; }
+    .editbar{ position:absolute; top:6px; right:6px; display:flex; gap:6px }
+    .chip{ font-size:11px; padding:4px 8px; border-radius:999px; border:1px solid var(--border); background:#0f1420; color:#a7b0c5; cursor:pointer; user-select:none }
+    .chip.danger{ border-color:#e96; color:#ff7b7b }
+    .text[contenteditable="true"]{ outline:1px dashed var(--focus); border-radius:6px; padding:4px }
   </style>
 </head>
 <body>
@@ -53,7 +57,7 @@
     <section id="screen-import" class="screen active">
       <div class="card">
         <h3>Import</h3>
-        <p class="hint">Two ways to import. <b>Paste Script Text</b> is most reliable; <b>Upload PDF</b> attempts to extract text, with an OCR fallback for scanned PDFs.</p>
+        <p class="hint">Two ways to import. <b>Paste Script Text</b> is most reliable; <b>Upload PDF</b> extracts text with an OCR fallback for scanned PDFs.</p>
         <div class="spacer8"></div>
 
         <div class="inner-tabs" role="tablist">
@@ -94,7 +98,7 @@ JANE: Ready?"></textarea>
           <div class="spacer12"></div>
           <label>Status</label>
           <pre id="statusPdf" class="status"></pre>
-          <div class="small">Tip: OCR processes the first 3 pages by default for speed.</div>
+          <div class="small">Tip: OCR processes the first 3 pages for speed.</div>
         </div>
       </div>
     </section>
@@ -118,7 +122,7 @@ JANE: Ready?"></textarea>
     <section id="screen-rehearse" class="screen">
       <div class="card">
         <h3>Rehearse</h3>
-        <div class="hint">Partner lines are auto-spoken with your chosen voices. You speak your lines out loud.
+        <div class="hint">Partner lines auto-speak. You say your lines out loud.
           <span class="kbd">Space=Play/Pause</span> <span class="kbd">↑/↓=Prev/Next</span></div>
         <div class="spacer12"></div>
 
@@ -132,14 +136,18 @@ JANE: Ready?"></textarea>
             <option value="500">+500 ms</option>
             <option value="1000">+1 s</option>
           </select>
-          <label class="small"><input type="checkbox" id="chkAutoAdvance" checked /> Auto-advance partner lines</label>
+          <!-- keep in DOM for layout; hide via script and force ON -->
+          <label class="small" id="autoAdvPartnerWrap"><input type="checkbox" id="chkAutoAdvance" checked /> Auto-advance partner</label>
         </div>
 
         <div class="spacer8"></div>
         <div class="controls">
           <button id="btnMic" class="btn secondary">Mic: Off</button>
-          <label class="small"><input type="checkbox" id="chkAdvanceOnSpeech" /> Auto-advance on my speech</label>
-          <span id="micBadge" class="badge warn">speech recognition: checking…</span>
+          <!-- kept, hidden by script; logic stays always-on -->
+          <label class="small" id="advOnSpeechWrap" style="display:none"><input type="checkbox" id="chkAdvanceOnSpeech" checked /> Auto-advance on my speech</label>
+          <span id="micBadge" class="badge warn">off</span>
+          <span class="badge">Edit mode: <span id="editModeState">Off</span></span>
+          <button id="btnToggleEditMode" class="btn secondary">Toggle Edit Mode</button>
         </div>
 
         <div class="spacer12"></div>
@@ -169,36 +177,63 @@ JANE: Ready?"></textarea>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.6.82/pdf.min.mjs" type="module"></script>
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 
+  <!-- App -->
   <script type="module">
+    // ---------- Utilities ----------
     const qs = new URLSearchParams(location.search);
     const secret = qs.get("secret") || "";
-    const JSON_HDRS = { "Content-Type":"application/json" };
-    if (secret) JSON_HDRS["X-Shared-Secret"] = secret;
+    const JSON_HDRS = { "Content-Type":"application/json", ...(secret?{"X-Shared-Secret":secret}:{}) };
 
+    const $ = (sel,root=document)=>root.querySelector(sel);
+    const $$ = (sel,root=document)=>Array.from(root.querySelectorAll(sel));
+
+    // ---------- Tabs ----------
     function showScreen(name){
-      document.querySelectorAll(".screen").forEach(s=>s.classList.remove("active"));
-      document.getElementById("screen-"+name).classList.add("active");
-      document.querySelectorAll(".tabbar button").forEach(b=>b.classList.remove("active"));
-      const btn=document.querySelector(`.tabbar button[data-tab="${name}"]`);
-      if(btn) btn.classList.add("active");
+      $$(".screen").forEach(s=>s.classList.remove("active"));
+      $("#screen-"+name).classList.add("active");
+      $$(".tabbar button").forEach(b=>b.classList.remove("active"));
+      const btn=$(`.tabbar button[data-tab="${name}"]`); if(btn) btn.classList.add("active");
     }
-    document.querySelectorAll(".tabbar button").forEach(b=>b.addEventListener("click",()=>showScreen(b.dataset.tab)));
+    $$(".tabbar button").forEach(b=>b.addEventListener("click",()=>showScreen(b.dataset.tab)));
 
-    const tabText=document.getElementById("tab-text");
-    const tabPdf=document.getElementById("tab-pdf");
-    const panelText=document.getElementById("panel-text");
-    const panelPdf=document.getElementById("panel-pdf");
+    const tabText=$("#tab-text"), tabPdf=$("#tab-pdf");
+    const panelText=$("#panel-text"), panelPdf=$("#panel-pdf");
     tabText.addEventListener("click",()=>{ tabText.classList.add("active"); tabPdf.classList.remove("active"); panelText.hidden=false; panelPdf.hidden=true; });
     tabPdf.addEventListener("click",()=>{ tabPdf.classList.add("active"); tabText.classList.remove("active"); panelPdf.hidden=false; panelText.hidden=true; });
 
-    const S={ script_id:"", scenes:[], role:"", voice_map:{} };
-    const setStatus = msg => document.getElementById("status").textContent = msg || "";
-    const setStatusPdf = msg => document.getElementById("statusPdf").textContent = msg || "";
+    // ---------- App State ----------
+    const S={ script_id:"", scenes:[], role:"", voice_map:{}, editMode:false };
 
-    // Paste Text
-    document.getElementById("btnTextUpload").addEventListener("click", async ()=>{
-      const title=document.getElementById("titleText").value||"Sides";
-      const text=document.getElementById("scriptText").value||"";
+    // ---------- Import Sanitize ----------
+    function sanitizeScriptText(raw){
+      const lines = String(raw||"").split(/\r?\n/);
+      const drop = [
+        /sides\s+by\s+breakdown\s+services/i,
+        /actors\s+access/i,
+        /do\s+not\s+share/i,
+        /copyright/i,
+        /^page\s+\d+(\s*of\s*\d+)?$/i,
+        /^https?:\/\/\S+/i,
+        /^\s*(INT\.|EXT\.|SCENE)\b/i,
+        /^[A-Z0-9 .,'&/()-]{6,}\s*$/   // all-caps action/headers
+      ];
+      const kept=[];
+      for (const ln of lines){
+        const t=ln.trim();
+        if (!t){ kept.push(""); continue; }
+        if (drop.some(rx=>rx.test(t))) continue;
+        if (/^\(.*\)$/.test(t)) continue;  // parenthetical-only
+        kept.push(ln);
+      }
+      return kept.join("\n");
+    }
+
+    // ---------- Import: Text ----------
+    const setStatus = msg => $("#status").textContent = msg || "";
+    $("#btnTextUpload").addEventListener("click", async ()=>{
+      const title=$("#titleText").value||"Sides";
+      const raw=$("#scriptText").value||"";
+      const text=sanitizeScriptText(raw);
       setStatus("Uploading text…");
       try{
         const r=await fetch("/debug/upload_script_text",{method:"POST",headers:JSON_HDRS,body:JSON.stringify({title,text})});
@@ -208,48 +243,40 @@ JANE: Ready?"></textarea>
         S.script_id=j.script_id; await loadScenes(); showScreen("assign");
       }catch(e){ setStatus("Network error: "+e); }
     });
-    document.getElementById("btnTextClear").addEventListener("click",()=>{
-      document.getElementById("titleText").value=""; document.getElementById("scriptText").value=""; setStatus("");
-    });
+    $("#btnTextClear").addEventListener("click",()=>{ $("#titleText").value=""; $("#scriptText").value=""; setStatus(""); });
 
-    // PDF upload (server text extraction)
-    const btnPdfUpload = document.getElementById("btnPdfUpload");
-    const btnPdfOcr = document.getElementById("btnPdfOcr");
+    // ---------- Import: PDF ----------
+    const setStatusPdf = msg => $("#statusPdf").textContent = msg || "";
+    const btnPdfUpload=$("#btnPdfUpload"), btnPdfOcr=$("#btnPdfOcr");
     btnPdfUpload.addEventListener("click", async ()=>{
-      const title=document.getElementById("titlePdf").value||"PDF Sides";
-      const file=document.getElementById("pdfFile").files[0];
+      const title=$("#titlePdf").value||"PDF Sides";
+      const file=$("#pdfFile").files[0];
       if(!file){ setStatusPdf("Choose a PDF first."); return; }
       const fd=new FormData(); fd.append("title",title); fd.append("pdf",file);
-      const headers={}; if(secret) headers["X-Shared-Secret"]=secret;
-
+      const hdrs={}; if(secret) hdrs["X-Shared-Secret"]=secret;
       setStatusPdf("Uploading PDF…");
       try{
-        const r=await fetch("/debug/upload_script_upload",{method:"POST",headers,body:fd});
+        const r=await fetch("/debug/upload_script_upload",{method:"POST",headers:hdrs,body:fd});
         const j=await r.json().catch(()=>({}));
         if(!r.ok){ setStatusPdf("Error "+r.status+": "+JSON.stringify(j)); return; }
-        const sp=(j.speakers||[]).join(", ");
-        const note=j.note?(" note="+j.note):"";
+        const sp=(j.speakers||[]).join(", "); const note=j.note?(" note="+j.note):"";
         setStatusPdf(`OK scenes=${j.scene_count} speakers=${sp||"(none)"} textLen=${j.textLen||0}${note}`);
         if(j.note==="image-only"||j.note==="parse-error"){ btnPdfOcr.disabled=false; btnPdfOcr.focus(); return; }
         S.script_id=j.script_id; await loadScenes(); showScreen("assign");
       }catch(e){ setStatusPdf("Network error: "+e); }
     });
-
-    // Client-side OCR fallback (first 3 pages for speed)
     btnPdfOcr.addEventListener("click", async ()=>{
-      const file=document.getElementById("pdfFile").files[0];
+      const file=$("#pdfFile").files[0];
       if(!file){ setStatusPdf("Choose a PDF first."); return; }
       btnPdfOcr.disabled=true; setStatusPdf("OCR: loading…");
-
       try{
         const buf = await file.arrayBuffer();
         const pdfjsLib = await import("https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.6.82/pdf.min.mjs");
         const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
-
         const maxPages = Math.min(pdf.numPages, 3);
         let ocrText = "";
         for(let p=1;p<=maxPages;p++){
-          setStatusPdf(`OCR: rendering page ${p}/${maxPages}…`);
+          setStatusPdf(`OCR: rendering ${p}/${maxPages}…`);
           const page = await pdf.getPage(p);
           const viewport = page.getViewport({ scale: 2.0 });
           const canvas = document.createElement("canvas");
@@ -257,26 +284,22 @@ JANE: Ready?"></textarea>
           canvas.width = Math.ceil(viewport.width);
           canvas.height = Math.ceil(viewport.height);
           await page.render({ canvasContext: ctx, viewport }).promise;
-
-          setStatusPdf(`OCR: recognizing page ${p}/${maxPages}…`);
-          const { data: { text } } = await Tesseract.recognize(canvas, "eng", { logger:()=>{} });
+          setStatusPdf(`OCR: recognizing ${p}/${maxPages}…`);
+          const { data: { text } } = await Tesseract.recognize(canvas, "eng");
           ocrText += "\n" + text;
         }
-
-        const title=document.getElementById("titlePdf").value||"PDF OCR Sides";
-        setStatusPdf("OCR: posting recognized text…");
-        const r=await fetch("/debug/upload_script_text",{method:"POST",headers:JSON_HDRS,body:JSON.stringify({title,text:ocrText})});
+        const title=$("#titlePdf").value||"PDF OCR Sides";
+        setStatusPdf("OCR: uploading recognized text…");
+        const clean = sanitizeScriptText(ocrText);
+        const r=await fetch("/debug/upload_script_text",{method:"POST",headers:JSON_HDRS,body:JSON.stringify({title,text:clean})});
         const j=await r.json().catch(()=>({}));
         if(!r.ok){ setStatusPdf("Error "+r.status+": "+JSON.stringify(j)); return; }
         setStatusPdf(`OCR OK scenes=${j.scene_count} speakers=${(j.speakers||[]).join(", ")}`);
         S.script_id=j.script_id; await loadScenes(); showScreen("assign");
-      }catch(e){
-        setStatusPdf("OCR error: "+e);
-        btnPdfOcr.disabled=false;
-      }
+      }catch(e){ setStatusPdf("OCR error: "+e); btnPdfOcr.disabled=false; }
     });
 
-    // ---------- Shared data helpers ----------
+    // ---------- Scenes / Roles ----------
     async function loadScenes(){
       const r=await fetch("/debug/scenes?script_id="+encodeURIComponent(S.script_id),{headers:JSON_HDRS});
       const j=await r.json().catch(()=>({}));
@@ -289,21 +312,19 @@ JANE: Ready?"></textarea>
       const names=new Set(); for(const sc of (S.scenes||[])) for(const ln of (sc.lines||[])) names.add(ln.speaker);
       return Array.from(names).filter(n=>n&&n!=="SYSTEM"&&n!=="NARRATOR");
     }
-
-    // ---------- Assign ----------
     function hydrateAssign(){
-      document.getElementById("pillScript").textContent="script: "+(S.script_id||"—");
-      document.getElementById("pillScenes").textContent="scenes: "+(S.scenes?.length||0);
+      $("#pillScript").textContent="script: "+(S.script_id||"—");
+      $("#pillScenes").textContent="scenes: "+(S.scenes?.length||0);
       const roles=uniqueRoles();
-      const select=document.getElementById("selectRole");
-      select.innerHTML=roles.map(r=>`<option value="${r}">${r}</option>`).join("");
+      const sel=$("#selectRole");
+      sel.innerHTML=roles.map(r=>`<option value="${r}">${r}</option>`).join("");
       if(!S.role&&roles.length) S.role=roles[0];
-      select.value=S.role||"";
-      select.onchange=()=>{ S.role=select.value; buildVoicePickers(); hydrateRehearse(); };
+      sel.value=S.role||"";
+      sel.onchange=()=>{ S.role=sel.value; buildVoicePickers(); hydrateRehearse(); };
       buildVoicePickers();
     }
     function buildVoicePickers(){
-      const box=document.getElementById("voicePickers"); box.innerHTML="";
+      const box=$("#voicePickers"); box.innerHTML="";
       const presets=["alloy","verse","aria","solar","narrator"];
       const partners=uniqueRoles().filter(n=>n!==S.role);
       partners.forEach(name=>{
@@ -318,7 +339,7 @@ JANE: Ready?"></textarea>
         el.addEventListener("change",(e)=>{ const sel=e.target; S.voice_map[sel.getAttribute("data-name")]=sel.value; });
       });
     }
-    document.getElementById("btnSaveAssign").addEventListener("click", async ()=>{
+    $("#btnSaveAssign").addEventListener("click", async ()=>{
       if(!S.script_id) return;
       const roles=uniqueRoles().filter(r=>r!==S.role);
       for(const r of roles) if(!S.voice_map[r]) S.voice_map[r]="alloy";
@@ -326,190 +347,228 @@ JANE: Ready?"></textarea>
       showScreen("rehearse");
     });
 
-    // ---------- Rehearse (local TTS + speech recognition) ----------
+    // ---------- Rehearse ----------
     const E = {
-      linesWrap: document.getElementById("lines"),
-      btnPlay: document.getElementById("btnPlay"),
-      btnPrev: document.getElementById("btnPrev"),
-      btnNext: document.getElementById("btnNext"),
-      selPace: document.getElementById("selPace"),
-      chkAutoAdvance: document.getElementById("chkAutoAdvance"),
-      btnMic: document.getElementById("btnMic"),
-      chkAdvanceOnSpeech: document.getElementById("chkAdvanceOnSpeech"),
-      micBadge: document.getElementById("micBadge"),
+      linesWrap: $("#lines"),
+      btnPlay: $("#btnPlay"),
+      btnPrev: $("#btnPrev"),
+      btnNext: $("#btnNext"),
+      selPace: $("#selPace"),
+      chkAutoAdvance: $("#chkAutoAdvance"),
+      autoAdvPartnerWrap: $("#autoAdvPartnerWrap"),
+      btnMic: $("#btnMic"),
+      chkAdvanceOnSpeech: $("#chkAdvanceOnSpeech"),
+      advOnSpeechWrap: $("#advOnSpeechWrap"),
+      micBadge: $("#micBadge"),
+      btnToggleEditMode: $("#btnToggleEditMode"),
+      editModeState: $("#editModeState"),
     };
 
-    let idx = 0;
-    let playing = false;
-    let voices = [];
+    // Force partner auto-advance ON and hide toggle from user
+    const AUTO_ADV_PARTNER = true;
+    if (E.autoAdvPartnerWrap) E.autoAdvPartnerWrap.style.display = "none";
+    if (E.chkAutoAdvance) E.chkAutoAdvance.checked = true;
 
+    // Always-on advance-on-speech (keep hidden control for layout)
+    const ADVANCE_ON_SPEECH = true;
+    if (E.advOnSpeechWrap) E.advOnSpeechWrap.style.display = "none";
+    if (E.chkAdvanceOnSpeech) E.chkAdvanceOnSpeech.checked = true;
+
+    let idx=0, playing=false, voices=[];
     const isParenOnly = (t)=> /^\(.*\)$/.test((t||"").trim());
-
-    // Conservative boilerplate filter: only strip short/obvious footers & page marks.
     const isBoilerplate = (t)=>{
-      const s = (t||"").trim();
-      const low = s.toLowerCase();
-
-      // Empty or separators
+      const s=(t||"").trim(), low=s.toLowerCase();
       if(!s) return true;
       if(/^[-–—]+$/.test(s)) return true;
-
-      // Lone page numbers (len <= 4) or "Page X of Y"
       if((/^\d{1,4}$/.test(s)) && s.length<=4) return true;
       if(/^page\s*\d+(\s*of\s*\d+)?$/i.test(s)) return true;
-
-      // Short cont'd markers ONLY if very short
       if((/^cont'?d\.?$/i.test(s) || /^continued$/i.test(s)) && s.length<=10) return true;
-
-      // Footer phrases: only if reasonably short (avoid killing real dialogue)
-      const footerHit =
-        (low.includes("sides by breakdown services") ||
-         low.includes("actors access") ||
-         low.includes("do not share") ||
-         low.includes("copyright")) && s.length <= 80;
-      if(footerHit) return true;
-
-      return false;
+      const footerHit=(low.includes("sides by breakdown services")||low.includes("actors access")||low.includes("do not share")||low.includes("copyright")) && s.length<=80;
+      return footerHit;
     };
 
-    const isDashy = (txt)=>{
+    // Only treat as interrupt if dash is AT END of line
+    const endsWithDash = (txt)=>{
       const s=(txt||"").trim();
-      return /—/.test(s) || /--/.test(s) || /[-—–]\s*$/.test(s);
+      return /(—|--|-)\s*$/.test(s); // end-only
     };
 
-    function rehearseLines(){
-      const sc = S.scenes[0]; if(!sc) return [];
-      return sc.lines.filter(ln =>
-        ln.speaker !== "NARRATOR" &&
-        !isParenOnly(ln.text) &&
-        !isBoilerplate(ln.text)
-      );
+    // Build filtered list WITH original indexes so edits map correctly
+    function buildFiltered(scene){
+      const out=[];
+      for(let i=0;i<(scene?.lines?.length||0);i++){
+        const ln=scene.lines[i];
+        if(!ln) continue;
+        if(ln.speaker==="NARRATOR") continue;
+        if(isParenOnly(ln.text)) continue;
+        if(isBoilerplate(ln.text)) continue;
+        out.push({ orig:i, speaker:ln.speaker, text:ln.text });
+      }
+      return out;
     }
+
+    function getScene(){ return S.scenes[0]; }
+    function myName(){ return S.role||uniqueRoles()[0]||""; }
 
     function hydrateRehearse(){
-      const list = rehearseLines();
+      const scene=getScene(); const list=buildFiltered(scene);
       if(!list.length){ E.linesWrap.innerHTML="<p class='hint'>Import a script first.</p>"; return; }
-      const my = S.role || uniqueRoles()[0] || "";
-      const rows = list.map((ln,i)=>{
-        const me = ln.speaker===my;
-        return `<div class="line ${me?"me":""}" data-i="${i}">
+      const rows=list.map((ln,i)=>{
+        const me=ln.speaker===myName();
+        return `<div class="line ${me?"me":""}" data-i="${i}" data-orig="${ln.orig}">
+          <div class="editbar">
+            <span class="chip" data-act="edit" data-i="${i}">Edit</span>
+            <span class="chip danger" data-act="del" data-i="${i}">Delete</span>
+          </div>
           <div class="who">${ln.speaker}</div>
-          <div class="text">${ln.text}</div>
+          <div class="text" data-i="${i}" contenteditable="false">${ln.text}</div>
         </div>`;
       }).join("");
-      E.linesWrap.innerHTML = rows;
-      idx = 0;
-      highlightCurrent();
-      updateMicBadge();
+      E.linesWrap.innerHTML=rows;
+      idx=0; highlightCurrent(); wireEditTools(); updateMicBadge(); updateEditModeUI();
     }
 
+    function wireEditTools(){
+      $$(".chip",E.linesWrap).forEach(ch=>{
+        ch.onclick=()=>{
+          const act=ch.getAttribute("data-act");
+          const iFiltered=+ch.getAttribute("data-i");
+          const scene=getScene(); if(!scene) return;
+          const node=$(`.line[data-i="${iFiltered}"]`,E.linesWrap);
+          const orig=+node.getAttribute("data-orig");
+          if(Number.isNaN(orig)) return;
+
+          if(act==="edit"){
+            if(!S.editMode) return;
+            const t=$(`.text[data-i="${iFiltered}"]`,E.linesWrap);
+            const editing=t.getAttribute("contenteditable")==="true";
+            if(editing){
+              t.setAttribute("contenteditable","false");
+              scene.lines[orig].text = t.innerText.trim();
+              hydrateRehearse();
+            }else{
+              t.setAttribute("contenteditable","true"); t.focus(); placeCaretEnd(t);
+            }
+          }else if(act==="del"){
+            if(!S.editMode) return;
+            scene.lines.splice(orig,1);
+            hydrateRehearse();
+          }
+        };
+      });
+    }
+
+    function placeCaretEnd(el){ const r=document.createRange(); r.selectNodeContents(el); r.collapse(false); const s=window.getSelection(); s.removeAllRanges(); s.addRange(r); }
+    function updateEditModeUI(){ E.editModeState.textContent=S.editMode?"On":"Off"; $$(".editbar",E.linesWrap).forEach(b=>b.style.display=S.editMode?"flex":"none"); $$(".text",E.linesWrap).forEach(t=>t.setAttribute("contenteditable","false")); }
+
     function highlightCurrent(){
-      E.linesWrap.querySelectorAll(".line").forEach(el=>el.classList.remove("playing"));
-      const current = E.linesWrap.querySelector(`.line[data-i="${idx}"]`);
-      if(current){ current.classList.add("playing"); current.scrollIntoView({block:"center",behavior:"smooth"}); }
+      $$(".line",E.linesWrap).forEach(el=>el.classList.remove("playing"));
+      const cur=$(`.line[data-i="${idx}"]`,E.linesWrap);
+      if(cur){ cur.classList.add("playing"); cur.scrollIntoView({block:"center",behavior:"smooth"}); }
     }
 
     function synthSpeak(text){
       if(!window.speechSynthesis) return;
       window.speechSynthesis.cancel();
-      const u = new SpeechSynthesisUtterance(text);
-      const v = voices.find(v=>/en(-|_)?/.test(v.lang)) || voices[0];
-      if(v) u.voice = v;
-      u.rate = 1.0; u.pitch = 1.0;
+      const u=new SpeechSynthesisUtterance(text);
+      const v=(window.speechSynthesis.getVoices()||[]).find(v=>/en(-|_)?/.test(v.lang));
+      if(v) u.voice=v; u.rate=1.0; u.pitch=1.0;
       window.speechSynthesis.speak(u);
-      return new Promise(res=>{ u.onend = ()=>res(void 0); u.onerror = ()=>res(void 0); });
+      return new Promise(res=>{ u.onend=()=>res(); u.onerror=()=>res(); });
     }
 
     // ----- Speech Recognition -----
-    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    const sr = SR ? new SR() : null;
-    let srEnabled = false;
-    let srActive = false;
-    let myLineStartMs = 0;
-    let advanceLock = false;
+    const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+    const sr=SR?new SR():null;
+    let srEnabled=false, srActive=false, myLineStartMs=0, advanceLock=false, advanceCoolUntil=0;
 
-    // Tunables:
-    // Normal lines: be deliberate
-    const MIN_MS = 1000;            // min time speaking before advance
-    const MIN_INTERIM_MS = 600;     // min time before we'll accept an interim
-    const MIN_INTERIM_CHARS = 10;   // interim must be "real" speech
+    // Faster handoff for short lines; natural otherwise
+    function expectedMinMsFor(text){
+      const t=(text||"").trim();
+      if(t.length<=6) return 150;       // “What?”, “Yeah!”, “No.”
+      if(t.length<=15) return 350;
+      if(t.length<=40) return 800;
+      return 1000;
+    }
+    const SHORT_INTERIM_MS = 120;
+    const SHORT_INTERIM_CHARS = 1;
+    const MIN_INTERIM_CHARS=10, INTERIM_GRACE_MS=650;
+    const AFTER_ADV_COOLDOWN_MS=320;
 
-    // Em-dash lines: quick cut-in for partner
-    const DASHY_FINAL_MS = 350;     // final result after brief speech
-    const DASHY_INTERIM_MS = 250;   // allow interim cut-in after ~250ms
-    const DASHY_INTERIM_CHARS = 2;  // even a couple chars is enough to signal the cut
-
-    function onMyLine(){
-      const list = rehearseLines(); if(!list.length) return false;
-      const my = S.role || uniqueRoles()[0] || "";
-      const ln = list[idx];
-      return !!(ln && ln.speaker === my);
-    }
-    function currentIsDashy(){
-      const list = rehearseLines(); if(!list.length) return false;
-      const ln = list[idx]; return !!ln && isDashy(ln.text);
-    }
-    function maybeSetMyLineStart(){
-      if(onMyLine() && !myLineStartMs) myLineStartMs = performance.now();
-    }
-    function clearMyLineTimers(){ myLineStartMs = 0; advanceLock = false; }
-
-    function advanceFromMyLine(){
-      if(advanceLock) return;
-      if(!onMyLine()) return;
-      advanceLock = true;
-      const list = rehearseLines(); if(!list.length) return;
-      idx = Math.min(idx+1, list.length-1);
-      highlightCurrent();
-      clearMyLineTimers();
-      try{ sr.stop(); }catch{}
-      if(!playing) playing = true;
-      step(true);
-    }
+    function filtered(){ return buildFiltered(getScene()); }
+    function current(){ return filtered()[idx]; }
+    function onMyLine(){ const ln=current(); return !!ln && ln.speaker===myName(); }
+    function isShort(t){ return (t||"").trim().length<=6; }
+    function maybeSetMyLineStart(){ if(onMyLine() && !myLineStartMs) myLineStartMs=performance.now(); }
+    function clearMyLineTimers(){ myLineStartMs=0; advanceLock=false; }
 
     function updateMicBadge(){
-      if(!sr){ E.micBadge.textContent = "speech recognition: not supported"; E.micBadge.className="badge err"; E.btnMic.disabled = true; return; }
+      if(!sr){ E.micBadge.textContent="speech recognition: not supported"; E.micBadge.className="badge err"; E.btnMic.disabled=true; return; }
       E.micBadge.textContent = srEnabled ? (srActive ? "listening…" : "ready") : "off";
       E.micBadge.className = "badge " + (srEnabled ? (srActive ? "ok" : "warn") : "warn");
     }
 
+    function advanceFromMyLine(){
+      const now=performance.now();
+      if(advanceLock || now<advanceCoolUntil) return;
+      if(!onMyLine()) return;
+      advanceLock=true;
+
+      const list=filtered(); if(!list.length) return;
+      idx=Math.min(idx+1,list.length-1);
+      highlightCurrent();
+      clearMyLineTimers();
+      try{ sr?.stop(); }catch{}
+
+      const next=current();
+      advanceCoolUntil=now+AFTER_ADV_COOLDOWN_MS;
+
+      if(next && next.speaker===myName()){
+        // Back-to-back "my" lines: keep listening, no partner cue
+        if(srEnabled){ setTimeout(()=>{ if(sr && !srActive) try{ sr.start(); }catch{}; },80); }
+      }else{
+        if(!playing) playing=true;
+        step(true);
+      }
+    }
+
     if(sr){
-      sr.continuous = true;
-      sr.interimResults = true;
-      sr.lang = "en-US";
+      sr.continuous=true; sr.interimResults=true; sr.lang="en-US";
+      sr.onstart=()=>{ srActive=true; updateMicBadge(); };
+      sr.onend=()=>{ srActive=false; updateMicBadge(); if(srEnabled && onMyLine()){ try{ sr.start(); }catch{} } };
+      sr.onerror=()=>{ srActive=false; updateMicBadge(); };
 
-      sr.onstart = ()=>{ srActive = true; updateMicBadge(); };
-      sr.onend   = ()=>{ srActive = false; updateMicBadge(); if(srEnabled && onMyLine()){ try{ sr.start(); }catch{} } };
-      sr.onerror = ()=>{ srActive = false; updateMicBadge(); };
-
-      sr.onresult = (ev)=>{
-        if(!E.chkAdvanceOnSpeech.checked || !onMyLine()) return;
+      sr.onresult=(ev)=>{
+        if(!(ADVANCE_ON_SPEECH && onMyLine())) return;
         maybeSetMyLineStart();
+        const now=performance.now(); if(now<advanceCoolUntil) return;
+        const last=ev.results?.[ev.results.length-1]; const isFinal=!!last?.isFinal;
+        const latest=(last?.[0]?.transcript||"").trim();
+        const ln=current(); if(!ln) return;
 
-        const now = performance.now();
-        const elapsed = now - (myLineStartMs||now);
-        const last = ev.results?.[ev.results.length-1];
-        const isFinal = !!last?.isFinal;
-        const latest = (last?.[0]?.transcript||"").trim();
-        const dashy = currentIsDashy();
-
-        if(dashy){
-          if(isFinal && elapsed >= DASHY_FINAL_MS) return advanceFromMyLine();
-          if(latest.length >= DASHY_INTERIM_CHARS && elapsed >= DASHY_INTERIM_MS) return advanceFromMyLine();
-        }else{
-          if(isFinal && elapsed >= MIN_MS) return advanceFromMyLine();
-          if(latest.length >= MIN_INTERIM_CHARS && elapsed >= MIN_INTERIM_MS) return advanceFromMyLine();
+        // Short lines: extremely fast interim or quick final
+        if(isShort(ln.text)){
+          if(latest.length>=SHORT_INTERIM_CHARS && (now-(myLineStartMs||now))>=SHORT_INTERIM_MS) return advanceFromMyLine();
+          if(isFinal && (now-(myLineStartMs||now))>=expectedMinMsFor(ln.text)) return advanceFromMyLine();
+          return;
         }
+
+        // Interrupt only if dash AT END of your line
+        if(isFinal && endsWithDash(ln.text) && (now-(myLineStartMs||now))>=Math.min(expectedMinMsFor(ln.text),350)){
+          return advanceFromMyLine();
+        }
+
+        // Normal lines
+        if(isFinal && (now-(myLineStartMs||now))>=expectedMinMsFor(ln.text)) return advanceFromMyLine();
+        if(latest.length>=MIN_INTERIM_CHARS && (now-(myLineStartMs||now))>=INTERIM_GRACE_MS) return advanceFromMyLine();
       };
 
-      sr.onspeechend = ()=>{
-        if(!E.chkAdvanceOnSpeech.checked || !onMyLine()) return;
-        const elapsed = performance.now() - (myLineStartMs||performance.now());
-        if(currentIsDashy()){
-          if(elapsed >= DASHY_FINAL_MS) advanceFromMyLine();
-        }else{
-          if(elapsed >= MIN_MS) advanceFromMyLine();
-        }
+      sr.onspeechend=()=>{
+        if(!(ADVANCE_ON_SPEECH && onMyLine())) return;
+        const ln=current(); if(!ln) return;
+        const need=expectedMinMsFor(ln.text);
+        const elapsed=performance.now()-(myLineStartMs||performance.now());
+        if(elapsed>=need) advanceFromMyLine();
       };
     }
 
@@ -518,79 +577,40 @@ JANE: Ready?"></textarea>
       if(onMyLine()){
         maybeSetMyLineStart();
         if(!srActive){ try{ sr.start(); }catch{} }
-      } else {
+      }else{
         clearMyLineTimers();
         if(srActive){ try{ sr.stop(); }catch{} }
       }
     }
 
     async function step(playMode){
-      const list = rehearseLines(); if(!list.length) return;
-      const pace = Number(E.selPace.value||0);
-      const my = S.role || uniqueRoles()[0] || "";
-      const ln = list[idx]; if(!ln) { playing=false; E.btnPlay.textContent="Play"; return; }
+      const list=filtered(); if(!list.length) return;
+      const pace=Number(E.selPace.value||0);
+      const ln=current(); if(!ln){ playing=false; E.btnPlay.textContent="Play"; return; }
       highlightCurrent();
 
-      if(ln.speaker===my){
-        if(sr && srEnabled && E.chkAdvanceOnSpeech.checked){
-          advanceLock = false;
-          maybeListenForMyLine();
-          return;
-        }
-        if(playMode && E.chkAutoAdvance.checked){ playing=false; E.btnPlay.textContent="Play"; }
+      if(ln.speaker===myName()){
+        if(sr && srEnabled && ADVANCE_ON_SPEECH){ advanceLock=false; maybeListenForMyLine(); return; }
+        if(playMode && AUTO_ADV_PARTNER===true){ playing=false; E.btnPlay.textContent="Play"; }
       }else{
         await synthSpeak(ln.text);
-        if(pace>0) await new Promise(r=>setTimeout(r, pace));
-        if(playing && E.chkAutoAdvance.checked){ idx = Math.min(idx+1, list.length-1); step(true); }
+        if(pace>0) await new Promise(r=>setTimeout(r,pace));
+        if(playing && AUTO_ADV_PARTNER===true){ idx=Math.min(idx+1,list.length-1); step(true); }
       }
     }
 
     // Controls
-    E.btnPlay.addEventListener("click", ()=>{
-      playing = !playing;
-      E.btnPlay.textContent = playing ? "Pause" : "Play";
-      if(playing) step(true); else { window.speechSynthesis?.cancel(); if(srActive) try{ sr.stop(); }catch{}; clearMyLineTimers(); }
-    });
-    E.btnPrev.addEventListener("click", ()=>{
-      const list = rehearseLines(); if(!list.length) return;
-      try{ if(srActive) sr.stop(); }catch{}
-      clearMyLineTimers();
-      idx = Math.max(0, idx-1); highlightCurrent();
-      if(playing) step(true); else maybeListenForMyLine();
-    });
-    E.btnNext.addEventListener("click", ()=>{
-      const list = rehearseLines(); if(!list.length) return;
-      try{ if(srActive) sr.stop(); }catch{}
-      clearMyLineTimers();
-      idx = Math.min(list.length-1, idx+1); highlightCurrent();
-      if(playing) step(true); else maybeListenForMyLine();
-    });
-    document.addEventListener("keydown",(e)=>{
-      if(document.getElementById("screen-rehearse").classList.contains("active")){
-        if(e.code==="Space"){ e.preventDefault(); E.btnPlay.click(); }
-        if(e.code==="ArrowUp"){ e.preventDefault(); E.btnPrev.click(); }
-        if(e.code==="ArrowDown"){ e.preventDefault(); E.btnNext.click(); }
-      }
-    });
+    E.btnPlay.addEventListener("click",()=>{ playing=!playing; E.btnPlay.textContent=playing?"Pause":"Play"; if(playing) step(true); else { window.speechSynthesis?.cancel(); if(srActive) try{ sr.stop(); }catch{}; clearMyLineTimers(); }});
+    E.btnPrev.addEventListener("click",()=>{ const list=filtered(); if(!list.length) return; try{ if(srActive) sr.stop(); }catch{}; clearMyLineTimers(); idx=Math.max(0,idx-1); highlightCurrent(); if(playing) step(true); else maybeListenForMyLine(); });
+    E.btnNext.addEventListener("click",()=>{ const list=filtered(); if(!list.length) return; try{ if(srActive) sr.stop(); }catch{}; clearMyLineTimers(); idx=Math.min(list.length-1,idx+1); highlightCurrent(); if(playing) step(true); else maybeListenForMyLine(); });
+    document.addEventListener("keydown",(e)=>{ if($("#screen-rehearse").classList.contains("active")){ if(e.code==="Space"){ e.preventDefault(); E.btnPlay.click(); } if(e.code==="ArrowUp"){ e.preventDefault(); E.btnPrev.click(); } if(e.code==="ArrowDown"){ e.preventDefault(); E.btnNext.click(); } }});
+    E.btnMic.addEventListener("click",()=>{ if(!sr){ updateMicBadge(); return; } srEnabled=!srEnabled; E.btnMic.textContent=srEnabled?"Mic: On":"Mic: Off"; if(srEnabled){ try{ sr.start(); }catch{}; setTimeout(()=>maybeListenForMyLine(),200); } else { try{ sr.stop(); }catch{}; clearMyLineTimers(); } updateMicBadge(); });
+    E.btnToggleEditMode.addEventListener("click",()=>{ S.editMode=!S.editMode; updateEditModeUI(); });
 
-    E.btnMic.addEventListener("click", ()=>{
-      if(!sr){ updateMicBadge(); return; }
-      srEnabled = !srEnabled;
-      E.btnMic.textContent = srEnabled ? "Mic: On" : "Mic: Off";
-      if(srEnabled){ try{ sr.start(); }catch{}; setTimeout(()=>maybeListenForMyLine(),250); }
-      else{ try{ sr.stop(); }catch{}; clearMyLineTimers(); }
-      updateMicBadge();
-    });
-
-    // preload voices
-    if(window.speechSynthesis){
-      const loadVoices=()=>{ voices = window.speechSynthesis.getVoices()||[]; };
-      window.speechSynthesis.onvoiceschanged = loadVoices;
-      loadVoices();
-    }
-
-    // Initial badge state
-    updateMicBadge();
+    // initial state
+    if (E.autoAdvPartnerWrap) E.autoAdvPartnerWrap.style.display="none";
+    if (E.advOnSpeechWrap) E.advOnSpeechWrap.style.display="none";
+    updateEditModeUI(); updateMicBadge();
   </script>
 </body>
 </html>
