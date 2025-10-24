@@ -54,9 +54,15 @@
     .toolbar .controls{ justify-content:space-between }
     .toolbar .left, .toolbar .right{ display:flex; gap:8px; align-items:center; flex-wrap:wrap }
     .btn.icon{ min-width:auto; padding:12px; }
-    /* BIGGER icon */
     .btn.icon::before{ content:"⟲"; font-weight:900; font-size:20px; line-height:1; display:block; }
 
+    /* Record */
+    .rec-grid{ display:grid; grid-template-columns:1fr; gap:10px }
+    .vid{ width:100%; aspect-ratio:9/16; background:#000; border-radius:12px; border:1px solid var(--border); object-fit:cover }
+    .countdown{ position:fixed; inset:0; display:none; align-items:center; justify-content:center; background:rgba(0,0,0,.75); z-index:1000; }
+    .countdown.show{ display:flex }
+    .count-num{ font-size:64px; font-weight:800; background:#111; color:#fff; padding:24px 36px; border-radius:18px; border:1px solid var(--border) }
+    .gallery-item{ border:1px solid var(--border); border-radius:12px; padding:10px; margin-bottom:8px; background:#0c0f16 }
   </style>
 </head>
 <body>
@@ -160,12 +166,52 @@ JANE: Ready?"></textarea>
       </div>
     </section>
 
-    <!-- RECORD / GALLERY / SETTINGS -->
-    <section id="screen-record" class="screen"><div class="card"><h3>Record</h3><p class="hint">3-2-1 countdown; camera+mic required for Store.</p></div></section>
-    <section id="screen-gallery" class="screen"><div class="card"><h3>Gallery</h3><p class="hint">Saved takes will appear here.</p></div></section>
+    <!-- RECORD -->
+    <section id="screen-record" class="screen">
+      <div class="card">
+        <h3>Record</h3>
+        <div class="hint">Headphones recommended to avoid echo. This prepares an OpenAI reader track and records your mic (optionally camera).</div>
+        <div class="spacer8"></div>
+        <div class="rec-grid">
+          <video id="preview" class="vid" autoplay muted playsinline></video>
+          <audio id="readerAudio" preload="auto"></audio>
+
+          <div class="row">
+            <button id="btnPrepareReader" class="btn">1) Prepare Reader Track</button>
+            <button id="btnPlayReader" class="btn secondary" disabled>Play Test</button>
+          </div>
+
+          <div class="row">
+            <label class="small"><input type="checkbox" id="chkVideo" /> Record video (camera)</label>
+            <label class="small"><input type="checkbox" id="chkCountIn" checked /> Count-in</label>
+            <label class="small"><input type="checkbox" id="chkHeadphones" checked /> I’m on headphones</label>
+          </div>
+
+          <div class="row">
+            <button id="btnStartRec" class="btn" disabled>2) Start Recording</button>
+            <button id="btnStopRec" class="btn secondary" disabled>Stop</button>
+          </div>
+
+          <label>Status</label>
+          <pre id="statusRec" class="status"></pre>
+        </div>
+      </div>
+    </section>
+
+    <!-- GALLERY -->
+    <section id="screen-gallery" class="screen">
+      <div class="card">
+        <h3>Gallery</h3>
+        <div id="takes"></div>
+        <div class="hint">Takes are saved locally in your browser. Download to keep.</div>
+      </div>
+    </section>
+
+    <!-- SETTINGS -->
     <section id="screen-settings" class="screen"><div class="card"><h3>Settings</h3><p class="hint">Defaults & storage (future).</p></div></section>
   </main>
 
+  <!-- Bottom bar -->
   <nav class="tabbar" role="tablist" aria-label="App sections">
     <div class="tabbar-inner">
       <button data-tab="import" class="active" role="tab" aria-selected="true">Import</button>
@@ -206,7 +252,7 @@ JANE: Ready?"></textarea>
       const kept=[]; for(const ln of lines){ const t=ln.trim(); if(!t){ kept.push(""); continue; } if(drop.some(rx=>rx.test(t))) continue; if(/^\(.*\)$/.test(t)) continue; kept.push(ln); } return kept.join("\n");
     }
 
-    /* ------- import (unchanged) ------- */
+    /* ------- import ------- */
     const setStatus = msg => $("#status").textContent = msg || "";
     $("#btnTextUpload").addEventListener("click", async ()=>{
       const title=$("#titleText").value||"Sides";
@@ -240,7 +286,7 @@ JANE: Ready?"></textarea>
     let idx=0, playing=false;
 
     const isParenOnly=t=>/^\(.*\)$/.test((t||"").trim());
-    const isBoilerplate=t=>{ const s=(t||"").trim(), low=s.toLowerCase(); if(!s) return true; if(/^[-–—]+$/.test(s)) return true; if(/^\d{1,4}$/.test(s)) return true; if(/^page\s*\d+(\s*of\s*\d+)?$/i.test(s)) return true; if((/^cont'?d\.?$/i.test(s)||/^continued$/i.test(s))&&s.length<=10) return true; if(/^https?:\/\/\S+/i.test(s)) return true; return (low.includes("sides by breakdown services")||low.includes("actors access")||low.includes("do not share")||low.includes("copyright")) && s.length<=80; };
+    const isBoilerplate=t=>{ const s=(t||"").trim().toLowerCase(); if(!s) return true; if(/^[-–—]+$/.test(s)) return true; if(/^\d{1,4}$/.test(s)) return true; if(/^page\s*\d+(\s*of\s*\d+)?$/i.test(s)) return true; if((/^cont'?d\.?$/i.test(s)||/^continued$/i.test(s))&&s.length<=10) return true; if(/^https?:\/\/\S+/i.test(s)) return true; return (s.includes("sides by breakdown services")||s.includes("actors access")||s.includes("do not share")||s.includes("copyright")) && s.length<=80; };
     const endsWithDash=txt=>/(—|--|-)\s*$/.test((txt||"").trim());
 
     function buildFiltered(scene){ const out=[]; for(let i=0;i<(scene?.lines?.length||0);i++){ const ln=scene.lines[i]; if(!ln) continue; if(ln.speaker==="NARRATOR") continue; if(isParenOnly(ln.text)) continue; if(isBoilerplate(ln.text)) continue; out.push({orig:i,speaker:ln.speaker,text:ln.text}); } return out; }
@@ -267,17 +313,17 @@ JANE: Ready?"></textarea>
     function openInlineForm(slotEl, place){ const sc=getScene(); if(!sc) return; if(!E.inlineForm){ E.inlineForm=buildInlineForm(); } else { try{ E.inlineForm.remove(); }catch{} } slotEl.appendChild(E.inlineForm); E.currentSlotPlace=place; const sel=E.inlineForm.querySelector(".addSpeaker"); const roles=uniqueRoles(); sel.innerHTML=roles.map(r=>`<option value="${r}">${r}</option>`).join("")+`<option value="__custom">Custom…</option>`; const ta=E.inlineForm.querySelector(".addText"); const add=E.inlineForm.querySelector(".addCommit"); const cancelBtn=E.inlineForm.querySelector(".addCancel"); pauseForEdit(true); const cancel=()=>{ try{ E.inlineForm.remove(); }catch{}; E.currentSlotPlace=null; pauseForEdit(false); }; cancelBtn.onclick=e=>{ e.preventDefault(); cancel(); }; add.onclick=e=>{ e.preventDefault(); let sp=sel.value; if(sp==="__custom"){ sp=prompt("Speaker name?")||""; } const text=(ta.value||"").trim(); if(!sp||!text) return; const idxPlace=Math.max(0,Math.min(place,sc.lines.length)); sc.lines.splice(idxPlace,0,{speaker:sp,text}); cancel(); hydrateRehearse(); const after=buildFiltered(sc); const newPos=after.findIndex(x=>x.orig===place); if(newPos>=0){ idx=newPos; highlightCurrent(); } }; setTimeout(()=>ta.focus(),10); }
     function pauseForEdit(on){ if(on){ playing=false; E.btnPlay.textContent="Play"; window.speechSynthesis?.cancel(); } }
 
-    /* ------- TTS -------- */
+    /* ------- TTS (browser) for rehearse -------- */
     function synthSpeak(text){ if(!window.speechSynthesis) return; window.speechSynthesis.cancel(); const u=new SpeechSynthesisUtterance(text); const v=(window.speechSynthesis.getVoices()||[]).find(v=>/en(-|_)?/.test(v.lang)); if(v) u.voice=v; u.rate=1.0; u.pitch=1.0; window.speechSynthesis.speak(u); return new Promise(res=>{ u.onend=()=>res(); u.onerror=()=>res(); }); }
 
-    /* ------- Speech Recognition: final-dash gating + progress gating ------- */
+    /* ------- Speech Recognition tuned logic (as before) ------- */
     const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
     const sr=SR?new SR():null;
     let srToggleOn=false, srPermGranted=false, srActive=false;
     let myLineStartMs=0, firstEnergyAt=0, advanceLock=false, advanceCoolUntil=0;
     let latestTranscript="", silenceTimer=null, lastResultAt=0;
 
-    // energy monitor (smoothed)
+    // energy monitor
     let micStream=null, audioCtx=null, analyser=null, energy=0, speaking=false, lastEnergyAt=0;
     const ENERGY_TALK_THRESH=0.035, ENERGY_SILENCE_THRESH=0.020;
 
@@ -309,8 +355,8 @@ JANE: Ready?"></textarea>
     function minElapsedFor(text){ const t=(text||"").trim(); if(t.length<=6) return 180; if(t.length<=15) return 220; if(t.length<=40) return 300; return 420; }
     function silenceDebounceFor(text){ const t=(text||"").trim(); if(t.length<=6) return 180; if(t.length<=15) return 220; if(t.length<=40) return 260; return 320; }
     const AFTER_ADV_COOLDOWN_MS=140, FAST_INTERIM_CHARS=12, WATCHDOG_MS=300, NORESULT_RESTART_MS=1500;
-    const MIN_PROGRESS_FOR_SILENCE = 0.35; // avoid early hop on repeated openers like “Sorry. I just”
-    const PROGRESS_FOR_FINAL_DASH = 0.82;  // must be near the end to honor the last em dash
+    const MIN_PROGRESS_FOR_SILENCE = 0.35;
+    const PROGRESS_FOR_FINAL_DASH = 0.82;
 
     function tokens(s){ return (s||"").toLowerCase().replace(/[^a-z0-9' ]+/g," ").split(/\s+/).filter(Boolean); }
     function lastCueWords(text){ const tks=tokens(text).filter(w=>!["uh","um"].includes(w)); if(!tks.length) return ""; const take=Math.min(2,tks.length); return tks.slice(-take).join(" "); }
@@ -389,37 +435,29 @@ JANE: Ready?"></textarea>
         latestTranscript=(alt?.transcript||"").trim();
         lastResultAt=now;
 
-        // EARLY ADVANCE ONLY ON THE FINAL EM DASH:
-        // require: line ends with dash, small elapsed floor, a couple words spoken, and progress near end.
-        if(!isFinal && endsWithDash(ln.text) && elapsed>=180 && tokens(latestTranscript).length>=2 && progressRatio(ln.text, latestTranscript) >= PROGRESS_FOR_FINAL_DASH){
+        if(!isFinal && /(—|--|-)\s*$/.test((ln.text||"").trim()) && elapsed>=180 && (latestTranscript.split(/\s+/).filter(Boolean).length>=2) && ( ( (latestTranscript.toLowerCase().replace(/[^a-z0-9' ]+/g,"").length) / ((ln.text||"").toLowerCase().replace(/[^a-z0-9' ]+/g,"").length) ) >= 0.82 )){
           return advanceFromMyLine();
         }
-
-        // Confident interim + includes last cue → but only after safer floor
-        if(!isFinal && latestTranscript.length>=FAST_INTERIM_CHARS && transcriptContainsCue(latestTranscript) && elapsed>=minElapsedFor(ln.text)+120){
+        if(!isFinal && latestTranscript.length>=12 && transcriptContainsCue(latestTranscript) && elapsed>=minElapsedFor(ln.text)+120){
           return advanceFromMyLine();
         }
-
-        // Final result → after normal floor
         if(isFinal && elapsed>=minElapsedFor(ln.text)){
           return advanceFromMyLine();
         }
-
         armSilenceDebounce();
       };
     }
 
-    // Gentle watchdog
     setInterval(()=>{
       if(!(sr && srToggleOn && srPermGranted)) return;
       if(!(onMyLine()) || (E.inlineForm&&E.inlineForm.isConnected)) return;
       const now=performance.now();
       if(!srActive){ try{ sr.start(); }catch{} }
-      if(speaking && firstEnergyAt && now - Math.max(lastResultAt||firstEnergyAt, firstEnergyAt) > NORESULT_RESTART_MS){
+      if(speaking && firstEnergyAt && now - Math.max(lastResultAt||firstEnergyAt, firstEnergyAt) > 1500){
         try{ sr.stop(); }catch{};
         try{ sr.start(); }catch{};
       }
-    }, WATCHDOG_MS);
+    }, 300);
 
     async function maybeListenForMyLine(){
       if(!sr || !srToggleOn || !srPermGranted || (E.inlineForm&&E.inlineForm.isConnected)) return;
@@ -443,7 +481,6 @@ JANE: Ready?"></textarea>
       }
     }
 
-    // Controls & hotkeys
     $("#btnPlay").addEventListener("click",()=>{ playing=!playing; $("#btnPlay").textContent=playing?"Pause":"Play"; if(playing){ step(true); } else { window.speechSynthesis?.cancel(); try{ sr?.stop(); }catch{}; clearMy(); }});
     $("#btnPrev").addEventListener("click",()=>{ const list=filtered(); if(!list.length) return; try{ sr?.stop(); }catch{}; clearMy(); idx=Math.max(0,idx-1); highlightCurrent(); if(playing) step(true); else maybeListenForMyLine(); });
     $("#btnNext").addEventListener("click",()=>{ const list=filtered(); if(!list.length) return; try{ sr?.stop(); }catch{}; clearMy(); idx=Math.min(list.length-1,idx+1); highlightCurrent(); if(playing) step(true); else maybeListenForMyLine(); });
@@ -459,7 +496,6 @@ JANE: Ready?"></textarea>
     $("#btnToggleEditMode").addEventListener("click",()=>{ S.editMode=!S.editMode; applyEditModeUI(); });
     function applyEditModeUI(){ $("#btnToggleEditMode").setAttribute("aria-pressed",S.editMode?"true":"false"); $("#editModeState").textContent=S.editMode?"On":"Off"; $$(".editbar",E.linesWrap).forEach(el=>el.style.display=S.editMode?"flex":"none"); $$(".inline-slot",E.linesWrap).forEach(el=>el.style.display=S.editMode?"flex":"none"); if(!S.editMode && E.inlineForm && E.inlineForm.isConnected){ try{ E.inlineForm.remove(); }catch{}; E.currentSlotPlace=null; } }
 
-    // Mic button: permission + energy monitor lifetime
     $("#btnMic").addEventListener("click", async ()=>{
       if(!sr){ updateMicBadge(); return; }
       if(!srToggleOn){
@@ -475,8 +511,186 @@ JANE: Ready?"></textarea>
       updateMicBadge();
     });
 
+    /* ----------------- RECORD TAB LOGIC ----------------- */
+    const R = {
+      status: $("#statusRec"),
+      btnPrepare: $("#btnPrepareReader"),
+      btnPlayReader: $("#btnPlayReader"),
+      btnStart: $("#btnStartRec"),
+      btnStop: $("#btnStopRec"),
+      chkVideo: $("#chkVideo"),
+      chkCountIn: $("#chkCountIn"),
+      chkHeadphones: $("#chkHeadphones"),
+      audio: $("#readerAudio"),
+      preview: $("#preview"),
+      countdown: null,
+      chunks: [],
+      rec: null,
+      stream: null,
+      render_id: "",
+      download_url: "",
+      takes: [],
+    };
+
+    function setStatusRec(t){ R.status.textContent = t || ""; }
+
+    async function prepareReader(){
+      if(!S.script_id){ setStatusRec("Import & Assign first."); return; }
+      setStatusRec("Preparing reader track…");
+      R.btnPrepare.disabled = true;
+      try{
+        const pace = 0; // we render tight; pacing handled in rehearse
+        const r = await fetch("/debug/render", { method:"POST", headers:JSON_HDRS, body:JSON.stringify({ script_id:S.script_id, my_role:(S.role||"").toUpperCase(), pace_ms:pace }) });
+        const j = await r.json();
+        if(!r.ok){ setStatusRec("Render error "+r.status+": "+JSON.stringify(j)); R.btnPrepare.disabled=false; return; }
+        R.render_id = j.render_id;
+
+        // poll
+        const poll = async ()=>{
+          const s = await fetch(`/debug/render_status?render_id=${encodeURIComponent(R.render_id)}`, { headers:JSON_HDRS });
+          const js = await s.json();
+          if(js.status==="complete" && js.download_url){
+            R.download_url = js.download_url + "&t=" + Date.now();
+            R.audio.src = R.download_url;
+            R.btnPlayReader.disabled = false;
+            R.btnStart.disabled = false;
+            setStatusRec("Reader ready.");
+          }else if(js.status==="error"){
+            setStatusRec("Render failed: "+(js.error||"unknown"));
+            R.btnPrepare.disabled=false;
+          }else{
+            setTimeout(poll, 450);
+          }
+        };
+        setTimeout(poll, 450);
+      }catch(e){
+        setStatusRec("Network error: "+e);
+        R.btnPrepare.disabled=false;
+      }
+    }
+
+    async function startPreviewIfNeeded(){
+      if(!R.chkVideo.checked){ R.preview.srcObject=null; return; }
+      try{
+        if(!R.stream){
+          const st = await navigator.mediaDevices.getUserMedia({ video:true, audio:true });
+          R.stream = st;
+        }
+        R.preview.srcObject = R.stream;
+      }catch(e){
+        setStatusRec("Camera/mic permission denied: "+e);
+      }
+    }
+
+    function makeCountdown(){
+      if(R.countdown) return R.countdown;
+      const div=document.createElement("div");
+      div.className="countdown"; div.innerHTML=`<div class="count-num" id="countNum">3</div>`;
+      document.body.appendChild(div);
+      R.countdown = div;
+      return div;
+    }
+    async function doCountdownIfEnabled(){
+      if(!R.chkCountIn.checked) return;
+      const c=makeCountdown(); const num=$("#countNum",c);
+      c.classList.add("show");
+      for(let n=3;n>=1;n--){
+        num.textContent=String(n);
+        await new Promise(r=>setTimeout(r,800));
+      }
+      c.classList.remove("show");
+    }
+
+    async function startRecording(){
+      if(!R.download_url){ setStatusRec("Prepare the reader first."); return; }
+
+      // Headphones reminder
+      if(R.chkHeadphones && !R.chkHeadphones.checked){
+        setStatusRec("Tip: Use headphones to avoid the reader audio bleeding into your mic.");
+      }
+
+      // media stream
+      try{
+        if(!R.stream){
+          const needVideo=!!R.chkVideo.checked;
+          R.stream = await navigator.mediaDevices.getUserMedia({ audio:true, video:needVideo });
+        }
+        R.preview.srcObject = R.chkVideo.checked ? R.stream : null;
+      }catch(e){
+        setStatusRec("Permission error: "+e);
+        return;
+      }
+
+      await doCountdownIfEnabled();
+
+      // set up MediaRecorder
+      R.chunks = [];
+      const mime = R.chkVideo.checked ? "video/webm" : "audio/webm";
+      try{
+        R.rec = new MediaRecorder(R.stream, { mimeType: mime });
+      }catch{
+        // fallback: let browser choose
+        R.rec = new MediaRecorder(R.stream);
+      }
+      R.rec.ondataavailable = (e)=>{ if(e.data && e.data.size>0) R.chunks.push(e.data); };
+      R.rec.onstop = finalizeTake;
+
+      // start both
+      R.rec.start();
+      try{ await R.audio.play(); }catch(e){ /* autoplay guard */ }
+
+      // auto-stop when reader ends (plus slight tail)
+      R.audio.onended = ()=>{ setTimeout(()=>{ try{ R.rec?.stop(); }catch{} }, 120); };
+
+      R.btnStart.disabled = true;
+      R.btnStop.disabled = false;
+      setStatusRec("Recording…");
+    }
+
+    function stopRecording(){
+      try{ R.rec?.stop(); }catch{}
+      setStatusRec("Stopping…");
+    }
+
+    function finalizeTake(){
+      const blob = new Blob(R.chunks, { type: R.chkVideo.checked ? "video/webm" : "audio/webm" });
+      const url = URL.createObjectURL(blob);
+      const ts = new Date().toISOString().replace(/[:.]/g,"-");
+      const name = `take-${ts}.${R.chkVideo.checked?"webm":"webm"}`;
+      R.takes.unshift({ url, name, type: blob.type, size: blob.size });
+      renderTakes();
+      R.btnStop.disabled = true;
+      R.btnStart.disabled = false;
+      setStatusRec("Saved to Gallery.");
+    }
+
+    function renderTakes(){
+      const box=$("#takes");
+      box.innerHTML = R.takes.map((t,i)=>{
+        const sz = (t.size/1024/1024).toFixed(2)+" MB";
+        return `<div class="gallery-item">
+          <div class="row" style="align-items:center">
+            <div><strong>${t.name}</strong><div class="small">${t.type} • ${sz}</div></div>
+            <div style="text-align:right">
+              <a class="btn secondary sm" href="${t.url}" download="${t.name}">Download</a>
+            </div>
+          </div>
+          <div class="spacer6"></div>
+          ${t.type.startsWith("video") ? `<video src="${t.url}" class="vid" controls playsinline></video>` : `<audio src="${t.url}" controls></audio>`}
+        </div>`;
+      }).join("") || `<p class="hint">No takes yet. Record one from the Record tab.</p>`;
+    }
+
+    // Record wiring
+    $("#btnPrepareReader").addEventListener("click", prepareReader);
+    $("#btnPlayReader").addEventListener("click", async ()=>{ try{ await R.audio.play(); }catch{} });
+    $("#chkVideo").addEventListener("change", startPreviewIfNeeded);
+    $("#btnStartRec").addEventListener("click", startRecording);
+    $("#btnStopRec").addEventListener("click", stopRecording);
+
     // initial
-    hydrateRehearse(); applyEditModeUI(); updateMicBadge();
+    hydrateRehearse(); applyEditModeUI(); (function initAssign(){ $("#pillScript").textContent="script: "+(S.script_id||"—"); })();
+    updateMicBadge();
   </script>
 </body>
 </html>
