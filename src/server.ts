@@ -7,6 +7,21 @@ import { createRequire } from "module";
 const app = express();
 const PORT = Number(process.env.PORT || 3010);
 const SHARED = process.env.SHARED_SECRET || "";
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
+
+// --- tiny helper: safe fetch with timeout ---
+async function fetchWithTimeout(input: RequestInfo, init: RequestInit & { timeoutMs?: number } = {}) {
+  const { timeoutMs = 5000, ...rest } = init;
+  const ac = new AbortController();
+  const id = setTimeout(() => ac.abort(), timeoutMs);
+  try {
+    // @ts-ignore Node 18+ global fetch
+    const res = await fetch(input as any, { ...rest, signal: ac.signal } as any);
+    return res;
+  } finally {
+    clearTimeout(id);
+  }
+}
 
 app.use(cors());
 app.use(express.json({ limit: "5mb" }));
@@ -28,7 +43,7 @@ app.get("/health", (_req, res) =>
   res.json({ ok: true, env: { PORT, has_shared_secret: !!SHARED } })
 );
 app.get("/health/tts", (_req, res) =>
-  res.json({ engine: "openai", has_key: !!process.env.OPENAI_API_KEY })
+  res.json({ engine: "openai", has_key: !!OPENAI_API_KEY })
 );
 
 // ---- In-memory fallback store
@@ -185,9 +200,61 @@ function uniqueSpeakers(sc: Scene) {
   return Array.from(set);
 }
 
+// ---------- OpenAI TTS health probe ----------
+async function openaiTtsProbe(opts?: { text?: string; voice?: string; model?: string }) {
+  if (!OPENAI_API_KEY) {
+    return { ok: false, error: "OPENAI_API_KEY not set" };
+  }
+  const text = (opts?.text ?? "test").slice(0, 120);
+  const voice = opts?.voice ?? "alloy";
+  const model = opts?.model ?? "tts-1"; // or "gpt-4o-mini-tts"
+
+  try {
+    const res = await fetchWithTimeout("https://api.openai.com/v1/audio/speech", {
+      method: "POST",
+      timeoutMs: 5000,
+      headers: {
+        "Authorization": `Bearer ${OPENAI_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model,
+        voice,
+        input: text,
+        format: "mp3",
+      }),
+    });
+
+    if (!res.ok) {
+      const msg = await res.text().catch(() => res.statusText);
+      return { ok: false, error: `OpenAI TTS HTTP ${res.status}: ${msg?.slice(0, 200)}` };
+    }
+
+    // We don’t need the bytes for the health check; just read a small chunk and discard
+    // @ts-ignore
+    if (typeof res.body?.getReader === "function") {
+      // stream (browser-like); ignore contents
+    } else {
+      await res.arrayBuffer(); // Node path; discard
+    }
+
+    return { ok: true, provider: "openai", model, voice };
+  } catch (e: any) {
+    const msg = (e?.message || String(e)).slice(0, 200);
+    return { ok: false, error: `OpenAI TTS request failed: ${msg}` };
+  }
+}
+
 // ---------- Routes ----------
 function mountFallbackDebugRoutes() {
   app.get("/debug/ping", requireSecret, (_req, res) => res.json({ ok: true }));
+
+  // NEW: TTS health check (safe)
+  app.get("/debug/tts_check", requireSecret, async (_req: Request, res: Response) => {
+    const result = await openaiTtsProbe({ text: "test", voice: "alloy" });
+    if (!result.ok) return res.status(500).json(result);
+    res.json(result);
+  });
 
   app.post("/debug/upload_script_text", requireSecret, (req: Request, res: Response) => {
     const title = String(req.body?.title || "Script");
@@ -274,6 +341,7 @@ function mountFallbackDebugRoutes() {
     res.json({ ok: true });
   });
 
+  // NOTE: still a stub render for MVP wiring; we’ll swap to real OpenAI render in the Record tab work
   app.post("/debug/render", requireSecret, (_req: Request, res: Response) => {
     const rid = genId("rnd");
     mem.renders.set(rid, { status: "queued" });
