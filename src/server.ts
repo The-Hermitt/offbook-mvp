@@ -54,7 +54,7 @@ type Script = { id: string; title: string; scenes: Scene[]; voices: Record<strin
 const mem = {
   scripts: new Map<string, Script>(),
   renders: new Map<string, { status: "queued" | "complete" | "error"; url?: string; err?: string }>(),
-  assets: new Map<string, Buffer>(), // render_id -> MP3 bytes
+  assets: new Map<string, Buffer>(), // id -> MP3 bytes (for renders and single-line TTS)
 };
 const upload = multer({ storage: multer.memoryStorage() });
 
@@ -218,16 +218,36 @@ function concatMp3(parts: Buffer[]): Buffer {
   return Buffer.concat(parts);
 }
 
+/* -------------------- ALWAYS-ON ROUTES -------------------- */
+// 1) TTS health (safe)
+app.get("/debug/tts_check", requireSecret, async (_req: Request, res: Response) => {
+  const result = await openaiTtsProbe({ text: "test", voice: "alloy" });
+  if (!result.ok) return res.status(500).json(result);
+  res.json(result);
+});
+
+// 2) Single-line TTS for Rehearse/Diagnostics
+app.post("/debug/tts_line", requireSecret, async (req: Request, res: Response) => {
+  try {
+    if (!OPENAI_API_KEY) return res.status(500).json({ error: "OPENAI_API_KEY not set" });
+    const voice = String((req.body as any)?.voice || "alloy");
+    const text = String((req.body as any)?.text || "").trim();
+    if (!text) return res.status(400).json({ error: "missing text" });
+
+    const buf = await openaiTts(text, voice, "tts-1");
+    const id = genId("tts");
+    mem.assets.set(id, buf);
+    return res.json({ url: `/api/assets/${id}` });
+  } catch (e: any) {
+    const msg = e?.message || String(e);
+    return res.status(500).json({ error: msg.slice(0, 200) });
+  }
+});
+/* ---------------------------------------------------------- */
+
 // ---------- Routes ----------
 function mountFallbackDebugRoutes() {
   app.get("/debug/ping", requireSecret, (_req, res) => res.json({ ok: true }));
-
-  // NEW: TTS health check (safe)
-  app.get("/debug/tts_check", requireSecret, async (_req: Request, res: Response) => {
-    const result = await openaiTtsProbe({ text: "test", voice: "alloy" });
-    if (!result.ok) return res.status(500).json(result);
-    res.json(result);
-  });
 
   app.post("/debug/upload_script_text", requireSecret, (req: Request, res: Response) => {
     const title = String(req.body?.title || "Script");
@@ -314,13 +334,11 @@ function mountFallbackDebugRoutes() {
     (async () => {
       try {
         const scene = s.scenes[0];
-        // Build partner-only list
         const items = scene.lines
           .filter(ln => ln && ln.speaker && ln.speaker !== "NARRATOR" && ln.speaker !== "SYSTEM")
           .filter(ln => ln.speaker !== myRole)
           .filter(ln => !isBoilerplate(ln.text));
 
-        // Voice per partner with default
         const voiceFor = (name: string) => (s.voices[name] || "alloy");
 
         const chunks: Buffer[] = [];
@@ -328,11 +346,8 @@ function mountFallbackDebugRoutes() {
           const voice = voiceFor(ln.speaker);
           const b = await openaiTts(ln.text, voice, "tts-1");
           chunks.push(b);
-
-          // Optional tiny pause as silence (skipped for now; earbuds will provide natural pause)
-          // If needed in future: generate short silent mp3 frames or use PCM + encode.
           if (paceMs > 0) {
-            // simple hack: tiny " " TTS as pause (not ideal); skipped for MVP
+            // optional silence could be inserted later
           }
         }
 
