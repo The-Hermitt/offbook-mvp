@@ -5,7 +5,7 @@
   <title>OffBook — Rehearsal MVP</title>
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
   <style>
-    :root { --bg:#0b0c0f; --panel:#111318; --panel-2:#151823; --text:#eaf0ff; --muted:#a7b0c5; --border:#252a36; --focus:#3b82f6; --accent:#3b82f6; --danger:#ef4444; --maxw:720px; }
+    :root { --bg:#0b0c0f; --panel:#111318; --panel-2:#151823; --text:#eaf0ff; --muted:#a7b0c5; --border:#252a36; --focus:#3b82f6; --accent:#3b82f6; --danger:#ef4444; --ok:#16a34a; --warn:#f59e0b; --maxw:720px; }
     *{ box-sizing:border-box } html,body{ margin:0; padding:0; background:var(--bg); color:var(--text); font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial }
     header{ padding:14px 16px; font-weight:700; letter-spacing:.2px }
     main{ padding:12px 12px 92px; max-width:var(--maxw); margin:0 auto }
@@ -31,7 +31,9 @@
     pre.status{ white-space:pre-wrap; word-break:break-word; background:#0c0f16; border:1px dashed var(--border); border-radius:10px; padding:8px; color:#a7b0c5; min-height:22px }
     .pill{ display:inline-block; padding:6px 10px; border-radius:999px; border:1px solid var(--border); background:#0f1420; font-size:12px; margin-right:6px }
     .small{ font-size:12px; color:var(--muted) }
-    /* Rehearse */
+    .kbd{ font-size:11px; padding:2px 6px; border:1px solid var(--border); border-radius:6px; background:#0f1420; color:#a7b0c5 }
+
+    /* Rehearse lines */
     .line{ padding:10px; border-radius:10px; border:1px solid var(--border); margin-bottom:8px; background:#0c0f16; position:relative }
     .line.me{ border-color:#2f6df6; background:#0e1220 }
     .line .who{ font-weight:700; margin-bottom:6px }
@@ -39,7 +41,7 @@
     .controls{ display:flex; gap:8px; align-items:center; flex-wrap:wrap }
     .playing{ outline:2px solid var(--focus) }
     .badge{ font-size:11px; padding:4px 8px; border-radius:999px; border:1px solid var(--border); background:#0f1420; color:#a7b0c5 }
-    .badge.ok{ color:#5ce38c } .badge.warn{ color:#f4c542 } .badge.err{ color:#ff7b7b }
+    .badge.ok{ color:var(--ok) } .badge.warn{ color:var(--warn) } .badge.err{ color:#ff7b7b }
     .editbar{ position:absolute; top:6px; right:6px; display:flex; gap:6px }
     .chip{ font-size:11px; padding:4px 8px; border-radius:999px; border:1px solid var(--border); background:#0f1420; color:#a7b0c5; cursor:pointer; user-select:none }
     .chip.danger{ border-color:#e96; color:#ff7b7b }
@@ -59,10 +61,15 @@
     /* Record */
     .rec-grid{ display:grid; grid-template-columns:1fr; gap:10px }
     .vid{ width:100%; aspect-ratio:9/16; background:#000; border-radius:12px; border:1px solid var(--border); object-fit:cover }
+    .devrow{ display:flex; gap:8px; align-items:center; }
+    .meter-wrap{ display:flex; gap:8px; align-items:center }
+    .meter{ width:10px; height:36px; border-radius:6px; background:#111; border:1px solid var(--border); overflow:hidden; position:relative }
+    .meter > i{ position:absolute; bottom:0; left:0; right:0; height:10%; background:linear-gradient(180deg,#60a5fa,#34d399); transition:height .08s linear }
     .countdown{ position:fixed; inset:0; display:none; align-items:center; justify-content:center; background:rgba(0,0,0,.75); z-index:1000; }
     .countdown.show{ display:flex }
     .count-num{ font-size:64px; font-weight:800; background:#111; color:#fff; padding:24px 36px; border-radius:18px; border:1px solid var(--border) }
     .gallery-item{ border:1px solid var(--border); border-radius:12px; padding:10px; margin-bottom:8px; background:#0c0f16 }
+    .blocked{ border:1px solid var(--danger); background:#1a0f10; color:#ffb0b0; padding:10px; border-radius:10px; font-size:13px }
   </style>
 </head>
 <body>
@@ -170,10 +177,23 @@ JANE: Ready?"></textarea>
     <section id="screen-record" class="screen">
       <div class="card">
         <h3>Record</h3>
-        <div class="hint">Headphones recommended to avoid echo. This prepares an OpenAI reader track and records your mic (optionally camera).</div>
+        <div class="hint">SDK Store rule: <b>camera + mic required.</b> Headphones recommended to avoid echo. We’ll prepare an AI reader track, then record while it plays back.</div>
         <div class="spacer8"></div>
-        <div class="rec-grid">
-          <video id="preview" class="vid" autoplay muted playsinline></video>
+
+        <div id="preflight" class="blocked" hidden></div>
+
+        <div class="rec-grid" id="recGrid">
+          <div class="devrow">
+            <video id="preview" class="vid" autoplay muted playsinline></video>
+          </div>
+
+          <div class="devrow">
+            <div class="meter-wrap">
+              <div class="meter" aria-label="Mic level"><i id="meterFill"></i></div>
+              <span id="devStatus" class="small">Devices: —</span>
+            </div>
+          </div>
+
           <audio id="readerAudio" preload="auto" playsinline></audio>
 
           <div class="row">
@@ -182,7 +202,7 @@ JANE: Ready?"></textarea>
           </div>
 
           <div class="row">
-            <label class="small"><input type="checkbox" id="chkVideo" /> Record video (camera)</label>
+            <label class="small" style="opacity:.6;pointer-events:none;"><input type="checkbox" id="chkVideo" checked disabled /> Record video (required)</label>
             <label class="small"><input type="checkbox" id="chkCountIn" checked /> Count-in</label>
             <label class="small"><input type="checkbox" id="chkHeadphones" checked /> I’m on headphones</label>
           </div>
@@ -203,7 +223,7 @@ JANE: Ready?"></textarea>
       <div class="card">
         <h3>Gallery</h3>
         <div id="takes"></div>
-        <div class="hint">Takes are saved locally in your browser. Download to keep.</div>
+        <div class="hint">Takes are saved locally for this session. Download to keep.</div>
       </div>
     </section>
 
@@ -260,7 +280,13 @@ JANE: Ready?"></textarea>
       const title=$("#titleText").value||"Sides";
       const text=sanitizeScriptText($("#scriptText").value||"");
       setStatus("Uploading text…");
-      try{ const r=await fetch("/debug/upload_script_text",{method:"POST",headers:JSON_HDRS,body:JSON.stringify({title,text})}); const j=await r.json().catch(()=>({})); if(!r.ok){ setStatus("Error "+r.status+": "+JSON.stringify(j)); return; } setStatus(`OK scenes=${j.scene_count} speakers=${(j.speakers||[]).join(", ")}`); S.script_id=j.script_id; await loadScenes(); showScreen("assign"); }catch(e){ setStatus("Network error: "+e); }
+      try{
+        const r=await fetch("/debug/upload_script_text",{method:"POST",headers:JSON_HDRS,body:JSON.stringify({title,text})});
+        const j=await r.json().catch(()=>({}));
+        if(!r.ok){ setStatus("Error "+r.status+": "+JSON.stringify(j)); return; }
+        setStatus(`OK scenes=${j.scene_count} speakers=${(j.speakers||[]).join(", ")}`);
+        S.script_id=j.script_id; await loadScenes(); showScreen("assign");
+      }catch(e){ setStatus("Network error: "+e); }
     });
     $("#btnTextClear").addEventListener("click",()=>{ $("#titleText").value=""; $("#scriptText").value=""; setStatus(""); });
 
@@ -270,7 +296,15 @@ JANE: Ready?"></textarea>
       const fd=new FormData(); fd.append("title",title); fd.append("pdf",file);
       const hdrs={}; if(secret) hdrs["X-Shared-Secret"]=secret;
       setStatusPdf("Uploading PDF…");
-      try{ const r=await fetch("/debug/upload_script_upload",{method:"POST",headers:hdrs,body:fd}); const j=await r.json().catch(()=>({})); if(!r.ok){ setStatusPdf("Error "+r.status+": "+JSON.stringify(j)); return; } const sp=(j.speakers||[]).join(", "); const note=j.note?(" note="+j.note):""; setStatusPdf(`OK scenes=${j.scene_count} speakers=${sp||"(none)"} textLen=${j.textLen||0}${note}`); if(j.note==="image-only"||j.note==="parse-error"){ $("#btnPdfOcr").disabled=false; $("#btnPdfOcr").focus(); return; } S.script_id=j.script_id; await loadScenes(); showScreen("assign"); }catch(e){ setStatusPdf("Network error: "+e); }
+      try{
+        const r=await fetch("/debug/upload_script_upload",{method:"POST",headers:hdrs,body:fd});
+        const j=await r.json().catch(()=>({}));
+        if(!r.ok){ setStatusPdf("Error "+r.status+": "+JSON.stringify(j)); return; }
+        const sp=(j.speakers||[]).join(", "); const note=j.note?(" note="+j.note):"";
+        setStatusPdf(`OK scenes=${j.scene_count} speakers=${sp||"(none)"} textLen=${j.textLen||0}${note}`);
+        if(j.note==="image-only"||j.note==="parse-error"){ $("#btnPdfOcr").disabled=false; $("#btnPdfOcr").focus(); return; }
+        S.script_id=j.script_id; await loadScenes(); showScreen("assign");
+      }catch(e){ setStatusPdf("Network error: "+e); }
     });
 
     async function loadScenes(){
@@ -283,14 +317,12 @@ JANE: Ready?"></textarea>
     function buildVoicePickers(){ const box=$("#voicePickers"); box.innerHTML=""; const presets=["alloy","verse","aria","solar","narrator"]; const partners=uniqueRoles().filter(n=>n!==S.role); partners.forEach(name=>{ const wrap=document.createElement("div"); wrap.className="card"; wrap.style.marginTop="8px"; wrap.innerHTML=`<div style="display:flex;align-items:center;justify-content:space-between;gap:10px"><strong>${name}</strong><select data-name="${name}">${presets.map(v=>`<option value="${v}" ${((S.voice_map[name]||presets[0])===v)?"selected":""}>${v}</option>`).join("")}</select></div>`; box.appendChild(wrap); }); box.querySelectorAll("select").forEach(el=>el.addEventListener("change",(e)=>{ const sel=e.target; S.voice_map[sel.getAttribute("data-name")]=sel.value; })); }
     $("#btnSaveAssign").addEventListener("click", async ()=>{ if(!S.script_id) return; const roles=uniqueRoles().filter(r=>r!==S.role); for(const r of roles) if(!S.voice_map[r]) S.voice_map[r]="alloy"; await fetch("/debug/set_voice",{method:"POST",headers:JSON_HDRS,body:JSON.stringify({script_id:S.script_id,voice_map:S.voice_map})}); showScreen("rehearse"); });
 
-    /* ------- rehearse build (same as tuned) ------- */
+    /* ------- rehearse build ------- */
     const E={ linesWrap:$("#lines"), btnPlay:$("#btnPlay"), btnPrev:$("#btnPrev"), btnNext:$("#btnNext"), btnTop:$("#btnTop"), selPace:"#selPace", btnMic:$("#btnMic"), micBadge:$("#micBadge"), btnToggleEditMode:$("#btnToggleEditMode"), editModeState:$("#editModeState"), inlineForm:null, currentSlotPlace:null };
     let idx=0, playing=false;
 
     const isParenOnly=t=>/^\(.*\)$/.test((t||"").trim());
     const isBoilerplate=t=>{ const s=(t||"").trim().toLowerCase(); if(!s) return true; if(/^[-–—]+$/.test(s)) return true; if(/^\d{1,4}$/.test(s)) return true; if(/^page\s*\d+(\s*of\s*\d+)?$/i.test(s)) return true; if((/^cont'?d\.?$/i.test(s)||/^continued$/i.test(s))&&s.length<=10) return true; if(/^https?:\/\/\S+/i.test(s)) return true; return (s.includes("sides by breakdown services")||s.includes("actors access")||s.includes("do not share")||s.includes("copyright")) && s.length<=80; };
-    const endsWithDash=txt=>/(—|--|-)\s*$/.test((txt||"").trim());
-
     function buildFiltered(scene){ const out=[]; for(let i=0;i<(scene?.lines?.length||0);i++){ const ln=scene.lines[i]; if(!ln) continue; if(ln.speaker==="NARRATOR") continue; if(isParenOnly(ln.text)) continue; if(isBoilerplate(ln.text)) continue; out.push({orig:i,speaker:ln.speaker,text:ln.text}); } return out; }
     function getScene(){ return S.scenes[0]; }
     function myName(){ return S.role||uniqueRoles()[0]||""; }
@@ -301,23 +333,20 @@ JANE: Ready?"></textarea>
       const scene=getScene(); const list=buildFiltered(scene);
       if(!list.length){ $("#lines").innerHTML="<p class='hint'>Import a script first.</p>"; return; }
       let html=inlineSlot(0);
-      list.forEach((ln,i)=>{ const me=ln.speaker===myName(); html+=`<div class="line ${me?"me":""}" data-i="${i}" data-orig="${ln.orig}">
-        <div class="editbar" style="display:${S.editMode?'flex':'none'}"><span class="chip" data-act="edit" data-i="${i}">Edit</span><span class="chip danger" data-act="del" data-i="${i}">Delete</span></div>
-        <div class="who">${ln.speaker}</div><div class="text" data-i="${i}" contenteditable="false">${ln.text}</div></div>`; html+=inlineSlot(ln.orig+1); });
+      list.forEach((ln,i)=>{ const me=ln.speaker===myName(); html+=`<div class="line ${me?"me":""}" data-i="${i}" data-orig="${ln.orig}"><div class="editbar" style="display:${S.editMode?'flex':'none'}"><span class="chip" data-act="edit" data-i="${i}">Edit</span><span class="chip danger" data-act="del" data-i="${i}">Delete</span></div><div class="who">${ln.speaker}</div><div class="text" data-i="${i}" contenteditable="false">${ln.text}</div></div>`; html+=inlineSlot(ln.orig+1); });
       $("#lines").innerHTML=html; idx=Math.max(0,Math.min(idx,list.length-1)); wireEditTools(); wireSlots(); highlightCurrent(); applyEditModeUI();
     }
     function wireEditTools(){ $$(".chip",$("#lines")).forEach(ch=>ch.onclick=(ev)=>{ ev.stopPropagation(); const act=ch.getAttribute("data-act"); const iF=+ch.getAttribute("data-i"); const sc=getScene(); if(!sc) return; const node=$(`.line[data-i="${iF}"]`,$("#lines")); const orig=+node.getAttribute("data-orig"); if(Number.isNaN(orig)) return; if(act==="edit"){ if(!S.editMode) return; const t=$(`.text[data-i="${iF}"]`,$("#lines")); const editing=t.getAttribute("contenteditable")==="true"; if(editing){ t.setAttribute("contenteditable","false"); sc.lines[orig].text=t.innerText.trim(); hydrateRehearse(); } else { t.setAttribute("contenteditable","true"); t.focus(); const r=document.createRange(); r.selectNodeContents(t); r.collapse(false); const s=window.getSelection(); s.removeAllRanges(); s.addRange(r); } } else if(act==="del"){ if(!S.editMode) return; sc.lines.splice(orig,1); hydrateRehearse(); } }); }
     function wireSlots(){ $$('[data-add-button]',$("#lines")).forEach(btn=>btn.onclick=(ev)=>{ if(!S.editMode) return; ev.stopPropagation(); const slot=btn.closest('.inline-slot'); openInlineForm(slot, Number(slot.getAttribute("data-place"))); }); }
     function highlightCurrent(){ $$(".line",$("#lines")).forEach(el=>el.classList.remove("playing")); const cur=$(`.line[data-i="${idx}"]`,$("#lines")); if(cur){ cur.classList.add("playing"); cur.scrollIntoView({block:"center",behavior:(!S.editMode?"smooth":"auto")}); } }
-
     function buildInlineForm(){ const div=document.createElement("div"); div.className="inline-form"; div.innerHTML=`<div><label>Speaker</label><select class="addSpeaker"></select></div><div class="spacer6"></div><label>Line text</label><textarea class="addText" placeholder="Type the line…"></textarea><div class="spacer6"></div><div class="row"><button class="btn addCommit">Add</button><button class="btn secondary addCancel">Cancel</button></div>`; div.addEventListener('keydown',e=>e.stopPropagation()); div.addEventListener('click',e=>e.stopPropagation()); return div; }
     function openInlineForm(slotEl, place){ const sc=getScene(); if(!sc) return; if(!E.inlineForm){ E.inlineForm=buildInlineForm(); } else { try{ E.inlineForm.remove(); }catch{} } slotEl.appendChild(E.inlineForm); E.currentSlotPlace=place; const sel=E.inlineForm.querySelector(".addSpeaker"); const roles=uniqueRoles(); sel.innerHTML=roles.map(r=>`<option value="${r}">${r}</option>`).join("")+`<option value="__custom">Custom…</option>`; const ta=E.inlineForm.querySelector(".addText"); const add=E.inlineForm.querySelector(".addCommit"); const cancelBtn=E.inlineForm.querySelector(".addCancel"); pauseForEdit(true); const cancel=()=>{ try{ E.inlineForm.remove(); }catch{}; E.currentSlotPlace=null; pauseForEdit(false); }; cancelBtn.onclick=e=>{ e.preventDefault(); cancel(); }; add.onclick=e=>{ e.preventDefault(); let sp=sel.value; if(sp==="__custom"){ sp=prompt("Speaker name?")||""; } const text=(ta.value||"").trim(); if(!sp||!text) return; const idxPlace=Math.max(0,Math.min(place,sc.lines.length)); sc.lines.splice(idxPlace,0,{speaker:sp,text}); cancel(); hydrateRehearse(); const after=buildFiltered(sc); const newPos=after.findIndex(x=>x.orig===place); if(newPos>=0){ idx=newPos; highlightCurrent(); } }; setTimeout(()=>ta.focus(),10); }
     function pauseForEdit(on){ if(on){ playing=false; $("#btnPlay").textContent="Play"; window.speechSynthesis?.cancel(); } }
 
-    /* ------- Browser speech synthesis for rehearse ------- */
+    /* ------- browser speech (rehearse) ------- */
     function synthSpeak(text){ if(!window.speechSynthesis) return; window.speechSynthesis.cancel(); const u=new SpeechSynthesisUtterance(text); const v=(window.speechSynthesis.getVoices()||[]).find(v=>/en(-|_)?/.test(v.lang)); if(v) u.voice=v; u.rate=1.0; u.pitch=1.0; window.speechSynthesis.speak(u); return new Promise(res=>{ u.onend=()=>res(); u.onerror=()=>res(); }); }
 
-    /* ------- Speech Rec tuned (unchanged logic) ------- */
+    /* ------- Speech Rec tuned (unchanged core) ------- */
     const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
     const sr=SR?new SR():null;
     let srToggleOn=false, srPermGranted=false, srActive=false;
@@ -331,7 +360,7 @@ JANE: Ready?"></textarea>
     function rms(buf){ let sum=0; for(let i=0;i<buf.length;i++){ const v=buf[i]/128-1; sum+=v*v; } return Math.sqrt(sum/buf.length); }
     function startMicMonitor(){
       if(micStream) return;
-      navigator.mediaDevices.getUserMedia({audio:true}).then(stream=>{
+      navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true}}).then(stream=>{
         micStream=stream;
         audioCtx=new (window.AudioContext||window.webkitAudioContext)();
         const src=audioCtx.createMediaStreamSource(stream);
@@ -343,6 +372,8 @@ JANE: Ready?"></textarea>
           analyser.getByteTimeDomainData(data);
           const v=rms(data);
           energy = energy*0.85 + v*0.15;
+          const h = Math.min(1, Math.max(0, (energy-0.015)/0.12));
+          $("#meterFill").style.height = (4 + h*96) + "%";
           const now=performance.now();
           if(energy>ENERGY_TALK_THRESH){ if(!speaking){ firstEnergyAt=now; } speaking=true; lastEnergyAt=now; }
           else if(energy<ENERGY_SILENCE_THRESH){ if(now-(lastEnergyAt||now)>140){ speaking=false; } }
@@ -351,13 +382,11 @@ JANE: Ready?"></textarea>
         tick();
       }).catch(()=>{ /* ignore */ });
     }
-    function stopMicMonitor(){ try{ micStream?.getTracks().forEach(t=>t.stop()); }catch{}; micStream=null; try{ audioCtx?.close(); }catch{}; audioCtx=null; analyser=null; energy=0; speaking=false; }
+    function stopMicMonitor(){ try{ micStream?.getTracks().forEach(t=>t.stop()); }catch{}; micStream=null; try{ audioCtx?.close(); }catch{}; audioCtx=null; analyser=null; energy=0; speaking=false; $("#meterFill").style.height="6%"; }
 
     function minElapsedFor(text){ const t=(text||"").trim(); if(t.length<=6) return 180; if(t.length<=15) return 220; if(t.length<=40) return 300; return 420; }
     function silenceDebounceFor(text){ const t=(text||"").trim(); if(t.length<=6) return 180; if(t.length<=15) return 220; if(t.length<=40) return 260; return 320; }
-    const AFTER_ADV_COOLDOWN_MS=140, FAST_INTERIM_CHARS=12, WATCHDOG_MS=300, NORESULT_RESTART_MS=1500;
-    const MIN_PROGRESS_FOR_SILENCE = 0.35;
-    const PROGRESS_FOR_FINAL_DASH = 0.82;
+    const AFTER_ADV_COOLDOWN_MS=140;
 
     function tokens(s){ return (s||"").toLowerCase().replace(/[^a-z0-9' ]+/g," ").split(/\s+/).filter(Boolean); }
     function lastCueWords(text){ const tks=tokens(text).filter(w=>!["uh","um"].includes(w)); if(!tks.length) return ""; const take=Math.min(2,tks.length); return tks.slice(-take).join(" "); }
@@ -376,20 +405,17 @@ JANE: Ready?"></textarea>
     async function requestMicPermissionOnce(){ if(srPermGranted) return true; try{ const s=await navigator.mediaDevices.getUserMedia({audio:true}); s.getTracks().forEach(t=>t.stop()); srPermGranted=true; return true; }catch{ srPermGranted=false; return false; } finally{ updateMicBadge(); } }
 
     function advanceFromMyLine(){
-      const now=performance.now();
-      if(advanceLock||now<advanceCoolUntil) return;
+      const now=performance.now(); if(advanceLock) return;
       if(!onMyLine()) return;
       const elapsed=now-(myLineStartMs||now);
       if(elapsed < minElapsedFor(current()?.text||"")) return;
-
       advanceLock=true;
       const list=filtered(); if(!list.length) return;
       idx=Math.min(idx+1,list.length-1);
-      highlightCurrent();
+      $$(".line",$("#lines")).forEach(el=>el.classList.remove("playing"));
+      const cur=$(`.line[data-i="${idx}"]`,$("#lines")); if(cur){ cur.classList.add("playing"); cur.scrollIntoView({block:"center",behavior:"smooth"}); }
       clearMy();
-      try{ sr?.stop(); }catch{}
       const next=current();
-      advanceCoolUntil=now+AFTER_ADV_COOLDOWN_MS;
       if(next && next.speaker===myName()){
         if(srToggleOn && srPermGranted){ setTimeout(()=>{ if(sr && !srActive) try{ sr.start(); }catch{}; },80); }
       }else{
@@ -406,15 +432,10 @@ JANE: Ready?"></textarea>
         const now=performance.now();
         const elapsed=now-(myLineStartMs||now);
         if(!firstEnergyAt || elapsed < minElapsedFor(current()?.text||"")) return;
-
-        const quietLongEnough = !speaking && (now - Math.max(lastResultAt||firstEnergyAt, firstEnergyAt)) >= need;
+        const quietLongEnough = !speaking && (now - firstEnergyAt) >= need;
         const cueOk = transcriptContainsCue(latestTranscript);
-        const asrQuiet = (now - (lastResultAt||firstEnergyAt)) > 500;
-        const progressOk = progressRatio(current()?.text||"", latestTranscript) >= MIN_PROGRESS_FOR_SILENCE;
-
-        if(quietLongEnough && (cueOk || (asrQuiet && progressOk))){
-          advanceFromMyLine();
-        }
+        const progressOk = progressRatio(current()?.text||"", latestTranscript) >= 0.35;
+        if(quietLongEnough && (cueOk || progressOk)){ advanceFromMyLine(); }
       }, need);
     }
 
@@ -423,41 +444,22 @@ JANE: Ready?"></textarea>
       sr.onstart=()=>{ srActive=true; updateMicBadge(); };
       sr.onend=()=>{ srActive=false; updateMicBadge(); if(srToggleOn && srPermGranted && onMyLine() && !(E.inlineForm&&E.inlineForm.isConnected)){ try{ sr.start(); }catch{} } };
       sr.onerror=()=>{ srActive=false; updateMicBadge(); };
-
       sr.onresult=(ev)=>{
         if(!(onMyLine() && srToggleOn && srPermGranted)) return;
         maybeSetMyLineStart();
-        const now=performance.now(); if(now<advanceCoolUntil) return;
-        const ln=current(); if(!ln) return;
-        const elapsed=now-(myLineStartMs||now);
-
         const last=ev.results?.[ev.results.length-1];
         const alt=last?.[0]; const isFinal=!!last?.isFinal;
-        latestTranscript=(alt?.transcript||"").trim();
-        lastResultAt=now;
-
-        if(!isFinal && /(—|--|-)\s*$/.test((ln.text||"").trim()) && elapsed>=180 && (latestTranscript.split(/\s+/).filter(Boolean).length>=2) && ( ( (latestTranscript.toLowerCase().replace(/[^a-z0-9' ]+/g,"").length) / ((ln.text||"").toLowerCase().replace(/[^a-z0-9' ]+/g,"").length) ) >= 0.82 )){
-          return advanceFromMyLine();
-        }
-        if(!isFinal && latestTranscript.length>=12 && transcriptContainsCue(latestTranscript) && elapsed>=minElapsedFor(ln.text)+120){
-          return advanceFromMyLine();
-        }
-        if(isFinal && elapsed>=minElapsedFor(ln.text)){
-          return advanceFromMyLine();
-        }
-        armSilenceDebounce();
+        const tr=(alt?.transcript||"").trim();
+        latestTranscript=tr;
+        if(isFinal){ if(performance.now()-(myLineStartMs||performance.now())>=minElapsedFor(current()?.text||"")) advanceFromMyLine(); }
+        else { armSilenceDebounce(); }
       };
     }
 
     setInterval(()=>{
       if(!(sr && srToggleOn && srPermGranted)) return;
       if(!(onMyLine()) || (E.inlineForm&&E.inlineForm.isConnected)) return;
-      const now=performance.now();
       if(!srActive){ try{ sr.start(); }catch{} }
-      if(speaking && firstEnergyAt && now - Math.max(lastResultAt||firstEnergyAt, firstEnergyAt) > 1500){
-        try{ sr.stop(); }catch{};
-        try{ sr.start(); }catch{};
-      }
     }, 300);
 
     async function maybeListenForMyLine(){
@@ -467,13 +469,14 @@ JANE: Ready?"></textarea>
     }
 
     async function step(playMode){
-      const list=filtered(); if(!list.length) return;
+      const list=buildFiltered(getScene()); if(!list.length) return;
       const pace=Number(($("#selPace")?.value)||0);
-      const ln=current(); if(!ln){ playing=false; $("#btnPlay").textContent="Play"; return; }
-      highlightCurrent();
+      const ln=list[idx]; if(!ln){ playing=false; $("#btnPlay").textContent="Play"; return; }
+      $$(".line",$("#lines")).forEach(el=>el.classList.remove("playing"));
+      const cur=$(`.line[data-i="${idx}"]`,$("#lines")); if(cur) cur.classList.add("playing");
 
       if(ln.speaker===myName()){
-        if(sr && srToggleOn && srPermGranted){ advanceLock=false; maybeListenForMyLine(); return; }
+        if(sr && srToggleOn && srPermGranted){ maybeListenForMyLine(); return; }
         if(playMode){ playing=false; $("#btnPlay").textContent="Play"; }
       }else{
         await synthSpeak(ln.text);
@@ -483,9 +486,9 @@ JANE: Ready?"></textarea>
     }
 
     $("#btnPlay").addEventListener("click",()=>{ playing=!playing; $("#btnPlay").textContent=playing?"Pause":"Play"; if(playing){ step(true); } else { window.speechSynthesis?.cancel(); try{ sr?.stop(); }catch{}; clearMy(); }});
-    $("#btnPrev").addEventListener("click",()=>{ const list=filtered(); if(!list.length) return; try{ sr?.stop(); }catch{}; clearMy(); idx=Math.max(0,idx-1); highlightCurrent(); if(playing) step(true); else maybeListenForMyLine(); });
-    $("#btnNext").addEventListener("click",()=>{ const list=filtered(); if(!list.length) return; try{ sr?.stop(); }catch{}; clearMy(); idx=Math.min(list.length-1,idx+1); highlightCurrent(); if(playing) step(true); else maybeListenForMyLine(); });
-    $("#btnTop").addEventListener("click",()=>{ try{ sr?.stop(); }catch{}; clearMy(); idx=0; highlightCurrent(); if(playing) step(true); else maybeListenForMyLine(); });
+    $("#btnPrev").addEventListener("click",()=>{ const list=buildFiltered(getScene()); if(!list.length) return; try{ sr?.stop(); }catch{}; clearMy(); idx=Math.max(0,idx-1); step(false); });
+    $("#btnNext").addEventListener("click",()=>{ const list=buildFiltered(getScene()); if(!list.length) return; try{ sr?.stop(); }catch{}; clearMy(); idx=Math.min(list.length-1,idx+1); step(false); });
+    $("#btnTop").addEventListener("click",()=>{ try{ sr?.stop(); }catch{}; clearMy(); idx=0; step(false); });
 
     document.addEventListener("keydown",(e)=>{ if(!$("#screen-rehearse").classList.contains("active")) return; if(isEditableTarget(e) || (E.inlineForm && E.inlineForm.isConnected)) return;
       if(e.code==="Space"){ e.preventDefault(); $("#btnPlay").click(); }
@@ -496,21 +499,7 @@ JANE: Ready?"></textarea>
 
     $("#btnToggleEditMode").addEventListener("click",()=>{ S.editMode=!S.editMode; applyEditModeUI(); });
     function applyEditModeUI(){ $("#btnToggleEditMode").setAttribute("aria-pressed",S.editMode?"true":"false"); $("#editModeState").textContent=S.editMode?"On":"Off"; $$(".editbar",$("#lines")).forEach(el=>el.style.display=S.editMode?"flex":"none"); $$(".inline-slot",$("#lines")).forEach(el=>el.style.display=S.editMode?"flex":"none"); if(!S.editMode && E.inlineForm && E.inlineForm.isConnected){ try{ E.inlineForm.remove(); }catch{}; E.currentSlotPlace=null; } }
-
-    $("#btnMic").addEventListener("click", async ()=>{
-      if(!sr){ updateMicBadge(); return; }
-      if(!srToggleOn){
-        const ok=await requestMicPermissionOnce();
-        srToggleOn=ok;
-        if(ok){ startMicMonitor(); await maybeListenForMyLine(); }
-      }else{
-        srToggleOn=false;
-        try{ sr.stop(); }catch{}
-        clearMy();
-        stopMicMonitor();
-      }
-      updateMicBadge();
-    });
+    $("#btnMic").addEventListener("click", async ()=>{ if(!sr){ updateMicBadge(); return; } if(!srToggleOn){ const ok=await requestMicPermissionOnce(); srToggleOn=ok; if(ok){ startMicMonitor(); await maybeListenForMyLine(); } }else{ srToggleOn=false; try{ sr.stop(); }catch{}; clearMy(); stopMicMonitor(); } updateMicBadge(); });
 
     /* ----------------- RECORD TAB LOGIC ----------------- */
     const R = {
@@ -531,12 +520,14 @@ JANE: Ready?"></textarea>
       render_id: "",
       download_url: "",
       takes: [],
+      preflight: $("#preflight"),
+      recGrid: $("#recGrid"),
+      devStatus: $("#devStatus"),
     };
-    R.audio.setAttribute("playsinline",""); // iOS audio UX
+    R.audio.setAttribute("playsinline",""); // iOS UX
 
     function setStatusRec(t){ R.status.textContent = t || ""; }
 
-    // choose a recording MIME Safari/Chrome can actually play back
     function pickMime(video){
       const vids = [
         "video/mp4;codecs=avc1.42E01E,mp4a.40.2",
@@ -551,11 +542,45 @@ JANE: Ready?"></textarea>
       ];
       const list = video ? vids : auds;
       for(const m of list){ if(window.MediaRecorder && MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(m)) return m; }
-      return ""; // let browser pick
+      return "";
     }
 
-    if(isIOS){ // sane default on iOS: audio-only for MVP (webm decoding is flaky)
-      R.chkVideo.checked = false;
+    if(isIOS){
+      // We still require camera for SDK Store, but iOS Safari can be picky. We keep preview muted & inline.
+      R.preview.muted = true;
+    }
+
+    function showBlock(msg){
+      R.preflight.hidden = false;
+      R.preflight.textContent = msg;
+      R.recGrid.style.opacity = 0.5;
+      R.btnStart.disabled = true;
+      R.btnPrepare.disabled = true;
+      R.btnPlayReader.disabled = true;
+    }
+    function clearBlock(){
+      R.preflight.hidden = true;
+      R.recGrid.style.opacity = 1;
+      R.btnPrepare.disabled = false;
+    }
+
+    async function preflightDevices(){
+      try{
+        const perms = await navigator.mediaDevices.getUserMedia({
+          audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true},
+          video:true
+        });
+        // Set preview
+        R.stream = perms;
+        R.preview.srcObject = R.stream;
+        startMicMonitor();
+        R.devStatus.textContent = "Devices: camera ✔︎  mic ✔︎";
+        clearBlock();
+        R.btnPrepare.disabled = false;
+      }catch(e){
+        R.devStatus.textContent = "Devices: camera ✖︎  mic ✖︎";
+        showBlock("Camera + mic permission is required to record. Allow access in your browser settings and reload.");
+      }
     }
 
     async function prepareReader(){
@@ -563,18 +588,24 @@ JANE: Ready?"></textarea>
       setStatusRec("Preparing reader track…");
       R.btnPrepare.disabled = true;
       try{
-        const r = await fetch("/debug/render", { method:"POST", headers:JSON_HDRS, body:JSON.stringify({ script_id:S.script_id, my_role:(S.role||"").toUpperCase(), pace_ms:0 }) });
-        const j = await r.json();
+        // Try new-body (my_role/pace_ms), fall back to legacy (role/pace)
+        const bodyNew = { script_id:S.script_id, my_role:(S.role||"").toUpperCase(), pace_ms:0 };
+        let r = await fetch("/debug/render", { method:"POST", headers:JSON_HDRS, body:JSON.stringify(bodyNew) });
+        if(!r.ok){
+          const bodyLegacy = { script_id:S.script_id, role:(S.role||""), pace:"normal" };
+          r = await fetch("/debug/render", { method:"POST", headers:JSON_HDRS, body:JSON.stringify(bodyLegacy) });
+        }
+        const j = await r.json().catch(()=>({}));
         if(!r.ok){ setStatusRec("Render error "+r.status+": "+JSON.stringify(j)); R.btnPrepare.disabled=false; return; }
-        R.render_id = j.render_id;
+        R.render_id = j.render_id || j.id || "";
 
         const poll = async ()=>{
           const s = await fetch(`/debug/render_status?render_id=${encodeURIComponent(R.render_id)}`, { headers:JSON_HDRS });
-          const js = await s.json();
+          const js = await s.json().catch(()=>({}));
           if(js.status==="complete" && js.download_url){
             R.download_url = js.download_url + "?t=" + Date.now();
             R.audio.src = R.download_url;
-            R.audio.load(); // ensure Safari actually loads it
+            R.audio.load();
             R.btnPlayReader.disabled = false;
             R.btnStart.disabled = false;
             setStatusRec("Reader ready.");
@@ -623,38 +654,34 @@ JANE: Ready?"></textarea>
       c.classList.remove("show");
     }
 
-    async function startPreviewIfNeeded(){
-      if(!R.chkVideo.checked){ R.preview.srcObject=null; return; }
-      try{
-        if(!R.stream){
-          const st = await navigator.mediaDevices.getUserMedia({ video:true, audio:true });
-          R.stream = st;
-        }
-        R.preview.srcObject = R.stream;
-      }catch(e){
-        setStatusRec("Camera/mic permission denied: "+e);
+    function warnIfNoHeadphones(){
+      if(!R.chkHeadphones.checked){
+        setStatusRec("Heads-up: You’re not on headphones. Echo/bleed may affect quality.");
       }
     }
-    $("#chkVideo").addEventListener("change", startPreviewIfNeeded);
 
     async function startRecording(){
       if(!R.download_url){ setStatusRec("Prepare the reader first."); return; }
 
-      // Capture mic (and video if requested)
+      // Permissions already checked in preflight; request again to ensure active tracks
       try{
-        const needVideo=!!R.chkVideo.checked;
-        R.stream = await navigator.mediaDevices.getUserMedia({ audio:true, video:needVideo });
-        R.preview.srcObject = needVideo ? R.stream : null;
+        R.stream = await navigator.mediaDevices.getUserMedia({
+          audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true},
+          video:true
+        });
+        R.preview.srcObject = R.stream;
       }catch(e){
         setStatusRec("Permission error: "+e);
+        showBlock("Camera + mic permission is required to record.");
         return;
       }
 
       await doCountdownIfEnabled();
+      warnIfNoHeadphones();
 
       // recorder with supported MIME
       R.chunks = [];
-      const mime = pickMime(!!R.chkVideo.checked);
+      const mime = pickMime(true);
       try{
         R.rec = mime ? new MediaRecorder(R.stream, { mimeType: mime }) : new MediaRecorder(R.stream);
       }catch{
@@ -669,7 +696,7 @@ JANE: Ready?"></textarea>
         R.audio.currentTime = 0;
         await R.audio.play();
       }catch(e){
-        // if autoplay blocked, at least we record mic; user can tap Play Test then Start
+        // if autoplay blocked, user can tap Play Test then Start
       }
 
       // auto-stop when reader ends (plus slight tail)
@@ -681,6 +708,13 @@ JANE: Ready?"></textarea>
     }
     $("#btnStartRec").addEventListener("click", startRecording);
 
+    function stopTracks(){
+      try{ R.stream?.getTracks().forEach(t=>t.stop()); }catch{}
+      R.stream=null;
+      // keep preview black (no srcObject) after stop
+      R.preview.srcObject = null;
+    }
+
     function stopRecording(){
       try{ R.rec?.stop(); }catch{}
       setStatusRec("Stopping…");
@@ -688,17 +722,17 @@ JANE: Ready?"></textarea>
     $("#btnStopRec").addEventListener("click", stopRecording);
 
     function finalizeTake(){
-      const isVid = !!R.chkVideo.checked;
-      const blob = new Blob(R.chunks, { type: (R.rec && R.rec.mimeType) ? R.rec.mimeType : (isVid ? "video/mp4" : "audio/mp4") });
+      const blob = new Blob(R.chunks, { type: (R.rec && R.rec.mimeType) ? R.rec.mimeType : "video/mp4" });
       const url = URL.createObjectURL(blob);
       const ts = new Date().toISOString().replace(/[:.]/g,"-");
-      const ext = (blob.type.startsWith("video/") ? "mp4" : (blob.type.includes("webm") ? "webm" : "m4a"));
-      const name = `${isVid?"take-video":"take-audio"}-${ts}.${ext}`;
+      const safeRole = (S.role||"ME").replace(/[^A-Za-z0-9_-]/g,"_");
+      const name = `take-${safeRole}-${ts}.${blob.type.includes("webm")?"webm":"mp4"}`;
       R.takes.unshift({ url, name, type: blob.type, size: blob.size });
       renderTakes();
       R.btnStop.disabled = true;
       R.btnStart.disabled = false;
       setStatusRec("Saved to Gallery.");
+      stopTracks();
     }
 
     function renderTakes(){
@@ -723,11 +757,13 @@ JANE: Ready?"></textarea>
 
     // Record wiring
     $("#btnPlayReader").disabled = true;
-    $("#btnPrepareReader").disabled = false;
+    $("#btnPrepareReader").disabled = true; // enabled after preflight passes
 
-    // initial
+    // Initial: preflight camera+mic (required)
+    await preflightDevices();
+
+    // initial Rehearse UI
     hydrateRehearse(); applyEditModeUI(); (function initAssign(){ $("#pillScript").textContent="script: "+(S.script_id||"—"); })();
-    // iOS hint: audio-only default avoids WebM issues; user can turn on video if supported
   </script>
 </body>
 </html>
