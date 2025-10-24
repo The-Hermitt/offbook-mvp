@@ -174,7 +174,7 @@ JANE: Ready?"></textarea>
         <div class="spacer8"></div>
         <div class="rec-grid">
           <video id="preview" class="vid" autoplay muted playsinline></video>
-          <audio id="readerAudio" preload="auto"></audio>
+          <audio id="readerAudio" preload="auto" playsinline></audio>
 
           <div class="row">
             <button id="btnPrepareReader" class="btn">1) Prepare Reader Track</button>
@@ -236,6 +236,8 @@ JANE: Ready?"></textarea>
     const $ = (s,r=document)=>r.querySelector(s);
     const $$ = (s,r=document)=>Array.from(r.querySelectorAll(s));
     const isEditableTarget = (ev)=>{ const t=ev.target, tag=(t.tagName||"").toLowerCase(); return t.isContentEditable||tag==="input"||tag==="textarea"||tag==="select"; };
+    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform==='MacIntel' && navigator.maxTouchPoints>1);
+    const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
 
     function showScreen(name){ $$(".screen").forEach(s=>s.classList.remove("active")); $("#screen-"+name).classList.add("active"); $$(".tabbar button").forEach(b=>b.classList.remove("active")); const btn=$(`.tabbar button[data-tab="${name}"]`); if(btn) btn.classList.add("active"); }
     $$(".tabbar button").forEach(b=>b.addEventListener("click",()=>showScreen(b.dataset.tab)));
@@ -281,8 +283,8 @@ JANE: Ready?"></textarea>
     function buildVoicePickers(){ const box=$("#voicePickers"); box.innerHTML=""; const presets=["alloy","verse","aria","solar","narrator"]; const partners=uniqueRoles().filter(n=>n!==S.role); partners.forEach(name=>{ const wrap=document.createElement("div"); wrap.className="card"; wrap.style.marginTop="8px"; wrap.innerHTML=`<div style="display:flex;align-items:center;justify-content:space-between;gap:10px"><strong>${name}</strong><select data-name="${name}">${presets.map(v=>`<option value="${v}" ${((S.voice_map[name]||presets[0])===v)?"selected":""}>${v}</option>`).join("")}</select></div>`; box.appendChild(wrap); }); box.querySelectorAll("select").forEach(el=>el.addEventListener("change",(e)=>{ const sel=e.target; S.voice_map[sel.getAttribute("data-name")]=sel.value; })); }
     $("#btnSaveAssign").addEventListener("click", async ()=>{ if(!S.script_id) return; const roles=uniqueRoles().filter(r=>r!==S.role); for(const r of roles) if(!S.voice_map[r]) S.voice_map[r]="alloy"; await fetch("/debug/set_voice",{method:"POST",headers:JSON_HDRS,body:JSON.stringify({script_id:S.script_id,voice_map:S.voice_map})}); showScreen("rehearse"); });
 
-    /* ------- rehearse build ------- */
-    const E={ linesWrap:$("#lines"), btnPlay:$("#btnPlay"), btnPrev:$("#btnPrev"), btnNext:$("#btnNext"), btnTop:$("#btnTop"), selPace:$("#selPace"), btnMic:$("#btnMic"), micBadge:$("#micBadge"), btnToggleEditMode:$("#btnToggleEditMode"), editModeState:$("#editModeState"), inlineForm:null, currentSlotPlace:null };
+    /* ------- rehearse build (same as tuned) ------- */
+    const E={ linesWrap:$("#lines"), btnPlay:$("#btnPlay"), btnPrev:$("#btnPrev"), btnNext:$("#btnNext"), btnTop:$("#btnTop"), selPace:"#selPace", btnMic:$("#btnMic"), micBadge:$("#micBadge"), btnToggleEditMode:$("#btnToggleEditMode"), editModeState:$("#editModeState"), inlineForm:null, currentSlotPlace:null };
     let idx=0, playing=false;
 
     const isParenOnly=t=>/^\(.*\)$/.test((t||"").trim());
@@ -297,26 +299,25 @@ JANE: Ready?"></textarea>
 
     function hydrateRehearse(){
       const scene=getScene(); const list=buildFiltered(scene);
-      if(!list.length){ E.linesWrap.innerHTML="<p class='hint'>Import a script first.</p>"; return; }
+      if(!list.length){ $("#lines").innerHTML="<p class='hint'>Import a script first.</p>"; return; }
       let html=inlineSlot(0);
       list.forEach((ln,i)=>{ const me=ln.speaker===myName(); html+=`<div class="line ${me?"me":""}" data-i="${i}" data-orig="${ln.orig}">
         <div class="editbar" style="display:${S.editMode?'flex':'none'}"><span class="chip" data-act="edit" data-i="${i}">Edit</span><span class="chip danger" data-act="del" data-i="${i}">Delete</span></div>
         <div class="who">${ln.speaker}</div><div class="text" data-i="${i}" contenteditable="false">${ln.text}</div></div>`; html+=inlineSlot(ln.orig+1); });
-      E.linesWrap.innerHTML=html; idx=Math.max(0,Math.min(idx,list.length-1)); wireEditTools(); wireSlots(); highlightCurrent(); applyEditModeUI();
+      $("#lines").innerHTML=html; idx=Math.max(0,Math.min(idx,list.length-1)); wireEditTools(); wireSlots(); highlightCurrent(); applyEditModeUI();
     }
-    function wireEditTools(){ $$(".chip",E.linesWrap).forEach(ch=>ch.onclick=(ev)=>{ ev.stopPropagation(); const act=ch.getAttribute("data-act"); const iF=+ch.getAttribute("data-i"); const sc=getScene(); if(!sc) return; const node=$(`.line[data-i="${iF}"]`,E.linesWrap); const orig=+node.getAttribute("data-orig"); if(Number.isNaN(orig)) return; if(act==="edit"){ if(!S.editMode) return; const t=$(`.text[data-i="${iF}"]`,E.linesWrap); const editing=t.getAttribute("contenteditable")==="true"; if(editing){ t.setAttribute("contenteditable","false"); sc.lines[orig].text=t.innerText.trim(); hydrateRehearse(); } else { t.setAttribute("contenteditable","true"); t.focus(); placeCaretEnd(t); } } else if(act==="del"){ if(!S.editMode) return; sc.lines.splice(orig,1); hydrateRehearse(); } }); }
-    function wireSlots(){ $$('[data-add-button]',E.linesWrap).forEach(btn=>btn.onclick=(ev)=>{ if(!S.editMode) return; ev.stopPropagation(); const slot=btn.closest('.inline-slot'); openInlineForm(slot, Number(slot.getAttribute("data-place"))); }); }
-    function placeCaretEnd(el){ const r=document.createRange(); r.selectNodeContents(el); r.collapse(false); const s=window.getSelection(); s.removeAllRanges(); s.addRange(r); }
-    function highlightCurrent(){ $$(".line",E.linesWrap).forEach(el=>el.classList.remove("playing")); const cur=$(`.line[data-i="${idx}"]`,E.linesWrap); if(cur){ cur.classList.add("playing"); cur.scrollIntoView({block:"center",behavior:(!S.editMode?"smooth":"auto")}); } }
+    function wireEditTools(){ $$(".chip",$("#lines")).forEach(ch=>ch.onclick=(ev)=>{ ev.stopPropagation(); const act=ch.getAttribute("data-act"); const iF=+ch.getAttribute("data-i"); const sc=getScene(); if(!sc) return; const node=$(`.line[data-i="${iF}"]`,$("#lines")); const orig=+node.getAttribute("data-orig"); if(Number.isNaN(orig)) return; if(act==="edit"){ if(!S.editMode) return; const t=$(`.text[data-i="${iF}"]`,$("#lines")); const editing=t.getAttribute("contenteditable")==="true"; if(editing){ t.setAttribute("contenteditable","false"); sc.lines[orig].text=t.innerText.trim(); hydrateRehearse(); } else { t.setAttribute("contenteditable","true"); t.focus(); const r=document.createRange(); r.selectNodeContents(t); r.collapse(false); const s=window.getSelection(); s.removeAllRanges(); s.addRange(r); } } else if(act==="del"){ if(!S.editMode) return; sc.lines.splice(orig,1); hydrateRehearse(); } }); }
+    function wireSlots(){ $$('[data-add-button]',$("#lines")).forEach(btn=>btn.onclick=(ev)=>{ if(!S.editMode) return; ev.stopPropagation(); const slot=btn.closest('.inline-slot'); openInlineForm(slot, Number(slot.getAttribute("data-place"))); }); }
+    function highlightCurrent(){ $$(".line",$("#lines")).forEach(el=>el.classList.remove("playing")); const cur=$(`.line[data-i="${idx}"]`,$("#lines")); if(cur){ cur.classList.add("playing"); cur.scrollIntoView({block:"center",behavior:(!S.editMode?"smooth":"auto")}); } }
 
     function buildInlineForm(){ const div=document.createElement("div"); div.className="inline-form"; div.innerHTML=`<div><label>Speaker</label><select class="addSpeaker"></select></div><div class="spacer6"></div><label>Line text</label><textarea class="addText" placeholder="Type the line…"></textarea><div class="spacer6"></div><div class="row"><button class="btn addCommit">Add</button><button class="btn secondary addCancel">Cancel</button></div>`; div.addEventListener('keydown',e=>e.stopPropagation()); div.addEventListener('click',e=>e.stopPropagation()); return div; }
     function openInlineForm(slotEl, place){ const sc=getScene(); if(!sc) return; if(!E.inlineForm){ E.inlineForm=buildInlineForm(); } else { try{ E.inlineForm.remove(); }catch{} } slotEl.appendChild(E.inlineForm); E.currentSlotPlace=place; const sel=E.inlineForm.querySelector(".addSpeaker"); const roles=uniqueRoles(); sel.innerHTML=roles.map(r=>`<option value="${r}">${r}</option>`).join("")+`<option value="__custom">Custom…</option>`; const ta=E.inlineForm.querySelector(".addText"); const add=E.inlineForm.querySelector(".addCommit"); const cancelBtn=E.inlineForm.querySelector(".addCancel"); pauseForEdit(true); const cancel=()=>{ try{ E.inlineForm.remove(); }catch{}; E.currentSlotPlace=null; pauseForEdit(false); }; cancelBtn.onclick=e=>{ e.preventDefault(); cancel(); }; add.onclick=e=>{ e.preventDefault(); let sp=sel.value; if(sp==="__custom"){ sp=prompt("Speaker name?")||""; } const text=(ta.value||"").trim(); if(!sp||!text) return; const idxPlace=Math.max(0,Math.min(place,sc.lines.length)); sc.lines.splice(idxPlace,0,{speaker:sp,text}); cancel(); hydrateRehearse(); const after=buildFiltered(sc); const newPos=after.findIndex(x=>x.orig===place); if(newPos>=0){ idx=newPos; highlightCurrent(); } }; setTimeout(()=>ta.focus(),10); }
-    function pauseForEdit(on){ if(on){ playing=false; E.btnPlay.textContent="Play"; window.speechSynthesis?.cancel(); } }
+    function pauseForEdit(on){ if(on){ playing=false; $("#btnPlay").textContent="Play"; window.speechSynthesis?.cancel(); } }
 
-    /* ------- TTS (browser) for rehearse -------- */
+    /* ------- Browser speech synthesis for rehearse ------- */
     function synthSpeak(text){ if(!window.speechSynthesis) return; window.speechSynthesis.cancel(); const u=new SpeechSynthesisUtterance(text); const v=(window.speechSynthesis.getVoices()||[]).find(v=>/en(-|_)?/.test(v.lang)); if(v) u.voice=v; u.rate=1.0; u.pitch=1.0; window.speechSynthesis.speak(u); return new Promise(res=>{ u.onend=()=>res(); u.onerror=()=>res(); }); }
 
-    /* ------- Speech Recognition tuned logic (as before) ------- */
+    /* ------- Speech Rec tuned (unchanged logic) ------- */
     const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
     const sr=SR?new SR():null;
     let srToggleOn=false, srPermGranted=false, srActive=false;
@@ -370,7 +371,7 @@ JANE: Ready?"></textarea>
     function maybeSetMyLineStart(){ if(onMyLine() && !myLineStartMs) myLineStartMs=performance.now(); }
     function clearMy(){ myLineStartMs=0; firstEnergyAt=0; advanceLock=false; latestTranscript=""; lastResultAt=0; if(silenceTimer){ clearTimeout(silenceTimer); silenceTimer=null; } }
 
-    function updateMicBadge(){ if(!sr){ E.micBadge.textContent="speech recognition: not supported"; E.micBadge.className="badge err"; E.btnMic.disabled=true; return; } const label=!srToggleOn?"off":(srActive?"listening…":(srPermGranted?"ready":"needs permission")); E.micBadge.textContent=label; E.micBadge.className="badge "+(!srToggleOn?"warn":(srActive?"ok":(srPermGranted?"warn":"err"))); E.btnMic.textContent=srToggleOn?"Mic: On":"Mic: Off"; E.btnMic.setAttribute("aria-pressed",srToggleOn?"true":"false"); }
+    function updateMicBadge(){ if(!sr){ $("#micBadge").textContent="speech recognition: not supported"; $("#micBadge").className="badge err"; $("#btnMic").disabled=true; return; } const label=!srToggleOn?"off":(srActive?"listening…":(srPermGranted?"ready":"needs permission")); $("#micBadge").textContent=label; $("#micBadge").className="badge "+(!srToggleOn?"warn":(srActive?"ok":(srPermGranted?"warn":"err"))); $("#btnMic").textContent=srToggleOn?"Mic: On":"Mic: Off"; $("#btnMic").setAttribute("aria-pressed",srToggleOn?"true":"false"); }
 
     async function requestMicPermissionOnce(){ if(srPermGranted) return true; try{ const s=await navigator.mediaDevices.getUserMedia({audio:true}); s.getTracks().forEach(t=>t.stop()); srPermGranted=true; return true; }catch{ srPermGranted=false; return false; } finally{ updateMicBadge(); } }
 
@@ -467,13 +468,13 @@ JANE: Ready?"></textarea>
 
     async function step(playMode){
       const list=filtered(); if(!list.length) return;
-      const pace=Number($("#selPace").value||0);
-      const ln=current(); if(!ln){ playing=false; E.btnPlay.textContent="Play"; return; }
+      const pace=Number(($("#selPace")?.value)||0);
+      const ln=current(); if(!ln){ playing=false; $("#btnPlay").textContent="Play"; return; }
       highlightCurrent();
 
       if(ln.speaker===myName()){
         if(sr && srToggleOn && srPermGranted){ advanceLock=false; maybeListenForMyLine(); return; }
-        if(playMode){ playing=false; E.btnPlay.textContent="Play"; }
+        if(playMode){ playing=false; $("#btnPlay").textContent="Play"; }
       }else{
         await synthSpeak(ln.text);
         if(pace>0) await new Promise(r=>setTimeout(r,pace));
@@ -494,7 +495,7 @@ JANE: Ready?"></textarea>
     });
 
     $("#btnToggleEditMode").addEventListener("click",()=>{ S.editMode=!S.editMode; applyEditModeUI(); });
-    function applyEditModeUI(){ $("#btnToggleEditMode").setAttribute("aria-pressed",S.editMode?"true":"false"); $("#editModeState").textContent=S.editMode?"On":"Off"; $$(".editbar",E.linesWrap).forEach(el=>el.style.display=S.editMode?"flex":"none"); $$(".inline-slot",E.linesWrap).forEach(el=>el.style.display=S.editMode?"flex":"none"); if(!S.editMode && E.inlineForm && E.inlineForm.isConnected){ try{ E.inlineForm.remove(); }catch{}; E.currentSlotPlace=null; } }
+    function applyEditModeUI(){ $("#btnToggleEditMode").setAttribute("aria-pressed",S.editMode?"true":"false"); $("#editModeState").textContent=S.editMode?"On":"Off"; $$(".editbar",$("#lines")).forEach(el=>el.style.display=S.editMode?"flex":"none"); $$(".inline-slot",$("#lines")).forEach(el=>el.style.display=S.editMode?"flex":"none"); if(!S.editMode && E.inlineForm && E.inlineForm.isConnected){ try{ E.inlineForm.remove(); }catch{}; E.currentSlotPlace=null; } }
 
     $("#btnMic").addEventListener("click", async ()=>{
       if(!sr){ updateMicBadge(); return; }
@@ -531,27 +532,49 @@ JANE: Ready?"></textarea>
       download_url: "",
       takes: [],
     };
+    R.audio.setAttribute("playsinline",""); // iOS audio UX
 
     function setStatusRec(t){ R.status.textContent = t || ""; }
+
+    // choose a recording MIME Safari/Chrome can actually play back
+    function pickMime(video){
+      const vids = [
+        "video/mp4;codecs=avc1.42E01E,mp4a.40.2",
+        "video/mp4",
+        "video/webm;codecs=vp8,opus",
+        "video/webm"
+      ];
+      const auds = [
+        "audio/mp4",
+        "audio/webm;codecs=opus",
+        "audio/webm"
+      ];
+      const list = video ? vids : auds;
+      for(const m of list){ if(window.MediaRecorder && MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(m)) return m; }
+      return ""; // let browser pick
+    }
+
+    if(isIOS){ // sane default on iOS: audio-only for MVP (webm decoding is flaky)
+      R.chkVideo.checked = false;
+    }
 
     async function prepareReader(){
       if(!S.script_id){ setStatusRec("Import & Assign first."); return; }
       setStatusRec("Preparing reader track…");
       R.btnPrepare.disabled = true;
       try{
-        const pace = 0; // we render tight; pacing handled in rehearse
-        const r = await fetch("/debug/render", { method:"POST", headers:JSON_HDRS, body:JSON.stringify({ script_id:S.script_id, my_role:(S.role||"").toUpperCase(), pace_ms:pace }) });
+        const r = await fetch("/debug/render", { method:"POST", headers:JSON_HDRS, body:JSON.stringify({ script_id:S.script_id, my_role:(S.role||"").toUpperCase(), pace_ms:0 }) });
         const j = await r.json();
         if(!r.ok){ setStatusRec("Render error "+r.status+": "+JSON.stringify(j)); R.btnPrepare.disabled=false; return; }
         R.render_id = j.render_id;
 
-        // poll
         const poll = async ()=>{
           const s = await fetch(`/debug/render_status?render_id=${encodeURIComponent(R.render_id)}`, { headers:JSON_HDRS });
           const js = await s.json();
           if(js.status==="complete" && js.download_url){
-            R.download_url = js.download_url + "&t=" + Date.now();
+            R.download_url = js.download_url + "?t=" + Date.now();
             R.audio.src = R.download_url;
+            R.audio.load(); // ensure Safari actually loads it
             R.btnPlayReader.disabled = false;
             R.btnStart.disabled = false;
             setStatusRec("Reader ready.");
@@ -559,28 +582,27 @@ JANE: Ready?"></textarea>
             setStatusRec("Render failed: "+(js.error||"unknown"));
             R.btnPrepare.disabled=false;
           }else{
-            setTimeout(poll, 450);
+            setTimeout(poll, 500);
           }
         };
-        setTimeout(poll, 450);
+        setTimeout(poll, 500);
       }catch(e){
         setStatusRec("Network error: "+e);
         R.btnPrepare.disabled=false;
       }
     }
 
-    async function startPreviewIfNeeded(){
-      if(!R.chkVideo.checked){ R.preview.srcObject=null; return; }
+    $("#btnPrepareReader").addEventListener("click", prepareReader);
+
+    $("#btnPlayReader").addEventListener("click", async ()=>{
       try{
-        if(!R.stream){
-          const st = await navigator.mediaDevices.getUserMedia({ video:true, audio:true });
-          R.stream = st;
-        }
-        R.preview.srcObject = R.stream;
-      }catch(e){
-        setStatusRec("Camera/mic permission denied: "+e);
+        R.audio.currentTime = 0;
+        await R.audio.play();
+        setStatusRec("Playing reader…");
+      }catch(err){
+        setStatusRec("Couldn’t play (autoplay or load). Tap again, or toggle mute once.");
       }
-    }
+    });
 
     function makeCountdown(){
       if(R.countdown) return R.countdown;
@@ -601,21 +623,28 @@ JANE: Ready?"></textarea>
       c.classList.remove("show");
     }
 
+    async function startPreviewIfNeeded(){
+      if(!R.chkVideo.checked){ R.preview.srcObject=null; return; }
+      try{
+        if(!R.stream){
+          const st = await navigator.mediaDevices.getUserMedia({ video:true, audio:true });
+          R.stream = st;
+        }
+        R.preview.srcObject = R.stream;
+      }catch(e){
+        setStatusRec("Camera/mic permission denied: "+e);
+      }
+    }
+    $("#chkVideo").addEventListener("change", startPreviewIfNeeded);
+
     async function startRecording(){
       if(!R.download_url){ setStatusRec("Prepare the reader first."); return; }
 
-      // Headphones reminder
-      if(R.chkHeadphones && !R.chkHeadphones.checked){
-        setStatusRec("Tip: Use headphones to avoid the reader audio bleeding into your mic.");
-      }
-
-      // media stream
+      // Capture mic (and video if requested)
       try{
-        if(!R.stream){
-          const needVideo=!!R.chkVideo.checked;
-          R.stream = await navigator.mediaDevices.getUserMedia({ audio:true, video:needVideo });
-        }
-        R.preview.srcObject = R.chkVideo.checked ? R.stream : null;
+        const needVideo=!!R.chkVideo.checked;
+        R.stream = await navigator.mediaDevices.getUserMedia({ audio:true, video:needVideo });
+        R.preview.srcObject = needVideo ? R.stream : null;
       }catch(e){
         setStatusRec("Permission error: "+e);
         return;
@@ -623,13 +652,12 @@ JANE: Ready?"></textarea>
 
       await doCountdownIfEnabled();
 
-      // set up MediaRecorder
+      // recorder with supported MIME
       R.chunks = [];
-      const mime = R.chkVideo.checked ? "video/webm" : "audio/webm";
+      const mime = pickMime(!!R.chkVideo.checked);
       try{
-        R.rec = new MediaRecorder(R.stream, { mimeType: mime });
+        R.rec = mime ? new MediaRecorder(R.stream, { mimeType: mime }) : new MediaRecorder(R.stream);
       }catch{
-        // fallback: let browser choose
         R.rec = new MediaRecorder(R.stream);
       }
       R.rec.ondataavailable = (e)=>{ if(e.data && e.data.size>0) R.chunks.push(e.data); };
@@ -637,7 +665,12 @@ JANE: Ready?"></textarea>
 
       // start both
       R.rec.start();
-      try{ await R.audio.play(); }catch(e){ /* autoplay guard */ }
+      try{
+        R.audio.currentTime = 0;
+        await R.audio.play();
+      }catch(e){
+        // if autoplay blocked, at least we record mic; user can tap Play Test then Start
+      }
 
       // auto-stop when reader ends (plus slight tail)
       R.audio.onended = ()=>{ setTimeout(()=>{ try{ R.rec?.stop(); }catch{} }, 120); };
@@ -646,17 +679,21 @@ JANE: Ready?"></textarea>
       R.btnStop.disabled = false;
       setStatusRec("Recording…");
     }
+    $("#btnStartRec").addEventListener("click", startRecording);
 
     function stopRecording(){
       try{ R.rec?.stop(); }catch{}
       setStatusRec("Stopping…");
     }
+    $("#btnStopRec").addEventListener("click", stopRecording);
 
     function finalizeTake(){
-      const blob = new Blob(R.chunks, { type: R.chkVideo.checked ? "video/webm" : "audio/webm" });
+      const isVid = !!R.chkVideo.checked;
+      const blob = new Blob(R.chunks, { type: (R.rec && R.rec.mimeType) ? R.rec.mimeType : (isVid ? "video/mp4" : "audio/mp4") });
       const url = URL.createObjectURL(blob);
       const ts = new Date().toISOString().replace(/[:.]/g,"-");
-      const name = `take-${ts}.${R.chkVideo.checked?"webm":"webm"}`;
+      const ext = (blob.type.startsWith("video/") ? "mp4" : (blob.type.includes("webm") ? "webm" : "m4a"));
+      const name = `${isVid?"take-video":"take-audio"}-${ts}.${ext}`;
       R.takes.unshift({ url, name, type: blob.type, size: blob.size });
       renderTakes();
       R.btnStop.disabled = true;
@@ -668,6 +705,9 @@ JANE: Ready?"></textarea>
       const box=$("#takes");
       box.innerHTML = R.takes.map((t,i)=>{
         const sz = (t.size/1024/1024).toFixed(2)+" MB";
+        const player = t.type.startsWith("video/")
+          ? `<video src="${t.url}" class="vid" controls playsinline></video>`
+          : `<audio src="${t.url}" controls></audio>`;
         return `<div class="gallery-item">
           <div class="row" style="align-items:center">
             <div><strong>${t.name}</strong><div class="small">${t.type} • ${sz}</div></div>
@@ -676,21 +716,18 @@ JANE: Ready?"></textarea>
             </div>
           </div>
           <div class="spacer6"></div>
-          ${t.type.startsWith("video") ? `<video src="${t.url}" class="vid" controls playsinline></video>` : `<audio src="${t.url}" controls></audio>`}
+          ${player}
         </div>`;
       }).join("") || `<p class="hint">No takes yet. Record one from the Record tab.</p>`;
     }
 
     // Record wiring
-    $("#btnPrepareReader").addEventListener("click", prepareReader);
-    $("#btnPlayReader").addEventListener("click", async ()=>{ try{ await R.audio.play(); }catch{} });
-    $("#chkVideo").addEventListener("change", startPreviewIfNeeded);
-    $("#btnStartRec").addEventListener("click", startRecording);
-    $("#btnStopRec").addEventListener("click", stopRecording);
+    $("#btnPlayReader").disabled = true;
+    $("#btnPrepareReader").disabled = false;
 
     // initial
     hydrateRehearse(); applyEditModeUI(); (function initAssign(){ $("#pillScript").textContent="script: "+(S.script_id||"—"); })();
-    updateMicBadge();
+    // iOS hint: audio-only default avoids WebM issues; user can turn on video if supported
   </script>
 </body>
 </html>
