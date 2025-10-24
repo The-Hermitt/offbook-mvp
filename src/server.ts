@@ -11,7 +11,7 @@ const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
 
 // --- tiny helper: safe fetch with timeout ---
 async function fetchWithTimeout(input: RequestInfo, init: RequestInit & { timeoutMs?: number } = {}) {
-  const { timeoutMs = 5000, ...rest } = init;
+  const { timeoutMs = 15000, ...rest } = init;
   const ac = new AbortController();
   const id = setTimeout(() => ac.abort(), timeoutMs);
   try {
@@ -46,14 +46,15 @@ app.get("/health/tts", (_req, res) =>
   res.json({ engine: "openai", has_key: !!OPENAI_API_KEY })
 );
 
-// ---- In-memory fallback store
+// ---- In-memory store (fallback + rendered assets)
 type Line = { speaker: string; text: string };
 type Scene = { id: string; title: string; lines: Line[] };
 type Script = { id: string; title: string; scenes: Scene[]; voices: Record<string, string> };
 
 const mem = {
   scripts: new Map<string, Script>(),
-  renders: new Map<string, { status: "queued" | "complete"; url?: string }>(),
+  renders: new Map<string, { status: "queued" | "complete" | "error"; url?: string; err?: string }>(),
+  assets: new Map<string, Buffer>(), // render_id -> MP3 bytes
 };
 const upload = multer({ storage: multer.memoryStorage() });
 
@@ -73,40 +74,34 @@ function normalizePdfText(raw: string): string {
 
 // Common non-character headings/directions seen in OCR
 const NON_CHAR_TOKENS = new Set([
-  "INSERT", "MORE", "HERE", "CONTINUED", "CONT'D", "CONT’D",
-  "ANGLE", "ANGLE ON", "CLOSE", "CLOSE ON", "WIDER", "WIDE",
-  "CUT TO", "CUT TO:", "DISSOLVE TO", "SMASH CUT", "FADE IN", "FADE OUT",
-  "CORNER OF THE ROOM", "CORNER", "ROOM", "POV", "MOMENTS LATER", "LATER",
-  "DAY", "NIGHT", "MORNING", "EVENING", "DAWN", "DUSK",
+  "INSERT","MORE","HERE","CONTINUED","CONT'D","CONT’D",
+  "ANGLE","ANGLE ON","CLOSE","CLOSE ON","WIDER","WIDE",
+  "CUT TO","CUT TO:","DISSOLVE TO","SMASH CUT","FADE IN","FADE OUT",
+  "CORNER OF THE ROOM","CORNER","ROOM","POV","MOMENTS LATER","LATER",
+  "DAY","NIGHT","MORNING","EVENING","DAWN","DUSK",
 ]);
-
 function looksLikePageNumber(l: string) { return /^\d+\.?$/.test(l.trim()); }
 function endsWithPeriodWord(l: string) { return /^[A-Z0-9 .,'\-()]+?\.$/.test(l.trim()); }
 function containsHeadingPhrases(l: string) {
   const s = l.trim().toUpperCase();
-  if (s.includes(" OF THE ")) return true; // e.g., CORNER OF THE ROOM
+  if (s.includes(" OF THE ")) return true;
   if (/^(INSERT|ANGLE|CLOSE|WIDER|WIDE)\b/.test(s)) return true;
   return false;
 }
 function isSceneHeader(l: string) {
   return /^(INT\.|EXT\.|INT\/EXT\.|SCENE|SHOT|MONTAGE|CUT TO:|FADE (IN|OUT):?)/i.test(l);
 }
-
-// Normalize a would-be label and decide if it's a non-character note
 function isNonCharacterLabel(s: string) {
   const trimmed = (s || "").trim();
   const core = trimmed.replace(/[().]/g, "").replace(/\s+/g, " ").trim().toUpperCase();
   if (!core) return true;
   if (NON_CHAR_TOKENS.has(core)) return true;
   if (looksLikePageNumber(core)) return true;
-  if (endsWithPeriodWord(trimmed)) return true;     // e.g., "HERE."
-  if (containsHeadingPhrases(core)) return true;    // e.g., "... OF THE ..."
-  // 3+ words containing OF/THE/etc. → likely location/camera
+  if (endsWithPeriodWord(trimmed)) return true;
+  if (containsHeadingPhrases(core)) return true;
   if (core.split(" ").length >= 3 && /\b(OF|THE|ROOM|INT|EXT|CUT|TO|ON)\b/.test(core)) return true;
   return false;
 }
-
-// Strict ALL-CAPS name detector with heuristics to avoid directions/page junk
 function isAllCapsName(l: string) {
   const s = l.trim();
   if (!s) return false;
@@ -117,17 +112,13 @@ function isAllCapsName(l: string) {
   if (isNonCharacterLabel(s)) return false;
   return true;
 }
-
-// e.g. "Jane", "Mr. Smith", "Dr. Adams", "The Clerk"
 function isTitleCaseName(l: string) {
   const s = l.trim();
   if (containsHeadingPhrases(s)) return false;
   if (/^(Insert|Angle|Close|Wide|Exterior|Interior)\b/.test(s)) return false;
   return /^([A-Z][a-z]+\.?)(\s+[A-Z][a-z]+\.?){0,3}$/.test(s) && !isSceneHeader(s) && s.length <= 40;
 }
-
 function isParenthetical(l: string) { return /^\(.*\)$/.test(l.trim()); }
-
 function colonNameMatch(l: string) {
   const m = l.match(/^([A-Za-z][A-Za-z0-9 .&()'\-]+)\s*:\s*(.+)$/);
   if (!m) return null;
@@ -137,41 +128,28 @@ function colonNameMatch(l: string) {
   const text = m[2].trim();
   return { speaker, text };
 }
-
 function parseTextToScenes(title: string, raw: string): Scene[] {
   const scene: Scene = { id: genId("scn"), title: title || "Scene 1", lines: [] };
   const lines = (raw || "").split(/\n/).map(l => l.replace(/\t/g, " ").trim());
-
   let i = 0;
   while (i < lines.length) {
     let l = lines[i];
-
-    // Skip obvious junk / headings
     if (!l || looksLikePageNumber(l) || isSceneHeader(l)) { i++; continue; }
-
-    // CASE A: "Name: line" (mixed case allowed)
     const colon = colonNameMatch(l);
     if (colon && colon.speaker && colon.text) {
       scene.lines.push({ speaker: colon.speaker.toUpperCase(), text: colon.text });
       i++; continue;
     }
-
-    // CASE B: Screenplay block (NAME on its own line)
     if (isAllCapsName(l) || isTitleCaseName(l)) {
       let speaker = l.replace(/[()]/g, "").trim();
-
-      // *** HARD GUARD: drop non-character labels (kills HERE., INSERT, MORE, etc.) ***
       if (isNonCharacterLabel(speaker)) { i++; continue; }
-
       let j = i + 1;
-      if (j < lines.length && isParenthetical(lines[j])) j++; // ignore one parenthetical
-
+      if (j < lines.length && isParenthetical(lines[j])) j++;
       const buf: string[] = [];
       while (j < lines.length) {
         const nxt = lines[j];
         if (!nxt || isSceneHeader(nxt) || isAllCapsName(nxt) || isTitleCaseName(nxt)) break;
         if (isParenthetical(nxt)) { j++; continue; }
-        // Ignore pure all-caps action fragments that end with a period
         if (/^[A-Z0-9 .,'\-()]+?\.$/.test(nxt) && !/[a-z]/.test(nxt)) { j++; continue; }
         buf.push(nxt);
         j++;
@@ -181,68 +159,63 @@ function parseTextToScenes(title: string, raw: string): Scene[] {
       i = j + (lines[j] === "" ? 1 : 0);
       continue;
     }
-
-    // Ignore ALL-CAPS action lines & leftover camera notes
     if (/^[A-Z0-9 .,'\-()]{3,}$/.test(l) && !/[a-z]/.test(l)) { i++; continue; }
-
-    // Otherwise treat as narration
     scene.lines.push({ speaker: "NARRATOR", text: l });
     i++;
   }
-
   return [scene];
 }
-
 function uniqueSpeakers(sc: Scene) {
   const set = new Set<string>();
   for (const ln of sc.lines) set.add(ln.speaker);
   set.delete("NARRATOR"); set.delete("SYSTEM");
   return Array.from(set);
 }
+const isBoilerplate = (txt: string) => {
+  const s = (txt || "").trim().toLowerCase();
+  if (!s) return true;
+  if (/^[-–—]+$/.test(s)) return true;
+  if (/^\d{1,4}$/.test(s)) return true;
+  if (/^page\s*\d+(\s*of\s*\d+)?$/.test(s)) return true;
+  if (/^cont'?d\.?$/.test(s) || /^continued$/.test(s)) return true;
+  if (s.includes("sides by breakdown services") || s.includes("actors access") || s.includes("do not share") || s.includes("copyright")) return true;
+  return false;
+};
 
-// ---------- OpenAI TTS health probe ----------
+// ---------- OpenAI TTS ----------
+async function openaiTts(text: string, voice = "alloy", model = "tts-1"): Promise<Buffer> {
+  const res = await fetchWithTimeout("https://api.openai.com/v1/audio/speech", {
+    method: "POST",
+    timeoutMs: 30000,
+    headers: {
+      "Authorization": `Bearer ${OPENAI_API_KEY}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ model, voice, input: text, format: "mp3" }),
+  });
+  if (!res.ok) {
+    const msg = await res.text().catch(() => res.statusText);
+    throw new Error(`OpenAI TTS HTTP ${res.status}: ${msg.slice(0, 200)}`);
+  }
+  const buf = Buffer.from(await res.arrayBuffer());
+  return buf;
+}
+
+// Tiny health probe
 async function openaiTtsProbe(opts?: { text?: string; voice?: string; model?: string }) {
-  if (!OPENAI_API_KEY) {
-    return { ok: false, error: "OPENAI_API_KEY not set" };
-  }
-  const text = (opts?.text ?? "test").slice(0, 120);
-  const voice = opts?.voice ?? "alloy";
-  const model = opts?.model ?? "tts-1"; // or "gpt-4o-mini-tts"
-
+  if (!OPENAI_API_KEY) return { ok: false, error: "OPENAI_API_KEY not set" };
   try {
-    const res = await fetchWithTimeout("https://api.openai.com/v1/audio/speech", {
-      method: "POST",
-      timeoutMs: 5000,
-      headers: {
-        "Authorization": `Bearer ${OPENAI_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model,
-        voice,
-        input: text,
-        format: "mp3",
-      }),
-    });
-
-    if (!res.ok) {
-      const msg = await res.text().catch(() => res.statusText);
-      return { ok: false, error: `OpenAI TTS HTTP ${res.status}: ${msg?.slice(0, 200)}` };
-    }
-
-    // We don’t need the bytes for the health check; just read a small chunk and discard
-    // @ts-ignore
-    if (typeof res.body?.getReader === "function") {
-      // stream (browser-like); ignore contents
-    } else {
-      await res.arrayBuffer(); // Node path; discard
-    }
-
-    return { ok: true, provider: "openai", model, voice };
+    await openaiTts(opts?.text ?? "test", opts?.voice ?? "alloy", opts?.model ?? "tts-1");
+    return { ok: true, provider: "openai", model: opts?.model ?? "tts-1", voice: opts?.voice ?? "alloy" };
   } catch (e: any) {
-    const msg = (e?.message || String(e)).slice(0, 200);
-    return { ok: false, error: `OpenAI TTS request failed: ${msg}` };
+    return { ok: false, error: e?.message || String(e) };
   }
+}
+
+// Concatenate MP3 buffers (naive but works for same-encoder MP3)
+function concatMp3(parts: Buffer[]): Buffer {
+  if (parts.length === 1) return parts[0];
+  return Buffer.concat(parts);
 }
 
 // ---------- Routes ----------
@@ -266,7 +239,7 @@ function mountFallbackDebugRoutes() {
     res.json({ script_id: id, scene_count: scenes.length, speakers });
   });
 
-  // Robust PDF (text) extraction with multi-strategy import + diagnostics
+  // Robust PDF (text) import
   app.post("/debug/upload_script_upload", requireSecret, upload.single("pdf"), async (req: Request, res: Response) => {
     const title = String((req.body as any)?.title || "PDF");
     const pdfBuf = (req as any).file?.buffer as Buffer | undefined;
@@ -274,14 +247,7 @@ function mountFallbackDebugRoutes() {
 
     try {
       let pdfParseFn: any = null;
-
-      // Strategy A: dynamic ESM import
-      try {
-        const modA: any = await import("pdf-parse");
-        pdfParseFn = modA?.default || modA;
-      } catch {}
-
-      // Strategy B: CommonJS require via createRequire
+      try { const modA: any = await import("pdf-parse"); pdfParseFn = modA?.default || modA; } catch {}
       if (!pdfParseFn) {
         const reqr = createRequire(import.meta.url);
         const modB: any = reqr("pdf-parse");
@@ -295,11 +261,7 @@ function mountFallbackDebugRoutes() {
 
       if (textLenRaw < 20) {
         const id = genId("scr");
-        const scenes: Scene[] = [{
-          id: genId("scn"),
-          title,
-          lines: [{ speaker: "SYSTEM", text: "PDF appears to be image-only. Paste script text for best parsing (OCR later)." }],
-        }];
+        const scenes: Scene[] = [{ id: genId("scn"), title, lines: [{ speaker: "SYSTEM", text: "PDF appears to be image-only. Paste script text for best parsing (OCR later)." }] }];
         mem.scripts.set(id, { id, title, scenes, voices: {} });
         return res.json({ script_id: id, scene_count: scenes.length, note: "image-only", textLen: textLenRaw });
       }
@@ -315,11 +277,7 @@ function mountFallbackDebugRoutes() {
       const msg = (e?.message || String(e)).slice(0, 200);
       console.error("[pdf] extract failed:", msg);
       const id = genId("scr");
-      const scenes: Scene[] = [{
-        id: genId("scn"),
-        title,
-        lines: [{ speaker: "SYSTEM", text: "Could not parse PDF text. Please paste script text. (Error logged on server.)" }],
-      }];
+      const scenes: Scene[] = [{ id: genId("scn"), title, lines: [{ speaker: "SYSTEM", text: "Could not parse PDF text. Please paste script text. (Error logged on server.)" }] }];
       mem.scripts.set(id, { id, title, scenes, voices: {} });
       return res.json({ script_id: id, scene_count: scenes.length, note: "parse-error", error: msg });
     }
@@ -341,11 +299,52 @@ function mountFallbackDebugRoutes() {
     res.json({ ok: true });
   });
 
-  // NOTE: still a stub render for MVP wiring; we’ll swap to real OpenAI render in the Record tab work
-  app.post("/debug/render", requireSecret, (_req: Request, res: Response) => {
+  // REAL: Render partner-only reader MP3 with OpenAI
+  app.post("/debug/render", requireSecret, async (req: Request, res: Response) => {
+    const script_id = String((req.body as any)?.script_id || "");
+    const myRole = String((req.body as any)?.my_role || "").toUpperCase();
+    const paceMs = Number((req.body as any)?.pace_ms || 0);
+    const s = mem.scripts.get(script_id);
+    if (!s) return res.status(404).json({ error: "script not found" });
+    if (!OPENAI_API_KEY) return res.status(500).json({ error: "OPENAI_API_KEY not set" });
+
     const rid = genId("rnd");
     mem.renders.set(rid, { status: "queued" });
-    setTimeout(() => { mem.renders.set(rid, { status: "complete", url: `/api/assets/${rid}` }); }, 600);
+
+    (async () => {
+      try {
+        const scene = s.scenes[0];
+        // Build partner-only list
+        const items = scene.lines
+          .filter(ln => ln && ln.speaker && ln.speaker !== "NARRATOR" && ln.speaker !== "SYSTEM")
+          .filter(ln => ln.speaker !== myRole)
+          .filter(ln => !isBoilerplate(ln.text));
+
+        // Voice per partner with default
+        const voiceFor = (name: string) => (s.voices[name] || "alloy");
+
+        const chunks: Buffer[] = [];
+        for (const ln of items) {
+          const voice = voiceFor(ln.speaker);
+          const b = await openaiTts(ln.text, voice, "tts-1");
+          chunks.push(b);
+
+          // Optional tiny pause as silence (skipped for now; earbuds will provide natural pause)
+          // If needed in future: generate short silent mp3 frames or use PCM + encode.
+          if (paceMs > 0) {
+            // simple hack: tiny " " TTS as pause (not ideal); skipped for MVP
+          }
+        }
+
+        const mp3 = concatMp3(chunks.length ? chunks : [await openaiTts(" ", "alloy", "tts-1")]);
+        mem.assets.set(rid, mp3);
+        mem.renders.set(rid, { status: "complete", url: `/api/assets/${rid}` });
+      } catch (e: any) {
+        const msg = e?.message || String(e);
+        mem.renders.set(rid, { status: "error", err: msg });
+      }
+    })();
+
     res.json({ render_id: rid, status: "queued" });
   });
 
@@ -353,12 +352,16 @@ function mountFallbackDebugRoutes() {
     const rid = String(req.query.render_id || "");
     const r = mem.renders.get(rid);
     if (!r) return res.status(404).json({ error: "not found" });
-    res.json({ status: r.status, download_url: r.url });
+    res.json({ status: r.status, download_url: r.url, error: r.err });
   });
 
-  app.get("/api/assets/:render_id", (_req: Request, res: Response) => {
+  app.get("/api/assets/:render_id", (req: Request, res: Response) => {
+    const rid = String(req.params.render_id || "");
+    const buf = mem.assets.get(rid);
+    if (!buf) return res.status(404).json({ error: "asset not found" });
     res.setHeader("Content-Type", "audio/mpeg");
-    res.send(Buffer.from([])); // 0-byte placeholder
+    res.setHeader("Cache-Control", "no-store");
+    res.send(buf);
   });
 
   console.log("[fallback] /debug/* routes active (in-memory, robust PDF import + strict speaker guard)");
