@@ -2,67 +2,356 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>OffBook — Rehearsal MVP</title>
+  <title>OFFBOOK — Rehearsal MVP</title>
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
-  <style>
-    :root { --bg:#0b0c0f; --panel:#111318; --panel-2:#151823; --text:#eaf0ff; --muted:#a7b0c5; --border:#252a36; --focus:#3b82f6; --accent:#3b82f6; --danger:#ef4444; --ok:#16a34a; --warn:#f4c542; --maxw:720px; }
-    *{ box-sizing:border-box } html,body{ margin:0; padding:0; background:var(--bg); color:var(--text); font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial }
-    header{ padding:14px 16px; font-weight:700; letter-spacing:.2px }
-    main{ padding:12px 12px 92px; max-width:var(--maxw); margin:0 auto; pointer-events:auto }
-    .card{ background:var(--panel); border:1px solid var(--border); border-radius:14px; padding:12px }
-    h3,h4{ margin:6px 0 10px } .hint{ color:var(--muted); font-size:12px; line-height:1.4 }
-    label{ display:block; font-size:12px; color:var(--muted); margin:8px 0 6px }
-    input[type="text"],textarea,select{ width:100%; border:1px solid var(--border); background:#0c0f16; color:var(--text); border-radius:10px; padding:10px 12px; font-size:15px }
-    textarea{ min-height:120px; line-height:1.35 }
-    .btn{ display:inline-flex; align-items:center; justify-content:center; background:var(--accent); color:#fff; border:none; padding:12px 14px; border-radius:12px; font-weight:700; font-size:15px; min-height:44px; cursor:pointer }
-    .btn.secondary{ background:transparent; color:var(--text); border:1px solid var(--border) }
-    .btn.ghost{ background:transparent; color:var(--muted); border:1px dashed var(--border) }
-    .btn.sm{ padding:8px 10px; font-size:12px; border-radius:10px; min-height:32px }
-    .row{ display:flex; gap:8px } .row>*{ flex:1 }
+    <style>
+    :root {
+      --bg:#05070d;
+      --panel:rgba(18,21,30,0.78);
+      --panel-2:rgba(12,14,22,0.85);
+      --text:#f2f4ff;
+      --muted:#9aa3bc;
+      --border:rgba(118,130,164,0.2);
+      --focus:#9ab2ff;
+      --accent:#8da2ff;
+      --danger:#ef4444;
+      --ok:#16a34a;
+      --warn:#f4c542;
+      --maxw:760px;
+    }
+    *{ box-sizing:border-box }
+    html,body{
+      margin:0;
+      padding:0;
+      min-height:100%;
+      background:
+        radial-gradient(circle at 20% 18%, rgba(74,97,162,0.32), transparent 58%),
+        radial-gradient(circle at 78% 4%, rgba(156,104,255,0.22), transparent 52%),
+        radial-gradient(circle at 48% 120%, rgba(76,83,112,0.35), transparent 55%),
+        #05060a;
+      color:var(--text);
+      font-family:"SF Pro Display","SF Pro Text",-apple-system,system-ui,"Segoe UI",Roboto,Arial,sans-serif;
+      -webkit-font-smoothing:antialiased;
+    }
+    body{ position:relative }
+    body::before{
+      content:"";
+      position:fixed;
+      inset:0;
+      pointer-events:none;
+      background:linear-gradient(150deg, rgba(255,255,255,0.05), rgba(0,0,0,0.68) 65%);
+      mix-blend-mode:screen;
+      opacity:0.7;
+      z-index:0;
+    }
+    header{
+      padding:28px 20px 18px;
+      position:relative;
+      z-index:1;
+    }
+    header .brand{
+      max-width:var(--maxw);
+      margin:0 auto;
+      display:flex;
+      align-items:center;
+      gap:16px;
+    }
+    .brand-copy{
+      display:flex;
+      flex-direction:column;
+      gap:4px;
+    }
+    .brand-title{
+      font-size:22px;
+      font-weight:700;
+      letter-spacing:.4px;
+    }
+    .brand-subtitle{
+      font-size:13px;
+      color:var(--muted);
+      letter-spacing:2.4px;
+      text-transform:uppercase;
+    }
+    main{
+      padding:8px 20px 120px;
+      max-width:var(--maxw);
+      margin:0 auto;
+      position:relative;
+      z-index:1;
+    }
+    main::before{
+      content:"";
+      position:absolute;
+      inset:0;
+      border-radius:36px;
+      background:linear-gradient(140deg, rgba(255,255,255,0.05), rgba(12,14,21,0.82));
+      box-shadow:0 50px 120px rgba(3,5,12,0.6);
+      z-index:-1;
+      pointer-events:none;
+    }
+    main > *:first-child{ margin-top:20px }
+    .card{
+      background:var(--panel);
+      border:1px solid var(--border);
+      border-radius:24px;
+      padding:20px;
+      box-shadow:0 25px 60px rgba(3,6,15,0.45);
+      backdrop-filter:blur(24px);
+      -webkit-backdrop-filter:blur(24px);
+    }
+    h3,h4{
+      margin:4px 0 14px;
+      font-size:20px;
+      font-weight:700;
+      letter-spacing:.3px;
+    }
+    .hint{
+      color:var(--muted);
+      font-size:13px;
+      line-height:1.5;
+      letter-spacing:.2px;
+    }
+    label{
+      display:block;
+      font-size:12px;
+      color:var(--muted);
+      margin:10px 0 6px;
+      letter-spacing:.4px;
+      text-transform:uppercase;
+    }
+    input[type="text"],textarea,select{
+      width:100%;
+      border:1px solid rgba(147,160,195,0.28);
+      background:rgba(9,11,20,0.75);
+      color:var(--text);
+      border-radius:16px;
+      padding:12px 14px;
+      font-size:15px;
+      transition:border-color .2s ease, box-shadow .2s ease, background .2s ease;
+    }
+    input[type="text"]:focus,textarea:focus,select:focus{
+      outline:none;
+      border-color:var(--focus);
+      box-shadow:0 0 0 4px rgba(130,158,255,0.18);
+      background:rgba(12,14,24,0.92);
+    }
+    textarea{ min-height:130px; line-height:1.4; resize:vertical }
+    select{ appearance:none }
+    .btn{
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      background:linear-gradient(135deg, rgba(147,167,255,0.96), rgba(218,223,255,0.96));
+      color:#05070d;
+      border:none;
+      padding:12px 18px;
+      border-radius:16px;
+      font-weight:700;
+      font-size:15px;
+      min-height:46px;
+      cursor:pointer;
+      letter-spacing:.3px;
+      box-shadow:0 18px 36px rgba(85,115,255,0.35);
+      transition:transform .2s ease, box-shadow .2s ease;
+    }
+    .btn:hover{ transform:translateY(-1px); box-shadow:0 20px 40px rgba(85,115,255,0.4) }
+    .btn:active{ transform:translateY(0); box-shadow:0 12px 26px rgba(85,115,255,0.28) }
+    .btn.secondary{
+      background:rgba(15,19,30,0.6);
+      color:var(--text);
+      border:1px solid rgba(150,164,200,0.3);
+      box-shadow:none;
+    }
+    .btn.secondary:hover{ border-color:rgba(154,178,255,0.5) }
+    .btn.ghost{
+      background:rgba(10,12,20,0.45);
+      color:var(--muted);
+      border:1px dashed rgba(150,164,200,0.3);
+      box-shadow:none;
+    }
+    .btn.sm{ padding:8px 12px; font-size:12px; border-radius:12px; min-height:34px }
+    .row{ display:flex; gap:10px } .row>*{ flex:1 }
     .spacer6{ height:6px } .spacer8{ height:8px } .spacer12{ height:12px } .spacer16{ height:16px }
-    .tabbar{ position:fixed; bottom:0; left:0; right:0; background:var(--panel-2); border-top:1px solid var(--border); padding:0 8px; z-index:40 }
-    .tabbar-inner{ max-width:var(--maxw); margin:0 auto; display:grid; grid-template-columns:repeat(6,1fr) }
-    .tabbar button{ appearance:none; border:none; background:transparent; color:var(--muted); padding:10px 4px; font-size:12px; font-weight:600 }
-    .tabbar button.active{ color:var(--text); background:rgba(255,255,255,.02); border-radius:8px }
+    .tabbar{
+      position:fixed;
+      bottom:0;
+      left:0;
+      right:0;
+      background:rgba(10,12,20,0.88);
+      border-top:1px solid rgba(120,132,168,0.2);
+      padding:8px 12px 16px;
+      z-index:40;
+      backdrop-filter:blur(22px);
+      -webkit-backdrop-filter:blur(22px);
+      box-shadow:0 -12px 24px rgba(0,0,0,0.4);
+    }
+    .tabbar-inner{
+      max-width:var(--maxw);
+      margin:0 auto;
+      display:grid;
+      grid-template-columns:repeat(6,1fr);
+      gap:8px;
+    }
+    .tabbar button{
+      appearance:none;
+      border:none;
+      background:transparent;
+      color:var(--muted);
+      padding:12px 4px;
+      font-size:12px;
+      font-weight:600;
+      letter-spacing:.3px;
+      border-radius:14px;
+      transition:color .2s ease, background .2s ease;
+    }
+    .tabbar button.active{
+      color:var(--text);
+      background:linear-gradient(135deg, rgba(147,167,255,0.18), rgba(229,233,255,0.05));
+    }
     .screen{ display:none; pointer-events:auto } .screen.active{ display:block }
-    .inner-tabs{ display:flex; gap:8px }
-    .inner-tabs button{ flex:1; border:1px solid var(--border); background:transparent; color:var(--text); padding:10px; border-radius:10px; font-weight:700 }
-    .inner-tabs button.active{ background:var(--panel-2); border-color:var(--focus) }
-    pre.status{ white-space:pre-wrap; word-break:break-word; background:#0c0f16; border:1px dashed var(--border); border-radius:10px; padding:8px; color:#a7b0c5; min-height:22px }
-    .pill{ display:inline-block; padding:6px 10px; border-radius:999px; border:1px solid var(--border); background:#0f1420; font-size:12px; margin-right:6px }
-    .small{ font-size:12px; color:var(--muted) }
+    .inner-tabs{ display:flex; gap:10px }
+    .inner-tabs button{
+      flex:1;
+      border:1px solid rgba(147,160,195,0.3);
+      background:rgba(9,12,20,0.6);
+      color:var(--text);
+      padding:11px;
+      border-radius:14px;
+      font-weight:700;
+      letter-spacing:.3px;
+      transition:border-color .2s ease, background .2s ease;
+    }
+    .inner-tabs button.active{
+      background:rgba(17,21,34,0.85);
+      border-color:var(--focus);
+      box-shadow:0 10px 24px rgba(85,115,255,0.25);
+    }
+    pre.status{
+      white-space:pre-wrap;
+      word-break:break-word;
+      background:rgba(7,9,16,0.75);
+      border:1px dashed rgba(147,160,195,0.35);
+      border-radius:16px;
+      padding:10px 12px;
+      color:#b5c0d8;
+      min-height:24px;
+    }
+    .pill{
+      display:inline-block;
+      padding:6px 12px;
+      border-radius:999px;
+      border:1px solid rgba(147,160,195,0.32);
+      background:rgba(12,15,24,0.75);
+      font-size:12px;
+      margin-right:6px;
+      letter-spacing:.3px;
+    }
+    .small{ font-size:12px; color:var(--muted); letter-spacing:.2px }
     /* Rehearse */
-    .line{ padding:10px; border-radius:10px; border:1px solid var(--border); margin-bottom:8px; background:#0c0f16; position:relative }
-    .line.me{ border-color:#2f6df6; background:#0e1220 }
-    .line .who{ font-weight:700; margin-bottom:6px }
-    .line .text{ line-height:1.4 }
-    .controls{ display:flex; gap:8px; align-items:center; flex-wrap:wrap }
-    .playing{ outline:2px solid var(--focus) }
-    .badge{ font-size:11px; padding:4px 8px; border-radius:999px; border:1px solid var(--border); background:#0f1420; color:#a7b0c5 }
-    .badge.ok{ color:#16a34a } .badge.warn{ color:#f4c542 } .badge.err{ color:#ff7b7b }
-    .editbar{ position:absolute; top:6px; right:6px; display:flex; gap:6px }
-    .chip{ font-size:11px; padding:4px 8px; border-radius:999px; border:1px solid var(--border); background:#0f1420; color:#a7b0c5; cursor:pointer; user-select:none }
+    .line{
+      padding:12px 14px;
+      border-radius:18px;
+      border:1px solid rgba(120,134,170,0.25);
+      margin-bottom:10px;
+      background:rgba(9,12,20,0.68);
+      position:relative;
+      box-shadow:0 16px 36px rgba(3,6,15,0.35);
+    }
+    .line.me{ border-color:rgba(144,167,255,0.55); background:rgba(17,20,32,0.9); box-shadow:0 22px 40px rgba(90,118,255,0.35) }
+    .line .who{ font-weight:700; margin-bottom:6px; letter-spacing:.25px }
+    .line .text{ line-height:1.5; color:var(--text) }
+    .controls{ display:flex; gap:10px; align-items:center; flex-wrap:wrap }
+    .playing{ outline:2px solid var(--focus); outline-offset:2px }
+    .badge{
+      font-size:11px;
+      padding:5px 10px;
+      border-radius:999px;
+      border:1px solid rgba(147,160,195,0.32);
+      background:rgba(10,12,20,0.7);
+      color:#b5c0d8;
+      letter-spacing:.2px;
+    }
+    .badge.ok{ color:#4ade80 }
+    .badge.warn{ color:#f4c542 }
+    .badge.err{ color:#ff7b7b }
+    .editbar{ position:absolute; top:10px; right:10px; display:flex; gap:8px }
+    .chip{
+      font-size:11px;
+      padding:5px 10px;
+      border-radius:999px;
+      border:1px solid rgba(147,160,195,0.32);
+      background:rgba(12,15,24,0.7);
+      color:#b5c0d8;
+      cursor:pointer;
+      user-select:none;
+      letter-spacing:.2px;
+    }
     .chip.danger{ border-color:#e96; color:#ff7b7b }
-    .text[contenteditable="true"]{ outline:1px dashed var(--focus); border-radius:6px; padding:4px }
-    .inline-slot{ display:none; align-items:center; justify-content:center; margin:8px 0 10px }
-    .inline-slot .ghostline{ width:100%; border:1px dashed var(--border); border-radius:10px; padding:10px }
-    .inline-form{ width:100%; background:#0c0f16; border:1px solid var(--border); border-radius:12px; padding:10px; margin-top:8px }
+    .text[contenteditable="true"]{ outline:1px dashed var(--focus); border-radius:10px; padding:6px; background:rgba(7,10,18,0.6) }
+    .inline-slot{ display:none; align-items:center; justify-content:center; margin:12px 0 14px }
+    .inline-slot .ghostline{ width:100%; border:1px dashed rgba(147,160,195,0.3); border-radius:16px; padding:12px }
+    .inline-form{ width:100%; background:rgba(9,12,20,0.72); border:1px solid rgba(147,160,195,0.3); border-radius:18px; padding:14px; margin-top:10px }
 
     /* Sticky toolbar */
-    .toolbar{ position:sticky; top:0; z-index:30; margin:-12px -12px 10px; padding:12px env(safe-area-inset-right) 12px env(safe-area-inset-left);
-      background:linear-gradient(180deg, rgba(11,12,15,0.98) 0%, rgba(11,12,15,0.94) 100%); border-bottom:1px solid var(--border); border-top-left-radius:12px; border-top-right-radius:12px; }
+    .toolbar{
+      position:sticky;
+      top:0;
+      z-index:30;
+      margin:-20px -20px 16px;
+      padding:16px env(safe-area-inset-right) 16px env(safe-area-inset-left);
+      background:linear-gradient(180deg, rgba(10,12,20,0.92) 0%, rgba(9,11,18,0.88) 100%);
+      border-bottom:1px solid rgba(118,130,164,0.2);
+      border-top-left-radius:24px;
+      border-top-right-radius:24px;
+      backdrop-filter:blur(18px);
+      -webkit-backdrop-filter:blur(18px);
+      box-shadow:0 25px 60px rgba(3,6,15,0.45);
+    }
     .toolbar .controls{ justify-content:space-between }
-    .toolbar .left, .toolbar .right{ display:flex; gap:8px; align-items:center; flex-wrap:wrap }
-    .btn.icon{ min-width:auto; padding:12px; }
+    .toolbar .left, .toolbar .right{ display:flex; gap:10px; align-items:center; flex-wrap:wrap }
+    .btn.icon{ min-width:auto; padding:12px }
     .btn.icon::before{ content:"⟲"; font-weight:900; font-size:20px; line-height:1; display:block; }
 
     /* Record */
-    .rec-grid{ display:flex; flex-direction:column; gap:10px }
-    .vid{ width:100%; aspect-ratio:9/16; background:#000; border-radius:12px; border:1px solid var(--border); object-fit:cover }
-    .countdown{ position:fixed; inset:0; display:none; align-items:center; justify-content:center; background:rgba(0,0,0,.75); z-index:1000; }
+    .rec-grid{ display:grid; grid-template-columns:1fr; gap:12px }
+    .vid{
+      width:100%;
+      aspect-ratio:9/16;
+      background:#000;
+      border-radius:22px;
+      border:1px solid rgba(118,130,164,0.25);
+      object-fit:cover;
+      box-shadow:0 25px 55px rgba(0,0,0,0.55);
+    }
+    .countdown{
+      position:fixed;
+      inset:0;
+      display:none;
+      align-items:center;
+      justify-content:center;
+      background:rgba(5,7,12,0.78);
+      backdrop-filter:blur(10px);
+      z-index:1000;
+    }
     .countdown.show{ display:flex }
-    .count-num{ font-size:64px; font-weight:800; background:#111; color:#fff; padding:24px 36px; border-radius:18px; border:1px solid var(--border) }
-    .gallery-item{ border:1px solid var(--border); border-radius:12px; padding:10px; margin-bottom:8px; background:#0c0f16 }
+    .count-num{
+      font-size:68px;
+      font-weight:800;
+      background:linear-gradient(135deg, rgba(20,22,32,0.95), rgba(7,8,14,0.95));
+      color:#fff;
+      padding:26px 42px;
+      border-radius:22px;
+      border:1px solid rgba(147,160,195,0.3);
+      box-shadow:0 28px 70px rgba(0,0,0,0.55);
+    }
+    .gallery-item{
+      border:1px solid rgba(147,160,195,0.28);
+      border-radius:18px;
+      padding:12px;
+      margin-bottom:10px;
+      background:rgba(9,12,20,0.7);
+      box-shadow:0 18px 40px rgba(3,6,15,0.35);
+    }
 
     /* L→R dots for loading */
     .dots { display:inline-flex; gap:6px; align-items:center; vertical-align:middle }
@@ -70,24 +359,33 @@
     .dot.on { opacity:1 }
 
     /* Error banner */
-    .errbar{ position:sticky; top:0; z-index:50; display:none; padding:8px 12px; background:#2b0f12; color:#ffb3b3; border-bottom:1px solid #7a2a2a; font-size:12px }
-    .errbar.show{ display:block }
-
-    #screen-record .card{ display:flex; flex-direction:column; gap:12px; }
-    #screen-record .rec-grid{ flex:1; }
-    #screen-record .status{ flex:0; }
-
-    @media (max-width:600px){
-      main{ padding-bottom:100px; }
-      #screen-record .card{ min-height:calc(100vh - 146px); }
-      #screen-record .rec-grid{ gap:8px; align-items:center; }
-      #screen-record .vid{ width:auto; max-width:min(100%,360px); max-height:min(55vh,420px); }
+    .errbar{
+      position:sticky;
+      top:0;
+      z-index:50;
+      display:none;
+      padding:10px 16px;
+      background:rgba(43,15,18,0.85);
+      color:#ffb3b3;
+      border-bottom:1px solid rgba(122,42,42,0.5);
+      font-size:12px;
+      letter-spacing:.3px;
+      backdrop-filter:blur(14px);
+      -webkit-backdrop-filter:blur(14px);
     }
+    .errbar.show{ display:block }
   </style>
 </head>
 <body>
   <div id="errbar" class="errbar" role="alert"></div>
-  <header>🎭 OffBook — Rehearsal MVP</header>
+  <header>
+    <div class="brand">
+      <div class="brand-copy">
+        <span class="brand-title">OFFBOOK</span>
+        <span class="brand-subtitle">Rehearse. Record. Book.</span>
+      </div>
+    </div>
+  </header>
 
   <main>
     <!-- IMPORT -->
@@ -221,16 +519,13 @@ JANE: Ready?"></textarea>
 
           <div class="row">
             <button id="btnPrepareReader" class="btn">1) Prepare Reader Track</button>
+            <button id="btnPlayReader" class="btn secondary" disabled>Play Test</button>
           </div>
 
           <div class="row">
             <label class="small"><input type="checkbox" id="chkVideo" /> Record video (camera)</label>
-            <label class="small"><input type="checkbox" id="chkBackCam" /> Use back camera</label>
             <label class="small"><input type="checkbox" id="chkCountIn" checked /> Count-in</label>
             <label class="small"><input type="checkbox" id="chkHeadphones" checked /> I’m on headphones</label>
-          </div>
-          <div class="small" id="hpNote" style="margin-top:-6px;opacity:.9">
-            Tip: please make sure <b>Conversation Awareness</b> is turned off when using OffBook.
           </div>
 
           <div class="row">
@@ -275,7 +570,7 @@ JANE: Ready?"></textarea>
 
   <!-- App -->
   <script type="module">
-  const boot = async () => {
+    const boot = () => {
       const qs = new URLSearchParams(location.search);
       const secret = qs.get("secret") || "1976";
       const JSON_HDRS = { "Content-Type":"application/json", ...(secret?{"X-Shared-Secret":secret}:{}) };
@@ -287,6 +582,7 @@ JANE: Ready?"></textarea>
       function showErr(msg){ errbar.textContent=msg; errbar.classList.add("show"); }
 
       function showScreen(name){
+        // hide any overlays that could block touches
         $$(".countdown").forEach(x=>x.classList.remove("show"));
         $$(".screen").forEach(s=>s.classList.remove("active"));
         $("#screen-"+name).classList.add("active");
@@ -303,7 +599,6 @@ JANE: Ready?"></textarea>
 
       // state
       const S={ script_id:"", scenes:[], role:"", voice_map:{}, editMode:false, supportedVoices:["alloy"] };
-      const voiceFor = (name)=> S.voice_map[name] || S.supportedVoices[0] || "alloy";
 
       // helpers
       const setStatus = msg => $("#status").textContent = msg || "";
@@ -325,8 +620,7 @@ JANE: Ready?"></textarea>
           const j=await safeJson(r); if(!r.ok) return;
           S.scenes=j.scenes||[];
           await loadSupportedVoices();
-          hydrateAssign(); hydrateRehearse();
-          if(document.querySelector("#lines")) applyEditModeUI();
+          hydrateAssign(); hydrateRehearse(); applyEditModeUI();
         }catch(e){ showErr("Init warning: couldn’t load scenes. You can still re-import."); }
       }
 
@@ -389,7 +683,9 @@ JANE: Ready?"></textarea>
           wrap.className="card"; wrap.style.marginTop="8px";
           wrap.innerHTML=`<div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
             <strong>${name}</strong>
-            <select data-name="${name}">${S.supportedVoices.map(v=>`<option value="${v}" ${((S.voice_map[name]||S.supportedVoices[0])===v)?"selected":""}>${v}</option>`).join("")}</select>
+            <select data-name="${name}">
+              ${S.supportedVoices.map(v=>`<option value="${v}" ${((S.voice_map[name]||S.supportedVoices[0])===v)?"selected":""}>${v}</option>`).join("")}
+            </select>
           </div>`;
           box.appendChild(wrap);
         });
@@ -414,9 +710,6 @@ JANE: Ready?"></textarea>
         rehearseAudio:(()=>{ const a=document.createElement("audio"); a.preload="auto"; a.setAttribute("playsinline",""); a.style.display="none"; document.body.appendChild(a); return a; })()
       };
       let idx=0, playing=false;
-      let playbackSource="idle";
-      let recordSessionActive=false;
-      let recordPrevMicState=null;
 
       const isParenOnly=t=>/^\(.*\)$/.test((t||"").trim());
       const isBoilerplate=t=>{ const s=(t||"").trim().toLowerCase(); if(!s) return true; if(/^[-–—]+$/.test(s)) return true; if(/^\d{1,4}$/.test(s)) return true; if(/^page\s*\d+(\s*of\s*\d+)?$/i.test(s)) return true; if((/^cont'?d\.?$/i.test(s)||/^continued$/i.test(s))&&s.length<=10) return true; if(/^https?:\/\/\S+/i.test(s)) return true; return (s.includes("sides by breakdown services")||s.includes("actors access")||s.includes("do not share")||s.includes("copyright")) && s.length<=80; };
@@ -452,7 +745,7 @@ JANE: Ready?"></textarea>
         return Promise.race([p, new Promise(res=>setTimeout(res,maxMs))]);
       }
 
-      /* Speech Rec tuned (unchanged logic) — RESTORED */
+      /* Speech Rec (unchanged timings) */
       const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
       const sr=SR?new SR():null;
       let srToggleOn=false, srPermGranted=false, srActive=false;
@@ -490,9 +783,8 @@ JANE: Ready?"></textarea>
 
       function minElapsedFor(text){ const t=(text||"").trim(); if(t.length<=6) return 180; if(t.length<=15) return 220; if(t.length<=40) return 300; return 420; }
       function silenceDebounceFor(text){ const t=(text||"").trim(); if(t.length<=6) return 180; if(t.length<=15) return 220; if(t.length<=40) return 260; return 320; }
-      const AFTER_ADV_COOLDOWN_MS=140, FAST_INTERIM_CHARS=12, WATCHDOG_MS=300, NORESULT_RESTART_MS=1500;
+      const AFTER_ADV_COOLDOWN_MS=140;
       const MIN_PROGRESS_FOR_SILENCE = 0.35;
-      const PROGRESS_FOR_FINAL_DASH = 0.82;
 
       function tokens(s){ return (s||"").toLowerCase().replace(/[^a-z0-9' ]+/g," ").split(/\s+/).filter(Boolean); }
       function lastCueWords(text){ const tks=tokens(text).filter(w=>!["uh","um"].includes(w)); if(!tks.length) return ""; const take=Math.min(2,tks.length); return tks.slice(-take).join(" "); }
@@ -507,10 +799,15 @@ JANE: Ready?"></textarea>
       function clearMy(){ myLineStartMs=0; firstEnergyAt=0; advanceLock=false; latestTranscript=""; lastResultAt=0; if(silenceTimer){ clearTimeout(silenceTimer); silenceTimer=null; } }
 
       function updateMicBadge(){
-        if(!sr){ $("#micBadge").textContent="speech recognition: not supported"; $("#micBadge").className="badge err"; $("#btnMic").disabled=true; return; }
-        const label=!srToggleOn?"off":(srActive?"listening…":(srPermGranted?"ready":"needs permission"));
-        $("#micBadge").textContent=label; $("#micBadge").className="badge "+(!srToggleOn?"warn":(srActive?"ok":(srPermGranted?"warn":"err")));
-        $("#btnMic").textContent=srToggleOn?"Mic: On":"Mic: Off"; $("#btnMic").setAttribute("aria-pressed",srToggleOn?"true":"false");
+        const srAvailable = !!sr;
+        let label, cls;
+        if(!srAvailable){ label = srToggleOn ? "energy only" : "off"; cls = srToggleOn ? "ok" : "warn"; }
+        else{ label = !srToggleOn ? "off" : (srActive ? "listening…" : (srPermGranted ? "ready" : "needs permission"));
+              cls = !srToggleOn ? "warn" : (srActive ? "ok" : (srPermGranted ? "warn" : "err")); }
+        $("#micBadge").textContent = label;
+        $("#micBadge").className = "badge " + cls;
+        $("#btnMic").textContent = srToggleOn ? "Mic: On" : "Mic: Off";
+        $("#btnMic").setAttribute("aria-pressed", srToggleOn ? "true" : "false");
       }
 
       async function requestMicPermissionOnce(){ if(srPermGranted) return true; try{ const s=await navigator.mediaDevices.getUserMedia({audio:true}); s.getTracks().forEach(t=>t.stop()); srPermGranted=true; return true; }catch{ srPermGranted=false; return false; } finally{ updateMicBadge(); } }
@@ -533,7 +830,6 @@ JANE: Ready?"></textarea>
         if(next && next.speaker===myName()){
           if(srToggleOn && srPermGranted){ setTimeout(()=>{ if(sr && !srActive) try{ sr.start(); }catch{}; },80); }
         }else{
-          // After you finish your line, re-enable the per-line engine in Record mode.
           if(!playing) playing=true;
           step(true);
         }
@@ -547,15 +843,10 @@ JANE: Ready?"></textarea>
           const now=performance.now();
           const elapsed=now-(myLineStartMs||now);
           if(!firstEnergyAt || elapsed < minElapsedFor(current()?.text||"")) return;
-
           const quietLongEnough = !speaking && (now - Math.max(lastResultAt||firstEnergyAt, firstEnergyAt)) >= need;
           const cueOk = transcriptContainsCue(latestTranscript);
-          const asrQuiet = (now - (lastResultAt||firstEnergyAt)) > 500;
           const progressOk = progressRatio(current()?.text||"", latestTranscript) >= MIN_PROGRESS_FOR_SILENCE;
-
-          if(quietLongEnough && (cueOk || (asrQuiet && progressOk))){
-            advanceFromMyLine();
-          }
+          if(quietLongEnough && (cueOk || progressOk)){ advanceFromMyLine(); }
         }, need);
       }
 
@@ -564,30 +855,15 @@ JANE: Ready?"></textarea>
         sr.onstart=()=>{ srActive=true; updateMicBadge(); };
         sr.onend=()=>{ srActive=false; updateMicBadge(); if(srToggleOn && srPermGranted && onMyLine() && !(E.inlineForm&&E.inlineForm.isConnected)){ try{ sr.start(); }catch{} } };
         sr.onerror=()=>{ srActive=false; updateMicBadge(); };
-
         sr.onresult=(ev)=>{
           if(!(onMyLine() && srToggleOn && srPermGranted)) return;
           maybeSetMyLineStart();
           const now=performance.now(); if(now<advanceCoolUntil) return;
           const ln=current(); if(!ln) return;
+          const last=ev.results?.[ev.results.length-1]; const alt=last?.[0]; const isFinal=!!last?.isFinal;
+          latestTranscript=(alt?.transcript||"").trim(); lastResultAt=now;
           const elapsed=now-(myLineStartMs||now);
-
-          const last=ev.results?.[ev.results.length-1];
-          const alt=last?.[0]; const isFinal=!!last?.isFinal;
-          latestTranscript=(alt?.transcript||"").trim();
-          lastResultAt=now;
-
-          if(!isFinal && /(—|--|-)[\s\u00A0]*$/.test((ln.text||"").trim()) && elapsed>=180
-            && (latestTranscript.split(/\s+/).filter(Boolean).length>=2)
-            && ((latestTranscript.toLowerCase().replace(/[^a-z0-9' ]+/g,"").length)/((ln.text||"").toLowerCase().replace(/[^a-z0-9' ]+/g,"").length) >= PROGRESS_FOR_FINAL_DASH)){
-            return advanceFromMyLine();
-          }
-          if(!isFinal && latestTranscript.length>=FAST_INTERIM_CHARS && transcriptContainsCue(latestTranscript) && elapsed>=minElapsedFor(ln.text)+120){
-            return advanceFromMyLine();
-          }
-          if(isFinal && elapsed>=minElapsedFor(ln.text)){
-            return advanceFromMyLine();
-          }
+          if(isFinal && elapsed>=minElapsedFor(ln.text)){ return advanceFromMyLine(); }
           armSilenceDebounce();
         };
       }
@@ -595,13 +871,8 @@ JANE: Ready?"></textarea>
       setInterval(()=>{
         if(!(sr && srToggleOn && srPermGranted)) return;
         if(!(onMyLine()) || (E.inlineForm&&E.inlineForm.isConnected)) return;
-        const now=performance.now();
         if(!srActive){ try{ sr.start(); }catch{} }
-        if(speaking && firstEnergyAt && now - Math.max(lastResultAt||firstEnergyAt, firstEnergyAt) > NORESULT_RESTART_MS){
-          try{ sr.stop(); }catch{};
-          try{ sr.start(); }catch{};
-        }
-      }, WATCHDOG_MS);
+      }, 300);
 
       $("#btnMic")?.addEventListener("click", async ()=>{
         const srAvailable = !!sr;
@@ -624,7 +895,7 @@ JANE: Ready?"></textarea>
         updateMicBadge();
       });
 
-      // ---------- OpenAI pre-render ----------
+      // OpenAI pre-render (status shows actual error text)
       const RR = { map: new Map(), failures: 0, rendering: false, dotsTimer: null, dotsState: [0,0,0] };
       function setRehearseRenderStatus(msg, cls){
         const el = $("#rehearseRenderStatus");
@@ -651,7 +922,8 @@ JANE: Ready?"></textarea>
         if(!list.length){ setRehearseRenderStatus("No lines to render.","err"); return; }
         RR.rendering = true; RR.failures = 0; RR.map.clear(); startDots(); setRehearseRenderStatus("Preparing voices…","");
 
-        const model = (($("#selTtsModel")).value || "tts-1");
+        const voiceFor = (name)=> (S.voice_map[name] || S.supportedVoices[0] || "alloy");
+        const model = ($("#selTtsModel")).value || "tts-1";
 
         const concurrency = 3;
         let i = 0, done = 0, firstErr = null;
@@ -689,225 +961,52 @@ JANE: Ready?"></textarea>
       $("#btnRehearseRender")?.addEventListener("click", renderRehearseVoices);
       $("#btnRehearseClear")?.addEventListener("click", clearRehearseRender);
 
-      // ---------- Audio routing (single AudioContext + gains + fade-in) ----------
-      let routeCtx = null, readerSource = null, rehearseSource = null;
-      let readerGain = null, rehearseGain = null;
-
-      function getRouteCtx(){
-        const Ctor = window.AudioContext || window.webkitAudioContext;
-        if(!routeCtx && Ctor){ routeCtx = new Ctor(); }
-        return routeCtx;
-      }
-
-      async function ensureRouteCtx(){
-        const ctx = getRouteCtx();
-        if(!ctx) return;
-        if(ctx.state === "suspended"){ try{ await ctx.resume(); }catch{} }
-        if(R.audio && !readerSource){
-          try{
-            readerSource = ctx.createMediaElementSource(R.audio);
-            readerGain = ctx.createGain(); readerGain.gain.value = 1.0;
-            readerSource.connect(readerGain).connect(ctx.destination);
-          }catch{}
-        }
-        if(E.rehearseAudio && !rehearseSource){
-          try{
-            rehearseSource = ctx.createMediaElementSource(E.rehearseAudio);
-            rehearseGain = ctx.createGain(); rehearseGain.gain.value = 1.0;
-            rehearseSource.connect(rehearseGain).connect(ctx.destination);
-          }catch{}
-        }
-      }
-
-      function applyHeadphoneRoutingMode(){
-        const wantHeadphones = !!R.chkHeadphones?.checked;
-        // Elements muted when using WebAudio route; unmuted otherwise.
-        try{ R.audio.muted = wantHeadphones ? true : false; }catch{}
-        try{ E.rehearseAudio.muted = wantHeadphones ? true : false; }catch{}
-      }
-
-      async function startWithFade(el, gainNode, prerollSec=0.02, fadeSec=0.12){
-        await ensureRouteCtx();
-        try{
-          if (el.currentTime < prerollSec) el.currentTime = prerollSec;
-        }catch{}
-        if (gainNode?.gain?.setValueAtTime && routeCtx){
-          const t0 = routeCtx.currentTime + 0.01;
-          gainNode.gain.setValueAtTime(0.0001, t0);
-          gainNode.gain.linearRampToValueAtTime(1.0, t0 + fadeSec);
-        }
-        if(routeCtx?.state === "suspended"){ try{ await routeCtx.resume(); }catch{} }
-        return el.play();
-      }
-
-      async function playOpenAiIfCached(i, opts={}){
-        const { allowFetch=false, model } = opts;
-        let url = RR.map.get(i);
-        if(!url && allowFetch){ url = await ensureLineClip(i, model); }
+      async function playOpenAiIfCached(i){
+        const url = RR.map.get(i);
         if(!url) return false;
         try{
-          const el = E.rehearseAudio;
-          // --- robust load + warm start to prevent first-word cutoff ---
-          el.onended = null;
-          el.onerror = null;
-          el.src = url + (url.includes("?") ? "&" : "?") + "t=" + Date.now();
-          // Wait for enough buffered data to ensure clean start
-          el.load();
-          await new Promise((res)=>{
-            let done = false;
-            const tidy = ()=>{ if(done) return; done = true; el.oncanplay = null; el.onloadeddata = null; res(); };
-            el.oncanplay = tidy;
-            el.onloadeddata = tidy;
-            setTimeout(tidy, 1200);
-          });
-          // Ensure routing settled before playback
-          await ensureRoutedBeforePlay(el);
-          await ensureRouteCtx();
-          applyHeadphoneRoutingMode();
-          // Warm the pipeline muted, then restart unmuted at t=0
-          const sleep = (ms)=>new Promise(r=>setTimeout(r,ms));
-          el.muted = true;
-          try{ el.currentTime = 0; }catch{}
-          try{ await el.play(); }catch{}
-          await sleep(180);
-          try{ el.pause(); }catch{}
-          try{ el.currentTime = 0; }catch{}
-          el.muted = false;
-          await el.play();
-          await new Promise(res=>{ el.onended=()=>res(null); el.onerror=()=>res(null); });
+          E.rehearseAudio.src = url + (url.includes("?") ? "&" : "?") + "t=" + Date.now();
+          await E.rehearseAudio.play();
+          await new Promise(res=>{ E.rehearseAudio.onended=()=>res(null); E.rehearseAudio.onerror=()=>res(null); });
           return true;
         }catch{ return false; }
       }
 
-      async function ensureLineClip(i, model){
-        if(RR.map.has(i)) return RR.map.get(i);
-        const list = filtered();
-        const ln = list?.[i];
-        if(!ln || ln.speaker===myName()) return "";
-        const modelSel = $("#selTtsModel");
-        const useModel = model || ((modelSel && modelSel.value) || "tts-1");
-        try{
-          const r = await fetch("/debug/tts_line", { method:"POST", headers:JSON_HDRS, body:JSON.stringify({ voice: voiceFor(ln.speaker), model: useModel, text: ln.text }) });
-          const txt = await r.text();
-          let j = {}; try{ j = JSON.parse(txt); }catch{}
-          if(r.ok && j && j.url){ RR.map.set(i, j.url); return j.url; }
-        }catch{}
-        return "";
-      }
-
-      // partner stepping
       async function step(playMode){
         const list=filtered(); if(!list.length) return;
         const pace=Number(($("#selPace")?.value)||0);
-        const ln=current();
-        if(!ln){
-          playing=false;
-          if(playbackSource !== "record"){ $("#btnPlay").textContent="Play"; }
-          else { playbackSource="idle"; }
-          if(recordSessionActive){ stopRecording(true); }
-          return;
-        }
+        const ln=current(); if(!ln){ playing=false; $("#btnPlay").textContent="Play"; return; }
+        // keep bubble synced even if audio fails
         highlightCurrent();
 
         if(ln.speaker===myName()){
-          // HARD GATE in RECORD mode: never auto-run through your lines.
-          // We pause the per-line engine and only resume after SR advances the line.
-          if (playbackSource === "record") {
-            playing = false;
-          }
-          if(sr && srToggleOn && srPermGranted){
-            advanceLock=false;
-            if(!srActive){ try{ sr.start(); }catch{} }
-            maybeSetMyLineStart();
-            return;
-          }
-          if(playMode){
-            playing=false;
-            if(playbackSource !== "record"){ $("#btnPlay").textContent="Play"; }
-          }
+          if(sr && srToggleOn && srPermGranted){ advanceLock=false; maybeSetMyLineStart(); return; }
+          if(playMode){ playing=false; $("#btnPlay").textContent="Play"; }
         }else{
           const i = idx;
-          const usedOpenAi = await playOpenAiIfCached(i, { allowFetch: playbackSource==="record" });
-          if(!usedOpenAi){
-            try{ E.rehearseAudio.pause(); }catch{}
-            window.speechSynthesis?.cancel?.();
-            await new Promise(r=>setTimeout(r, 40));
-            await synthSpeak(ln.text);
-          }
+          const usedOpenAi = await playOpenAiIfCached(i);
+          if(!usedOpenAi){ await synthSpeak(ln.text); }
           if(pace>0) await new Promise(r=>setTimeout(r,pace));
           if(playing){ idx=Math.min(idx+1,list.length-1); step(true); }
         }
       }
 
-      $("#btnPlay")?.addEventListener("click",()=>{
-        playing=!playing;
-        playbackSource = playing ? "rehearse" : "idle";
-        $("#btnPlay").textContent=playing?"Pause":"Play";
-        if(playing){ step(true); }
-        else {
-          window.speechSynthesis?.cancel();
-          try{ sr?.stop(); }catch{}
-          clearMy();
-        }
-      });
-      $("#btnPrev")?.addEventListener("click",()=>{
-        const list=filtered(); if(!list.length) return;
-        try{ sr?.stop(); }catch{}
-        clearMy();
-        idx=Math.max(0,idx-1);
-        highlightCurrent();
-        if(playing){
-          step(true);
-        }else{
-          if(sr && srToggleOn && srPermGranted && !srActive){ try{ sr.start(); }catch{} }
-          maybeSetMyLineStart();
-        }
-      });
-      $("#btnNext")?.addEventListener("click",()=>{
-        const list=filtered(); if(!list.length) return;
-        try{ sr?.stop(); }catch{}
-        clearMy();
-        idx=Math.min(list.length-1,idx+1);
-        highlightCurrent();
-        if(playing){
-          step(true);
-        }else{
-          if(sr && srToggleOn && srPermGranted && !srActive){ try{ sr.start(); }catch{} }
-          maybeSetMyLineStart();
-        }
-      });
-      $("#btnTop")?.addEventListener("click",()=>{
-        try{ sr?.stop(); }catch{}
-        clearMy();
-        idx=0;
-        highlightCurrent();
-        if(playing){
-          step(true);
-        }else{
-          if(sr && srToggleOn && srPermGranted && !srActive){ try{ sr.start(); }catch{} }
-          maybeSetMyLineStart();
-        }
-      });
+      $("#btnPlay")?.addEventListener("click",()=>{ playing=!playing; $("#btnPlay").textContent=playing?"Pause":"Play"; if(playing){ step(true); } else { window.speechSynthesis?.cancel(); try{ sr?.stop(); }catch{}; clearMy(); }});
+      $("#btnPrev")?.addEventListener("click",()=>{ const list=filtered(); if(!list.length) return; try{ sr?.stop(); }catch{}; clearMy(); idx=Math.max(0,idx-1); highlightCurrent(); if(playing) step(true); else maybeSetMyLineStart(); });
+      $("#btnNext")?.addEventListener("click",()=>{ const list=filtered(); if(!list.length) return; try{ sr?.stop(); }catch{}; clearMy(); idx=Math.min(list.length-1,idx+1); highlightCurrent(); if(playing) step(true); else maybeSetMyLineStart(); });
+      $("#btnTop")?.addEventListener("click",()=>{ try{ sr?.stop(); }catch{}; clearMy(); idx=0; highlightCurrent(); if(playing) step(true); else maybeSetMyLineStart(); });
 
       $("#btnToggleEditMode")?.addEventListener("click",()=>{ S.editMode=!S.editMode; applyEditModeUI(); });
-      function applyEditModeUI(){
-        const linesWrap=$("#lines");
-        if(!linesWrap) return;
-        $("#btnToggleEditMode")?.setAttribute("aria-pressed",S.editMode?"true":"false");
-        $("#editModeState").textContent=S.editMode?"On":"Off";
-        $$(".editbar",linesWrap).forEach(el=>el.style.display=S.editMode?"flex":"none");
-        $$(".inline-slot",linesWrap).forEach(el=>el.style.display=S.editMode?"flex":"none");
-        if(E.inlineForm && E.inlineForm.isConnected){ try{ E.inlineForm.remove(); }catch{}; E.currentSlotPlace=null; }
-      }
+      function applyEditModeUI(){ $("#btnToggleEditMode")?.setAttribute("aria-pressed",S.editMode?"true":"false"); $("#editModeState").textContent=S.editMode?"On":"Off"; $$(".editbar",$("#lines")).forEach(el=>el.style.display=S.editMode?"flex":"none"); $$(".inline-slot",$("#lines")).forEach(el=>el.style.display=S.editMode?"flex":"none"); if(E.inlineForm && E.inlineForm.isConnected){ try{ E.inlineForm.remove(); }catch{}; E.currentSlotPlace=null; } }
 
-      /* ----------------- RECORD TAB ----------------- */
+      /* ----------------- RECORD TAB (unchanged logic) ----------------- */
       const R = {
         status: $("#statusRec"),
         btnPrepare: $("#btnPrepareReader"),
+        btnPlayReader: $("#btnPlayReader"),
         btnStart: $("#btnStartRec"),
         btnStop: $("#btnStopRec"),
         chkVideo: $("#chkVideo"),
-        chkBackCam: $("#chkBackCam"),
         chkCountIn: $("#chkCountIn"),
         chkHeadphones: $("#chkHeadphones"),
         audio: $("#readerAudio"),
@@ -921,215 +1020,8 @@ JANE: Ready?"></textarea>
         takes: [],
       };
       R.audio?.setAttribute("playsinline","");
-      const RStatus = { msg:"", loading:false, dotsTimer:null, dotsState:[0,0,0] };
-      function updateStatusRec(){
-        if(!R.status) return;
-        R.status.innerHTML = "";
-        if(!RStatus.msg) return;
-        const span=document.createElement("span");
-        span.textContent=RStatus.msg + (RStatus.loading?" ":"");
-        R.status.appendChild(span);
-        if(RStatus.loading){
-          const dots=document.createElement("span");
-          dots.className="dots";
-          dots.innerHTML=`<span class="dot ${RStatus.dotsState[0]?"on":""}"></span><span class="dot ${RStatus.dotsState[1]?"on":""}"></span><span class="dot ${RStatus.dotsState[2]?"on":""}"></span>`;
-          R.status.appendChild(dots);
-        }
-      }
-      function tickStatusDots(){
-        const [a,b,c]=RStatus.dotsState;
-        if(!a && !b && !c){ RStatus.dotsState=[1,0,0]; }
-        else if(a){ RStatus.dotsState=[0,1,0]; }
-        else if(b){ RStatus.dotsState=[0,0,1]; }
-        else { RStatus.dotsState=[0,0,0]; }
-        updateStatusRec();
-      }
-      function setStatusRec(msg, mode){
-        RStatus.msg = msg || "";
-        RStatus.loading = mode === "loading";
-        if(RStatus.dotsTimer){ clearInterval(RStatus.dotsTimer); RStatus.dotsTimer=null; }
-        RStatus.dotsState=[0,0,0];
-        updateStatusRec();
-        if(RStatus.loading){
-          tickStatusDots();
-          RStatus.dotsTimer=setInterval(()=>{ if(RStatus.loading){ tickStatusDots(); } },320);
-        }
-      }
-      function releaseStream(){
-        try{ R.stream?.getTracks().forEach(t=>t.stop()); }catch{}
-        R.stream = null;
-        if(R.preview){ R.preview.srcObject = null; }
-      }
-      function selectedFacingMode(){ return R.chkBackCam?.checked ? "environment" : "user"; }
-      function streamMeetsNeeds(stream, needVideo, facing){
-        if(!stream) return false;
-        const audioTracks = stream.getAudioTracks().filter(t=>t.readyState==="live");
-        if(!audioTracks.length) return false;
-        const videoTracks = stream.getVideoTracks().filter(t=>t.readyState==="live");
-        if(needVideo){
-          if(!videoTracks.length) return false;
-          const settings = videoTracks[0]?.getSettings?.();
-          if(facing && settings?.facingMode && settings.facingMode !== facing) return false;
-        }else if(videoTracks.length){
-          return false;
-        }
-        return true;
-      }
-      function buildRecordingConstraints(needVideo){
-        if(needVideo){
-          return {
-            audio: true,
-            video: {
-              facingMode: { ideal: selectedFacingMode() },
-              width: { ideal: 1280 },
-              height: { ideal: 720 }
-            }
-          };
-        }
-        return { audio: true, video: false };
-      }
-      let currentAudioSinkId = "default";
-      async function enumerateAudioOutputs(){
-        if(!navigator.mediaDevices?.enumerateDevices) return [];
-        let devices=[];
-        try{ devices = await navigator.mediaDevices.enumerateDevices(); }
-        catch{ return []; }
-        if(devices.some(d=>d.kind==="audiooutput" && d.label)) return devices;
-        try{
-          const tmp = await navigator.mediaDevices.getUserMedia({ audio:true });
-          tmp.getTracks().forEach(t=>t.stop());
-          devices = await navigator.mediaDevices.enumerateDevices();
-        }catch{}
-        return devices;
-      }
-      async function routeReaderToHeadphonesIfRequested(){
-        const wantHeadphones = !!R.chkHeadphones?.checked;
-        const targets = [E.rehearseAudio, R.audio].filter(el=>el && typeof el.setSinkId === "function");
-        if(!wantHeadphones){
-          if(!targets.length) return { ok:true, reason:"unsupported" };
-          try{
-            for(const el of targets){ await el.setSinkId("default"); }
-            currentAudioSinkId = "default";
-            return { ok:true, device:"default" };
-          }catch(error){
-            return { ok:false, reason:"set-sink-failed", error };
-          }
-        }
-        if(!targets.length){ return { ok:false, reason:"setSinkId-unsupported" }; }
 
-        async function applySink(id){
-          if(!id) return false;
-          const applied=[];
-          try{
-            for(const el of targets){ await el.setSinkId(id); applied.push(el); }
-            currentAudioSinkId = id;
-            return true;
-          }catch(err){
-            for(const el of applied){
-              try{ await el.setSinkId(currentAudioSinkId || "default"); }catch{}
-            }
-            return false;
-          }
-        }
-
-        if(currentAudioSinkId && currentAudioSinkId !== "default"){
-          const reused = await applySink(currentAudioSinkId);
-          if(reused) return { ok:true, device:currentAudioSinkId };
-        }
-
-        if(await applySink("communications")){ return { ok:true, device:"communications" }; }
-
-        const devices = await enumerateAudioOutputs();
-        const outputs = devices.filter(d=>d.kind==="audiooutput");
-        const rx=/head|ear|bud|headset/i;
-        const headphoneFirst = outputs.filter(d=>rx.test(d.label||""));
-        const others = outputs.filter(d=>!rx.test(d.label||""));
-        for(const dev of [...headphoneFirst, ...others]){
-          if(await applySink(dev.deviceId)){
-            const ok = rx.test(dev.label||"");
-            return { ok, device:dev.deviceId, label:dev.label };
-          }
-        }
-
-        if(await applySink("default")){
-          return { ok:false, reason: headphoneFirst.length?"set-sink-failed":"no-headphone-match" };
-        }
-        return { ok:false, reason:"set-sink-failed" };
-      }
-
-      async function ensureRoutedBeforePlay(el){
-        if(!el) return;
-        if(R.chkHeadphones?.checked){
-          try{ await routeReaderToHeadphonesIfRequested(); }catch{}
-        }else if(typeof el.setSinkId === "function"){
-          try{ await el.setSinkId("default"); }catch{}
-        }
-      }
-
-      // ----- Smooth, no-chop audio start (works in both Rehearse & Record) -----
-      async function waitForReady(el){
-        if(!el) return;
-        if(el.readyState >= 3) return;
-        await new Promise((res)=>{
-          let done = false;
-          const finish = ()=>{ if(done) return; done = true; cleanup(); res(); };
-          const cleanup = ()=>{
-            el.removeEventListener("canplay", finish);
-            el.removeEventListener("canplaythrough", finish);
-            el.removeEventListener("loadeddata", finish);
-            el.removeEventListener("loadedmetadata", finish);
-          };
-          el.addEventListener("canplay", finish, { once:true });
-          el.addEventListener("canplaythrough", finish, { once:true });
-          el.addEventListener("loadeddata", finish, { once:true });
-          el.addEventListener("loadedmetadata", finish, { once:true });
-          setTimeout(finish, 500);
-        });
-      }
-
-      async function safePlayFromStart(el){
-        const settleMs = (typeof isIOS !== "undefined" && isIOS) ? 140 : 60;
-        try{ el.pause(); }catch{}
-        try{ el.currentTime = 0; }catch{}
-        try{ el.load(); }catch{}
-        await ensureRouteCtx?.();
-        applyHeadphoneRoutingMode?.();
-        await ensureRoutedBeforePlay(el);
-        await waitForReady(el);
-        await new Promise(r=>setTimeout(r, settleMs));
-        try{ await el.play(); }catch{}
-      }
-
-      if(navigator.mediaDevices?.addEventListener){
-        navigator.mediaDevices.addEventListener("devicechange", async ()=>{
-          if(recordSessionActive || R.download_url){
-            try{ await routeReaderToHeadphonesIfRequested(); }catch{}
-            await ensureRouteCtx();
-            applyHeadphoneRoutingMode();
-          }
-        });
-      }
-
-      // countdown beep: use the SAME routeCtx as everything else
-      async function playCountdownBeep(){
-        try{
-          await ensureRouteCtx();
-          const ctx = routeCtx; if(!ctx) return;
-          if(ctx.state === "suspended"){ await ctx.resume(); }
-          const now = ctx.currentTime;
-          const osc = ctx.createOscillator();
-          const gain = ctx.createGain();
-          osc.type="sine";
-          osc.frequency.setValueAtTime(660, now);
-          gain.gain.setValueAtTime(0.0001, now);
-          gain.gain.exponentialRampToValueAtTime(0.35, now+0.01);
-          gain.gain.exponentialRampToValueAtTime(0.0001, now+0.28);
-          osc.connect(gain).connect(ctx.destination);
-          osc.start(now);
-          osc.stop(now+0.3);
-        }catch{}
-      }
-
+      function setStatusRec(t){ R.status.textContent = t || ""; }
       function pickMime(video){
         const vids = ["video/mp4;codecs=avc1.42E01E,mp4a.40.2","video/mp4","video/webm;codecs=vp8,opus","video/webm"];
         const auds = ["audio/mp4","audio/webm;codecs=opus","audio/webm"];
@@ -1141,7 +1033,7 @@ JANE: Ready?"></textarea>
 
       async function prepareReader(){
         if(!S.script_id){ setStatusRec("Import & Assign first."); return; }
-        setStatusRec("Preparing reader track…","loading"); R.btnPrepare.disabled = true;
+        setStatusRec("Preparing reader track…"); R.btnPrepare.disabled = true;
         try{
           const r = await fetch("/debug/render", { method:"POST", headers:JSON_HDRS, body:JSON.stringify({ script_id:S.script_id, my_role:(S.role||"").toUpperCase(), pace_ms:0 }) });
           const j = await safeJson(r);
@@ -1152,19 +1044,9 @@ JANE: Ready?"></textarea>
             const js = await safeJson(s);
             if(js.status==="complete" && js.download_url){
               R.download_url = js.download_url + "?t=" + Date.now();
-              R.audio.src = R.download_url;
-              R.audio.load();
-              await ensureRouteCtx();
-              applyHeadphoneRoutingMode();
-              const route = await routeReaderToHeadphonesIfRequested();
-              R.btnPrepare.disabled = false;
-              R.btnStart.disabled = false;
-              if(!route.ok && R.chkHeadphones?.checked){
-                setStatusRec("Reader ready (check audio output).");
-                setTimeout(()=>{ if(!recordSessionActive && !RStatus.loading){ setStatusRec("Reader ready."); } }, 2000);
-              }else{
-                setStatusRec("Reader ready.");
-              }
+              R.audio.src = R.download_url; R.audio.load();
+              R.btnPlayReader.disabled = false; R.btnStart.disabled = false;
+              setStatusRec("Reader ready.");
             }else if(js.status==="error"){
               setStatusRec("Render failed: "+(js.error||"unknown")); R.btnPrepare.disabled=false;
             }else{ setTimeout(poll, 500); }
@@ -1174,170 +1056,45 @@ JANE: Ready?"></textarea>
       }
       $("#btnPrepareReader")?.addEventListener("click", prepareReader);
 
+      $("#btnPlayReader")?.addEventListener("click", async ()=>{ try{ R.audio.currentTime = 0; await R.audio.play(); setStatusRec("Playing reader…"); }catch{ setStatusRec("Couldn’t play. Tap again or toggle mute once."); } });
+
       function makeCountdown(){ if(R.countdown) return R.countdown; const div=document.createElement("div"); div.className="countdown"; div.innerHTML=`<div class="count-num" id="countNum">3</div>`; document.body.appendChild(div); R.countdown = div; return div; }
-      async function doCountdownIfEnabled(){
-        if(!R.chkCountIn?.checked) return;
-        const c=makeCountdown();
-        const num=$("#countNum",c);
-        c.classList.add("show");
-        for(let n=3;n>=1;n--){
-          num.textContent=String(n);
-          await playCountdownBeep();
-          await new Promise(r=>setTimeout(r,720));
-        }
-        c.classList.remove("show");
-      }
+      async function doCountdownIfEnabled(){ if(!R.chkCountIn.checked) return; const c=makeCountdown(); const num=$("#countNum",c); c.classList.add("show"); for(let n=3;n>=1;n--){ num.textContent=String(n); await new Promise(r=>setTimeout(r,800)); } c.classList.remove("show"); }
 
       async function startPreviewIfNeeded(){
-        if(recordSessionActive) return;
-        if(!R.chkVideo?.checked){ releaseStream(); return; }
-        const facing = selectedFacingMode();
-        if(!streamMeetsNeeds(R.stream, true, facing)){
-          releaseStream();
-          try{
-            R.stream = await navigator.mediaDevices.getUserMedia(buildRecordingConstraints(true));
-          }catch(e){ setStatusRec("Camera/mic permission denied: "+e); return; }
-        }
-        if(R.preview){ R.preview.srcObject = R.stream; }
+        if(!R.chkVideo.checked){ R.preview.srcObject=null; return; }
+        try{
+          if(!R.stream){ const st = await navigator.mediaDevices.getUserMedia({ video:true, audio:true }); R.stream = st; }
+          R.preview.srcObject = R.stream;
+        }catch(e){ setStatusRec("Camera/mic permission denied: "+e); }
       }
       $("#chkVideo")?.addEventListener("change", startPreviewIfNeeded);
-      $("#chkBackCam")?.addEventListener("change", startPreviewIfNeeded);
-      $("#chkHeadphones")?.addEventListener("change", async ()=>{
-        const res = await routeReaderToHeadphonesIfRequested();
-        await ensureRouteCtx();
-        applyHeadphoneRoutingMode();
-        if(!res.ok && R.chkHeadphones?.checked && !RStatus.loading && R.download_url && !recordSessionActive){
-          setStatusRec("Reader ready (check audio output).");
-          setTimeout(()=>{ if(!recordSessionActive && !RStatus.loading){ setStatusRec("Reader ready."); } }, 1800);
-        }
-      });
-
-      function endRecordSession(){
-        if(!recordSessionActive) return;
-        recordSessionActive=false;
-        playbackSource="idle";
-        playing=false;
-        const btnPlay=$("#btnPlay");
-        if(btnPlay) btnPlay.textContent="Play";
-        clearMy();
-        try{ E.rehearseAudio.pause(); }catch{}
-        if(E.rehearseAudio){ try{ E.rehearseAudio.currentTime=0; }catch{} }
-        window.speechSynthesis?.cancel();
-        if(sr){ try{ sr.stop(); }catch{} }
-        if(recordPrevMicState!==null){
-          srToggleOn = !!recordPrevMicState;
-          if(srToggleOn){
-            startMicMonitor();
-            if(sr && srPermGranted){ setTimeout(()=>{ try{ sr.start(); }catch{} }, 100); }
-          }else{
-            stopMicMonitor();
-          }
-          updateMicBadge();
-        }else{
-          updateMicBadge();
-        }
-        recordPrevMicState=null;
-      }
 
       async function startRecording(){
-        if(recordSessionActive) return;
         if(!R.download_url){ setStatusRec("Prepare the reader first."); return; }
-        const list = filtered();
-        if(!list.length){ setStatusRec("Import & Assign first."); return; }
-        const needVideo = !!R.chkVideo?.checked;
-        const facing = selectedFacingMode();
         try{
-          if(!streamMeetsNeeds(R.stream, needVideo, facing)){
-            if(R.stream){ releaseStream(); }
-            R.stream = await navigator.mediaDevices.getUserMedia(buildRecordingConstraints(needVideo));
-          }
-          if(R.preview){ R.preview.srcObject = needVideo ? R.stream : null; }
+          const needVideo=!!R.chkVideo.checked;
+          R.stream = await navigator.mediaDevices.getUserMedia({ audio:true, video:needVideo });
+          R.preview.srcObject = needVideo ? R.stream : null;
         }catch(e){ setStatusRec("Permission error: "+e); return; }
-        let headphoneRoute = { ok:true };
-        try{ headphoneRoute = await routeReaderToHeadphonesIfRequested(); }
-        catch(e){ headphoneRoute = { ok:false, reason:"route-error", error:e }; }
-        if(R.audio){ try{ R.audio.pause(); }catch{}; try{ R.audio.currentTime=0; }catch{} }
         await doCountdownIfEnabled();
         R.chunks = [];
-        const mime = pickMime(needVideo);
-        try{ R.rec = mime ? new MediaRecorder(R.stream, { mimeType: mime }) : new MediaRecorder(R.stream); }
-        catch{ R.rec = new MediaRecorder(R.stream); }
+        const mime = pickMime(!!R.chkVideo.checked);
+        try{ R.rec = mime ? new MediaRecorder(R.stream, { mimeType: mime }) : new MediaRecorder(R.stream); }catch{ R.rec = new MediaRecorder(R.stream); }
         R.rec.ondataavailable = (e)=>{ if(e.data && e.data.size>0) R.chunks.push(e.data); };
         R.rec.onstop = finalizeTake;
-        try{ R.rec.start(); }
-        catch(e){
-          setStatusRec("Unable to start recorder: "+e);
-          releaseStream();
-          R.rec = null;
-          return;
-        }
-        await ensureRoutedBeforePlay(R.audio);
-        await ensureRouteCtx();
-        applyHeadphoneRoutingMode();
-
-        recordSessionActive = true;
-
-        recordPrevMicState = srToggleOn;
-        if(!srToggleOn){
-          if(sr){
-            const ok = await requestMicPermissionOnce();
-            srToggleOn = ok;
-            // be explicit: SR is expected during record-mode listen/respond
-            srPermGranted = srPermGranted || ok;
-            if(ok){ startMicMonitor(); }
-          }else{
-            srToggleOn = true;
-            startMicMonitor();
-          }
-        }else{
-          startMicMonitor();
-        }
-        updateMicBadge();
-        if(sr && srToggleOn && srPermGranted){
-          try{ sr.stop(); }catch{}
-          setTimeout(()=>{ if(srToggleOn){ try{ sr.start(); }catch{} } }, 120);
-        }
-        clearMy();
-        idx = 0;
-        highlightCurrent();
-        playbackSource = "record";
-  playing = true;         // per-line engine drives partner lines only
-  step(true);             // kicks partner line 0; hard gate stops at your line
-        try{ R.audio.pause(); R.audio.currentTime = 0; }catch{}
-        R.audio.onended = null;
-        R.btnStart.disabled = true;
-        R.btnStop.disabled = false;
-        const recMsg = (!headphoneRoute.ok && R.chkHeadphones?.checked) ? "Recording… (check audio output)" : "Recording…";
-        setStatusRec(recMsg);
+        R.rec.start();
+        try{ R.audio.currentTime = 0; await R.audio.play(); }catch{}
+        R.audio.onended = ()=>{ setTimeout(()=>{ try{ R.rec?.stop(); }catch{} }, 120); };
+        R.btnStart.disabled = true; R.btnStop.disabled = false; setStatusRec("Recording…");
       }
       $("#btnStartRec")?.addEventListener("click", startRecording);
 
-      function stopRecording(auto=false){
-        const recorderActive = recordSessionActive || (R.rec && R.rec.state && R.rec.state!="inactive");
-        if(!recorderActive){ return; }
-        if(recordSessionActive){ endRecordSession(); }
-        if(R.audio){
-          try{ R.audio.pause(); R.audio.currentTime=0; }catch{}
-          R.audio.onended = null;
-        }
-        if(E.rehearseAudio){ try{ E.rehearseAudio.pause(); }catch{}; try{ E.rehearseAudio.currentTime=0; }catch{} }
-        if(R.rec){
-          try{
-            if(R.rec.state && R.rec.state!="inactive"){ R.rec.stop(); }
-          }catch{}
-        }
-        R.btnStop.disabled = true;
-        setStatusRec(auto?"Wrapping up…":"Stopping…");
-      }
-      $("#btnStopRec")?.addEventListener("click", ()=>stopRecording(false));
+      function stopRecording(){ try{ R.rec?.stop(); }catch{} setStatusRec("Stopping…"); }
+      $("#btnStopRec")?.addEventListener("click", stopRecording);
 
       function finalizeTake(){
-        endRecordSession();
-        if(R.audio){
-          try{ R.audio.pause(); R.audio.currentTime=0; }catch{}
-          R.audio.onended = null;
-        }
-        const isVid = !!R.chkVideo?.checked;
+        const isVid = !!R.chkVideo.checked;
         const blob = new Blob(R.chunks, { type: (R.rec && R.rec.mimeType) ? R.rec.mimeType : (isVid ? "video/mp4" : "audio/mp4") });
         const url = URL.createObjectURL(blob);
         const ts = new Date().toISOString().replace(/[:.]/g,"-");
@@ -1345,11 +1102,7 @@ JANE: Ready?"></textarea>
         const name = `${isVid?"take-video":"take-audio"}-${ts}.${ext}`;
         R.takes.unshift({ url, name, type: blob.type, size: blob.size });
         renderTakes();
-        releaseStream();
-        R.rec = null;
-        R.chunks = [];
-        R.btnStop.disabled = true; R.btnStart.disabled = false;
-        setStatusRec("Saved to Gallery.");
+        R.btnStop.disabled = true; R.btnStart.disabled = false; setStatusRec("Saved to Gallery.");
       }
 
       function renderTakes(){
@@ -1368,10 +1121,7 @@ JANE: Ready?"></textarea>
 
       // initial safe boot
       try{
-        hydrateRehearse();
-        if(document.querySelector("#lines")) applyEditModeUI();
-        (function initAssign(){ $("#pillScript").textContent="script: "+(S.script_id||"—"); })();
-        await ensureRouteCtx?.(); applyHeadphoneRoutingMode();
+        hydrateRehearse(); applyEditModeUI(); (function initAssign(){ $("#pillScript").textContent="script: "+(S.script_id||"—"); })();
       }catch(e){ showErr("UI init error: "+e); }
     };
 
