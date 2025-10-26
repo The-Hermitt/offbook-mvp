@@ -54,7 +54,7 @@ type Script = { id: string; title: string; scenes: Scene[]; voices: Record<strin
 const mem = {
   scripts: new Map<string, Script>(),
   renders: new Map<string, { status: "queued" | "complete" | "error"; url?: string; err?: string }>(),
-  assets: new Map<string, Buffer>(), // id -> MP3 bytes (for renders and single-line TTS)
+  assets: new Map<string, Buffer>(), // render_id -> MP3 bytes
 };
 const upload = multer({ storage: multer.memoryStorage() });
 
@@ -66,13 +66,12 @@ function genId(prefix: string) {
 function normalizePdfText(raw: string): string {
   if (!raw) return "";
   let t = raw.replace(/\r\n/g, "\n");
-  t = t.replace(/-\n/g, ""); // dehyphenate line breaks
-  t = t.replace(/\b(?:[A-Z]\s){2,}[A-Z]\b/g, s => s.replace(/\s+/g, "")); // J A N E -> JANE
+  t = t.replace(/-\n/g, "");
+  t = t.replace(/\b(?:[A-Z]\s){2,}[A-Z]\b/g, s => s.replace(/\s+/g, ""));
   t = t.replace(/[ \t]{2,}/g, " ");
   return t;
 }
 
-// Common non-character headings/directions seen in OCR
 const NON_CHAR_TOKENS = new Set([
   "INSERT","MORE","HERE","CONTINUED","CONT'D","CONT’D",
   "ANGLE","ANGLE ON","CLOSE","CLOSE ON","WIDER","WIDE",
@@ -212,42 +211,27 @@ async function openaiTtsProbe(opts?: { text?: string; voice?: string; model?: st
   }
 }
 
-// Concatenate MP3 buffers (naive but works for same-encoder MP3)
 function concatMp3(parts: Buffer[]): Buffer {
   if (parts.length === 1) return parts[0];
   return Buffer.concat(parts);
 }
 
-/* -------------------- ALWAYS-ON ROUTES -------------------- */
-// 1) TTS health (safe)
-app.get("/debug/tts_check", requireSecret, async (_req: Request, res: Response) => {
-  const result = await openaiTtsProbe({ text: "test", voice: "alloy" });
-  if (!result.ok) return res.status(500).json(result);
-  res.json(result);
-});
-
-// 2) Single-line TTS for Rehearse/Diagnostics
-app.post("/debug/tts_line", requireSecret, async (req: Request, res: Response) => {
-  try {
-    if (!OPENAI_API_KEY) return res.status(500).json({ error: "OPENAI_API_KEY not set" });
-    const voice = String((req.body as any)?.voice || "alloy");
-    const text = String((req.body as any)?.text || "").trim();
-    if (!text) return res.status(400).json({ error: "missing text" });
-
-    const buf = await openaiTts(text, voice, "tts-1");
-    const id = genId("tts");
-    mem.assets.set(id, buf);
-    return res.json({ url: `/api/assets/${id}` });
-  } catch (e: any) {
-    const msg = e?.message || String(e);
-    return res.status(500).json({ error: msg.slice(0, 200) });
-  }
-});
-/* ---------------------------------------------------------- */
-
 // ---------- Routes ----------
 function mountFallbackDebugRoutes() {
   app.get("/debug/ping", requireSecret, (_req, res) => res.json({ ok: true }));
+
+  // NEW: list of supported OpenAI TTS voices (curated)
+  app.get("/debug/voices_probe", requireSecret, (_req: Request, res: Response) => {
+    // Curated voice IDs that are known to work with /v1/audio/speech
+    const voices = ["alloy","verse","aria","luna","echo","fable","onyx","nova","shimmer","solar"];
+    res.json({ voices });
+  });
+
+  app.get("/debug/tts_check", requireSecret, async (_req: Request, res: Response) => {
+    const result = await openaiTtsProbe({ text: "test", voice: "alloy" });
+    if (!result.ok) return res.status(500).json(result);
+    res.json(result);
+  });
 
   app.post("/debug/upload_script_text", requireSecret, (req: Request, res: Response) => {
     const title = String(req.body?.title || "Script");
@@ -259,7 +243,6 @@ function mountFallbackDebugRoutes() {
     res.json({ script_id: id, scene_count: scenes.length, speakers });
   });
 
-  // Robust PDF (text) import
   app.post("/debug/upload_script_upload", requireSecret, upload.single("pdf"), async (req: Request, res: Response) => {
     const title = String((req.body as any)?.title || "PDF");
     const pdfBuf = (req as any).file?.buffer as Buffer | undefined;
@@ -344,11 +327,9 @@ function mountFallbackDebugRoutes() {
         const chunks: Buffer[] = [];
         for (const ln of items) {
           const voice = voiceFor(ln.speaker);
-          const b = await openaiTts(ln.text, voice, "tts-1");
+          const b = await openaiTts(ln.text, voice, "tts-1"); // fast for render
           chunks.push(b);
-          if (paceMs > 0) {
-            // optional silence could be inserted later
-          }
+          if (paceMs > 0) { /* optional spacing in future */ }
         }
 
         const mp3 = concatMp3(chunks.length ? chunks : [await openaiTts(" ", "alloy", "tts-1")]);
@@ -370,16 +351,31 @@ function mountFallbackDebugRoutes() {
     res.json({ status: r.status, download_url: r.url, error: r.err });
   });
 
-  app.get("/api/assets/:render_id", (req: Request, res: Response) => {
-    const rid = String(req.params.render_id || "");
-    const buf = mem.assets.get(rid);
+  app.post("/debug/tts_line", requireSecret, async (req: Request, res: Response) => {
+    const voice = String((req.body as any)?.voice || "alloy");
+    const model = String((req.body as any)?.model || "tts-1");
+    const text = String((req.body as any)?.text || "test");
+    if (!OPENAI_API_KEY) return res.status(500).json({ error: "OPENAI_API_KEY not set" });
+    try {
+      const buf = await openaiTts(text, voice, model);
+      const id = genId("clip");
+      mem.assets.set(id, buf);
+      res.json({ url: `/api/assets/${id}`, voice, model, bytes: buf.length });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || String(e) });
+    }
+  });
+
+  app.get("/api/assets/:id", (req: Request, res: Response) => {
+    const id = String(req.params.id || "");
+    const buf = mem.assets.get(id);
     if (!buf) return res.status(404).json({ error: "asset not found" });
     res.setHeader("Content-Type", "audio/mpeg");
     res.setHeader("Cache-Control", "no-store");
     res.send(buf);
   });
 
-  console.log("[fallback] /debug/* routes active (in-memory, robust PDF import + strict speaker guard)");
+  console.log("[fallback] /debug/* routes active");
 }
 
 // Prefer real project routes if present
@@ -403,7 +399,6 @@ async function tryMountProjectHttpRoutes() {
 
 await tryMountProjectHttpRoutes().then((mounted) => { if (!mounted) mountFallbackDebugRoutes(); });
 
-// Start
 app.listen(PORT, () => {
   console.log(`OffBook MVP listening on http://localhost:${PORT}`);
   if (SHARED) console.log(`Debug routes require header X-Shared-Secret: ${SHARED}`);
