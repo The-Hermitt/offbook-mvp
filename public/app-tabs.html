@@ -366,6 +366,68 @@
       box-shadow:0 18px 40px rgba(3,6,15,0.35);
     }
 
+    /* === Record: 16x9 + right rail (uniform pills / responsive, with grid areas) === */
+    .record-grid{
+      display:grid;
+      grid-template-columns: 1fr 320px;
+      grid-template-rows: auto auto;
+      grid-template-areas:
+        "preview rail"
+        "status  rail";
+      gap:16px;
+      align-items:start;
+    }
+    .preview-wrap{ grid-area: preview; width:100%;
+      background:rgba(9,12,20,0.6);
+      border:1px solid var(--border);
+      border-radius:22px;
+      padding:10px;
+      box-shadow:0 25px 55px rgba(3,6,15,0.45);
+    }
+    .vid16x9{
+      width:100%;
+      aspect-ratio:16/9;
+      background:#000;
+      border-radius:16px;
+      border:1px solid rgba(118,130,164,0.25);
+      object-fit:cover;
+      display:block;
+    }
+    .control-rail{ grid-area: rail; display:grid; grid-template-columns: 1fr; gap:12px }
+    .control-rail .btn{ width:100%; min-height:48px; border-radius:18px }
+    .btn.rec{
+      background:radial-gradient(120px 120px at 50% 30%, rgba(255,88,88,0.4), rgba(255,0,0,0.15)), linear-gradient(135deg, #ff6666, #ff2d2d);
+      color:#fff; box-shadow:0 18px 36px rgba(255,80,80,0.35);
+    }
+    .btn.rec.recording{
+      background:linear-gradient(135deg, #191b28, #121522);
+      color:#ff6969; border:1px solid rgba(255,120,120,0.4);
+    }
+    #statusRec{ grid-area: status; min-height:22px }
+
+    /* --- Portrait: single column, 2x2 controls; status on right of row 3 --- */
+    @media (max-width: 860px){
+      .record-grid{
+        grid-template-columns: 1fr;
+        grid-template-rows: auto auto auto;
+        grid-template-areas:
+          "preview"
+          "rail"
+          "status";
+        gap:12px;
+      }
+      .control-rail{
+        grid-template-columns: 1fr 1fr;
+        gap:12px;
+      }
+      #btnRender{ grid-column: 1 / -1; }
+      #btnRec{ grid-column: 1 / -1; }
+      #btnCamera{ grid-column: 1 / 2; }
+      #btnCountIn{ grid-column: 2 / 3; }
+      #btnHeadphones{ grid-column: 1 / 2; }
+      #statusRec{ grid-column: 2 / 3; }
+    }
+
     /* L→R dots for loading */
     .dots { display:inline-flex; gap:6px; align-items:center; vertical-align:middle }
     .dot { width:6px; height:6px; border-radius:50%; background:#7aa0ff; opacity:.25; }
@@ -522,33 +584,24 @@ JANE: Ready?"></textarea>
 
     <!-- RECORD -->
     <section id="screen-record" class="screen">
-      <div class="card">
-        <h3>Record</h3>
-        <div class="hint">Headphones recommended to avoid echo. This prepares an OpenAI reader track and records your mic (optionally camera).</div>
-        <div class="spacer8"></div>
-        <div class="rec-grid">
-          <video id="preview" class="vid" autoplay muted playsinline></video>
+      <div class="card record-grid">
+        <!-- Left: 16x9 preview window -->
+        <div class="preview-wrap">
+          <video id="preview" class="vid16x9" autoplay muted playsinline></video>
           <audio id="readerAudio" preload="auto" playsinline></audio>
-
-          <div class="row">
-            <button id="btnPrepareReader" class="btn">1) Prepare Reader Track</button>
-            <button id="btnPlayReader" class="btn secondary" disabled>Play Test</button>
-          </div>
-
-          <div class="row">
-            <label class="small"><input type="checkbox" id="chkVideo" /> Record video (camera)</label>
-            <label class="small"><input type="checkbox" id="chkCountIn" checked /> Count-in</label>
-            <label class="small"><input type="checkbox" id="chkHeadphones" checked /> I’m on headphones</label>
-          </div>
-
-          <div class="row">
-            <button id="btnStartRec" class="btn" disabled>2) Start Recording</button>
-            <button id="btnStopRec" class="btn secondary" disabled>Stop</button>
-          </div>
-
-          <label>Status</label>
-          <pre id="statusRec" class="status"></pre>
         </div>
+
+        <!-- Right: compact control rail -->
+        <div class="control-rail">
+          <button id="btnRender" class="btn rail">Render</button>
+          <button id="btnRec" class="btn rec">REC</button>
+          <button id="btnCamera" class="btn secondary rail" aria-pressed="false">Camera: Off</button>
+          <button id="btnCountIn" class="btn secondary rail" aria-pressed="true">Count-in: On</button>
+          <button id="btnHeadphones" class="btn secondary rail" aria-pressed="true">Headphones: On</button>
+        </div>
+
+        <!-- Status: under the video in landscape; grid-placed in portrait -->
+        <pre id="statusRec" class="status"></pre>
       </div>
     </section>
 
@@ -1012,16 +1065,14 @@ JANE: Ready?"></textarea>
       $("#btnToggleEditMode")?.addEventListener("click",()=>{ S.editMode=!S.editMode; applyEditModeUI(); });
       function applyEditModeUI(){ $("#btnToggleEditMode")?.setAttribute("aria-pressed",S.editMode?"true":"false"); $("#editModeState").textContent=S.editMode?"On":"Off"; $$(".editbar",$("#lines")).forEach(el=>el.style.display=S.editMode?"flex":"none"); $$(".inline-slot",$("#lines")).forEach(el=>el.style.display=S.editMode?"flex":"none"); if(E.inlineForm && E.inlineForm.isConnected){ try{ E.inlineForm.remove(); }catch{}; E.currentSlotPlace=null; } }
 
-      /* ----------------- RECORD TAB (unchanged logic) ----------------- */
+      /* ----------------- RECORD TAB (updated for 16x9 + right rail) ----------------- */
       const R = {
         status: $("#statusRec"),
-        btnPrepare: $("#btnPrepareReader"),
-        btnPlayReader: $("#btnPlayReader"),
-        btnStart: $("#btnStartRec"),
-        btnStop: $("#btnStopRec"),
-        chkVideo: $("#chkVideo"),
-        chkCountIn: $("#chkCountIn"),
-        chkHeadphones: $("#chkHeadphones"),
+        btnRender: $("#btnRender"),
+        btnRec: $("#btnRec"),
+        btnCamera: $("#btnCamera"),
+        btnCountIn: $("#btnCountIn"),
+        btnHeadphones: $("#btnHeadphones"),
         audio: $("#readerAudio"),
         preview: $("#preview"),
         countdown: null,
@@ -1031,10 +1082,27 @@ JANE: Ready?"></textarea>
         render_id: "",
         download_url: "",
         takes: [],
+        cameraOn: false,
+        countInOn: true,
+        headphonesOn: true,
+        recording: false,
+        prevSrToggle: null,
       };
       R.audio?.setAttribute("playsinline","");
 
-      function setStatusRec(t){ R.status.textContent = t || ""; }
+      function setStatusRec(t){ R.status.textContent = t || " "; } // keep height
+
+      function setRailStates(){
+        R.btnCamera.setAttribute("aria-pressed", R.cameraOn ? "true":"false");
+        R.btnCamera.textContent = "Camera: " + (R.cameraOn ? "On" : "Off");
+        R.btnCountIn.setAttribute("aria-pressed", R.countInOn ? "true":"false");
+        R.btnCountIn.textContent = "Count-in: " + (R.countInOn ? "On" : "Off");
+        R.btnHeadphones.setAttribute("aria-pressed", R.headphonesOn ? "true":"false");
+        R.btnHeadphones.textContent = "Headphones: " + (R.headphonesOn ? "On" : "Off");
+        if(R.recording){ R.btnRec.classList.add("recording"); R.btnRec.textContent = "STOP"; }
+        else { R.btnRec.classList.remove("recording"); R.btnRec.textContent = "REC"; }
+      }
+
       function pickMime(video){
         const vids = ["video/mp4;codecs=avc1.42E01E,mp4a.40.2","video/mp4","video/webm;codecs=vp8,opus","video/webm"];
         const auds = ["audio/mp4","audio/webm;codecs=opus","audio/webm"];
@@ -1042,15 +1110,40 @@ JANE: Ready?"></textarea>
         for(const m of list){ if(window.MediaRecorder && MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(m)) return m; }
         return "";
       }
-      if(isIOS){ R.chkVideo && (R.chkVideo.checked=false); }
 
+      function cleanupStream(){
+        try{ R.stream?.getTracks().forEach(t=>t.stop()); }catch{}
+        R.stream = null;
+        if(R.preview) R.preview.srcObject = null;
+      }
+
+      function resetMicAfterRecording(){
+        if(R.prevSrToggle === null){ updateMicBadge(); return; }
+        const prev = R.prevSrToggle;
+        R.prevSrToggle = null;
+        if(prev){
+          srToggleOn = true;
+          startMicMonitor();
+        }else{
+          srToggleOn = false;
+          stopMicMonitor();
+        }
+        updateMicBadge();
+      }
+
+      /* --- Render reader (animated dots in status) --- */
       async function prepareReader(){
         if(!S.script_id){ setStatusRec("Import & Assign first."); return; }
-        setStatusRec("Preparing reader track…"); R.btnPrepare.disabled = true;
+        let dots = 0;
+        let dotsTimer = setInterval(()=>{
+          dots = (dots+1)%4;
+          setStatusRec("Preparing reader track" + ".".repeat(dots));
+        }, 320);
+        setStatusRec("Preparing reader track."); R.btnRender.disabled = true;
         try{
           const r = await fetch("/debug/render", { method:"POST", headers:JSON_HDRS, body:JSON.stringify({ script_id:S.script_id, my_role:(S.role||"").toUpperCase(), pace_ms:0 }) });
           const j = await safeJson(r);
-          if(!r.ok){ setStatusRec("Render error "+r.status+": "+JSON.stringify(j)); R.btnPrepare.disabled=false; return; }
+          if(!r.ok){ clearInterval(dotsTimer); setStatusRec("Render error "+r.status+": "+JSON.stringify(j)); R.btnRender.disabled=false; return; }
           R.render_id = j.render_id;
           const poll = async ()=>{
             const s = await fetch(`/debug/render_status?render_id=${encodeURIComponent(R.render_id)}`, { headers:JSON_HDRS });
@@ -1058,79 +1151,169 @@ JANE: Ready?"></textarea>
             if(js.status==="complete" && js.download_url){
               R.download_url = js.download_url + "?t=" + Date.now();
               R.audio.src = R.download_url; R.audio.load();
-              R.btnPlayReader.disabled = false; R.btnStart.disabled = false;
+              clearInterval(dotsTimer);
               setStatusRec("Reader ready.");
+              R.btnRender.disabled = false;
             }else if(js.status==="error"){
-              setStatusRec("Render failed: "+(js.error||"unknown")); R.btnPrepare.disabled=false;
+              clearInterval(dotsTimer);
+              setStatusRec("Render failed: "+(js.error||"unknown")); R.btnRender.disabled=false;
             }else{ setTimeout(poll, 500); }
           };
           setTimeout(poll, 500);
-        }catch(e){ setStatusRec("Network error: "+e); R.btnPrepare.disabled=false; }
+        }catch(e){
+          clearInterval(dotsTimer);
+          setStatusRec("Network error: "+e); R.btnRender.disabled=false;
+        }
       }
-      $("#btnPrepareReader")?.addEventListener("click", prepareReader);
 
-      $("#btnPlayReader")?.addEventListener("click", async ()=>{ try{ R.audio.currentTime = 0; await R.audio.play(); setStatusRec("Playing reader…"); }catch{ setStatusRec("Couldn’t play. Tap again or toggle mute once."); } });
+      /* --- Count-in: visible 3-2-1 with slower beeps --- */
+      async function doBeepsAndCountdown(){
+        if(!R.countInOn) return;
+        const overlay = $("#countdown"), num = $("#countNum");
+        if(overlay){ overlay.style.display="flex"; }
 
-      function makeCountdown(){ if(R.countdown) return R.countdown; const div=document.createElement("div"); div.className="countdown"; div.innerHTML=`<div class="count-num" id="countNum">3</div>`; document.body.appendChild(div); R.countdown = div; return div; }
-      async function doCountdownIfEnabled(){ if(!R.chkCountIn.checked) return; const c=makeCountdown(); const num=$("#countNum",c); c.classList.add("show"); for(let n=3;n>=1;n--){ num.textContent=String(n); await new Promise(r=>setTimeout(r,800)); } c.classList.remove("show"); }
+        const ctx = new (window.AudioContext||window.webkitAudioContext)();
+        const beep = (freq, dur=0.28)=> new Promise(res=>{
+          const o=ctx.createOscillator(), g=ctx.createGain();
+          o.frequency.value=freq; o.type="sine"; g.gain.value=0.18;
+          o.connect(g); g.connect(ctx.destination); o.start();
+          setTimeout(()=>{ o.stop(); res(); }, dur*1000);
+        });
 
+        const step = async (n, freq)=>{ if(num){ num.textContent=String(n); } await beep(freq); await new Promise(r=>setTimeout(r,520)); };
+
+        await step(3, 880);
+        await step(2, 880);
+        await step(1, 660);
+
+        try{ await ctx.close(); }catch{}
+        if(overlay){ overlay.style.display="none"; }
+      }
+
+      /* --- Recording flow --- */
       async function startPreviewIfNeeded(){
-        if(!R.chkVideo.checked){ R.preview.srcObject=null; return; }
+        if(!R.cameraOn){ R.preview.srcObject=null; return; }
         try{
           if(!R.stream){ const st = await navigator.mediaDevices.getUserMedia({ video:true, audio:true }); R.stream = st; }
           R.preview.srcObject = R.stream;
         }catch(e){ setStatusRec("Camera/mic permission denied: "+e); }
       }
-      $("#chkVideo")?.addEventListener("change", startPreviewIfNeeded);
 
       async function startRecording(){
-        if(!R.download_url){ setStatusRec("Prepare the reader first."); return; }
+        const prepped = (RR.map && RR.map.size > 0) || !!R.download_url;
+        if(!prepped){ setStatusRec("Render first."); return; }
         try{
-          const needVideo=!!R.chkVideo.checked;
+          const needVideo = !!R.cameraOn;
           R.stream = await navigator.mediaDevices.getUserMedia({ audio:true, video:needVideo });
           R.preview.srcObject = needVideo ? R.stream : null;
         }catch(e){ setStatusRec("Permission error: "+e); return; }
-        await doCountdownIfEnabled();
+
+        await doBeepsAndCountdown(); // count-in beeps if enabled
+
+        /* Enable the same listen/respond flow as Rehearse */
+        R.prevSrToggle = srToggleOn;
+        try{
+          // grant mic & energy monitor so auto-advance works like Rehearse
+          await requestMicPermissionOnce();
+          srToggleOn = true;    // mirror "Mic: On"
+          startMicMonitor();
+        }catch{}
+        updateMicBadge();
+
+        /* Begin capture */
         R.chunks = [];
-        const mime = pickMime(!!R.chkVideo.checked);
-        try{ R.rec = mime ? new MediaRecorder(R.stream, { mimeType: mime }) : new MediaRecorder(R.stream); }catch{ R.rec = new MediaRecorder(R.stream); }
+        const mime = pickMime(!!R.cameraOn);
+        try{ R.rec = mime ? new MediaRecorder(R.stream, { mimeType: mime }) : new MediaRecorder(R.stream); }
+        catch{ R.rec = new MediaRecorder(R.stream); }
         R.rec.ondataavailable = (e)=>{ if(e.data && e.data.size>0) R.chunks.push(e.data); };
-        R.rec.onstop = finalizeTake;
+        R.rec.onstop = ()=>{
+          try{ playing = false; window.speechSynthesis?.cancel(); E?.rehearseAudio?.pause(); }catch{}
+          try{ sr?.stop(); }catch{}
+          resetMicAfterRecording();
+          finalizeTake();
+          cleanupStream();
+          R.recording=false;
+          setRailStates();
+        };
+        R.recording = true; setRailStates();
         R.rec.start();
+
+        /* Kick off line-by-line playback using the same step() as Rehearse */
+        try{
+          playing = true;
+          step(true);
+          // watcher: when reader flow finishes, stop the recorder automatically
+          const endWatch = setInterval(()=>{
+            if(!R.recording) return clearInterval(endWatch);
+            if(!playing){
+              try{ R.rec?.stop(); }catch{}
+              clearInterval(endWatch);
+            }
+          }, 300);
+        }catch{}
+
         try{ R.audio.currentTime = 0; await R.audio.play(); }catch{}
         R.audio.onended = ()=>{ setTimeout(()=>{ try{ R.rec?.stop(); }catch{} }, 120); };
-        R.btnStart.disabled = true; R.btnStop.disabled = false; setStatusRec("Recording…");
+        setStatusRec("Recording…");
       }
-      $("#btnStartRec")?.addEventListener("click", startRecording);
 
-      function stopRecording(){ try{ R.rec?.stop(); }catch{} setStatusRec("Stopping…"); }
-      $("#btnStopRec")?.addEventListener("click", stopRecording);
+      function stopRecording(){
+        try{ R.rec?.stop(); }catch{}
+        // stop the reader flow too
+        try{ playing = false; window.speechSynthesis?.cancel(); E?.rehearseAudio?.pause(); }catch{}
+        try{ sr?.stop(); }catch{}
+        resetMicAfterRecording();
+        cleanupStream();
+        setStatusRec("Stopping…");
+      }
 
       function finalizeTake(){
-        const isVid = !!R.chkVideo.checked;
+        const isVid = !!R.cameraOn;
         const blob = new Blob(R.chunks, { type: (R.rec && R.rec.mimeType) ? R.rec.mimeType : (isVid ? "video/mp4" : "audio/mp4") });
         const url = URL.createObjectURL(blob);
         const ts = new Date().toISOString().replace(/[:.]/g,"-");
         const ext = (blob.type.startsWith("video/") ? "mp4" : (blob.type.includes("webm") ? "webm" : "m4a"));
         const name = `${isVid?"take-video":"take-audio"}-${ts}.${ext}`;
         R.takes.unshift({ url, name, type: blob.type, size: blob.size });
-        renderTakes();
-        R.btnStop.disabled = true; R.btnStart.disabled = false; setStatusRec("Saved to Gallery.");
+        setStatusRec("Saved to Gallery.");
       }
 
-      function renderTakes(){
-        const box=$("#takes");
-        box.innerHTML = R.takes.map((t,i)=>{
-          const sz = (t.size/1024/1024).toFixed(2)+" MB";
-          const player = t.type.startsWith("video/") ? `<video src="${t.url}" class="vid" controls playsinline></video>` : `<audio src="${t.url}" controls></audio>`;
-          return `<div class="gallery-item">
-            <div class="row" style="align-items:center">
-              <div><strong>${t.name}</strong><div class="small">${t.type} • ${sz}</div></div>
-              <div style="text-align:right"><a class="btn secondary sm" href="${t.url}" download="${t.name}">Download</a></div>
-            </div><div class="spacer6"></div>${player}
-          </div>`;
-        }).join("") || `<p class="hint">No takes yet. Record one from the Record tab.</p>`;
-      }
+      /* --- Button wiring --- */
+      R.btnRender?.addEventListener("click", async ()=>{
+        setStatusRec("Preparing voices…");
+        try{
+          // fills RR.map
+          await renderRehearseVoices();
+          setStatusRec("Reader ready.");
+        }catch(e){
+          setStatusRec("Render error: "+e);
+        }
+      });
+
+      R.btnRec?.addEventListener("click", ()=>{
+        if(R.recording) { stopRecording(); }
+        else { startRecording(); }
+      });
+
+      R.btnCamera?.addEventListener("click", async ()=>{
+        R.cameraOn = !R.cameraOn;
+        setRailStates();
+        await startPreviewIfNeeded();
+      });
+
+      R.btnCountIn?.addEventListener("click", ()=>{ R.countInOn = !R.countInOn; setRailStates(); });
+      R.btnHeadphones?.addEventListener("click", ()=>{ R.headphonesOn = !R.headphonesOn; setRailStates(); });
+
+      /* Warm permissions when user navigates to Record */
+      const _origShowScreen = showScreen;
+      showScreen = function(name){
+        _origShowScreen(name);
+        if(name==="record"){
+          try{ requestMicPermissionOnce(); }catch{}
+          try{ startPreviewIfNeeded(); }catch{}
+          setRailStates();
+        }
+      };
 
       // initial safe boot
       try{
@@ -1150,5 +1333,9 @@ JANE: Ready?"></textarea>
       if (eb) { eb.textContent = "Fatal init error: "+e; eb.classList.add("show"); }
     }
   </script>
+
+  <div class="countdown" id="countdown" aria-hidden="true" style="display:none">
+    <div class="count-num" id="countNum">3</div>
+  </div>
 </body>
 </html>
