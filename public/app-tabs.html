@@ -1,4 +1,4 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
@@ -247,6 +247,19 @@
       letter-spacing:.3px;
     }
     .small{ font-size:12px; color:var(--muted); letter-spacing:.2px }
+
+    /* Rehearse render status — keep visible and readable */
+    #rehearseRenderStatus{
+      display:block;
+      margin-top:6px;
+      padding:8px 10px;
+      background:rgba(9,12,20,0.65);
+      border:1px dashed rgba(147,160,195,0.35);
+      border-radius:12px;
+      line-height:1.35;
+      min-height:22px;              /* keeps the bar from collapsing */
+    }
+    #rehearseRenderStatus .dots{ margin-left:6px }
     /* Rehearse */
     .line{
       padding:12px 14px;
@@ -295,9 +308,9 @@
     /* Sticky toolbar */
     .toolbar{
       position:sticky;
-      top:0;
+      top:0;               /* stays pinned, but no overlap */
       z-index:30;
-      margin:-20px -20px 16px;
+      margin:0 -20px 16px; /* remove negative top margin that hid status */
       padding:16px env(safe-area-inset-right) 16px env(safe-area-inset-left);
       background:linear-gradient(180deg, rgba(10,12,20,0.92) 0%, rgba(9,11,18,0.88) 100%);
       border-bottom:1px solid rgba(118,130,164,0.2);
@@ -900,7 +913,7 @@ JANE: Ready?"></textarea>
       function setRehearseRenderStatus(msg, cls){
         const el = $("#rehearseRenderStatus");
         el.innerHTML = "";
-        if(!msg) return;
+        if(!msg){ el.textContent = " "; return; } // keep the bar’s height even when idle
         const span = document.createElement("span");
         if(cls) span.style.color = (cls==="ok"? "var(--ok)" : cls==="err" ? "var(--danger)" : cls==="warn" ? "var(--warn)" : "var(--muted)");
         span.textContent = msg + " ";
