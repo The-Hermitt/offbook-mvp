@@ -6,6 +6,13 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
   <style>
     :root { --bg:#0b0c0f; --panel:#111318; --panel-2:#151823; --text:#eaf0ff; --muted:#a7b0c5; --border:#252a36; --focus:#3b82f6; --accent:#3b82f6; --danger:#ef4444; --ok:#16a34a; --warn:#f4c542; --maxw:720px; }
+    /* Record-tab width + bottom nav alignment (active only on Record) */
+    body.tab-record main { max-width: 1200px; }
+    body.tab-record .tabbar-inner { max-width: 1200px; }
+
+    /* Monochrome toggle “on” state + utility */
+    .is-on { outline:2px solid rgba(255,255,255,.08); background:#11141c !important; }
+    .hidden { display:none !important; }
     *{ box-sizing:border-box } html,body{ margin:0; padding:0; background:var(--bg); color:var(--text); font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial }
     header{ padding:14px 16px; font-weight:700; letter-spacing:.2px }
     main{ padding:12px 12px 92px; max-width:var(--maxw); margin:0 auto; pointer-events:auto }
@@ -200,33 +207,59 @@ JANE: Ready?"></textarea>
 
     <!-- RECORD -->
     <section id="screen-record" class="screen">
-      <div class="card">
-        <h3>Record</h3>
-        <div class="hint">Headphones recommended to avoid echo. This prepares an OpenAI reader track and records your mic (optionally camera).</div>
-        <div class="spacer8"></div>
-        <div class="rec-grid">
-          <video id="preview" class="vid" autoplay muted playsinline></video>
-          <audio id="readerAudio" preload="auto" playsinline></audio>
+      <style>
+        /* Scoped to Record section to avoid touching other tabs */
+        .record-shell{ width:min(92vw,1200px); margin:0 auto 28px; display:flex; gap:20px; align-items:stretch; justify-content:center; padding:0 6px; }
+        .record-left{ flex:1 1 auto; min-width:0; aspect-ratio:16/9; background:#000; border:1px solid var(--border); border-radius:14px; overflow:hidden; display:flex; align-items:center; justify-content:center; box-shadow:0 10px 30px rgba(0,0,0,.4) }
+        .record-left video{ width:100%; height:100%; object-fit:cover; background:#000 } /* pure black before stream */
+        .record-right{ flex:0 0 320px; background:var(--panel); border:1px solid var(--border); border-radius:14px; padding:20px; display:flex; flex-direction:column; justify-content:space-between; box-shadow:0 10px 24px rgba(0,0,0,.35) }
+        .record-controls{ display:flex; flex-direction:column; align-items:center; gap:14px }
+        .record-controls .btn, .record-toggles .btn{ width:100%; background:#0c0f16; color:var(--text); border:1px solid var(--border); border-radius:12px; padding:12px 14px; font-weight:700; font-size:14px; text-transform:uppercase; letter-spacing:.5px; transition:background .2s,border-color .2s,opacity .2s }
+        .record-controls .btn:hover:not(:disabled), .record-toggles .btn:hover:not(:disabled){ background:#11141c }
+        .record-controls .btn:disabled, .record-toggles .btn:disabled{ opacity:.5; cursor:not-allowed }
+        .record-controls .btn.rec{ width:104px; height:104px; border-radius:50%; border:none; background:radial-gradient(circle at 30% 30%,#ff5d5d,#c31818); color:#fff; font-weight:800; font-size:16px; letter-spacing:1px; box-shadow:0 10px 26px rgba(255,0,0,.35) }
+        .record-controls .btn.rec.active{ background:radial-gradient(circle at 30% 30%,#e03b3b,#991212); box-shadow:0 0 20px rgba(255,60,60,.55) }
+        .record-toggles{ display:flex; flex-direction:column; gap:10px; width:100% }
+        .record-status{ margin-top:12px }
+        .record-status label{ display:block; margin:0 0 6px; font-size:12px; color:var(--muted) }
+        .record-status pre{ background:#0c0f16; border:1px dashed var(--border); border-radius:10px; padding:8px; color:#a7b0c5; font-size:12px; min-height:24px; margin:0 }
+        @media (max-width:900px){ .record-shell{ flex-direction:column; gap:14px } .record-right{ flex-basis:auto; width:100% } }
+      </style>
 
-          <div class="row">
-            <button id="btnPrepareReader" class="btn">1) Prepare Reader Track</button>
-            <button id="btnPlayReader" class="btn secondary" disabled>Play Test</button>
-          </div>
-
-          <div class="row">
-            <label class="small"><input type="checkbox" id="chkVideo" /> Record video (camera)</label>
-            <label class="small"><input type="checkbox" id="chkCountIn" checked /> Count-in</label>
-            <label class="small"><input type="checkbox" id="chkHeadphones" checked /> I’m on headphones</label>
-          </div>
-
-          <div class="row">
-            <button id="btnStartRec" class="btn" disabled>2) Start Recording</button>
-            <button id="btnStopRec" class="btn secondary" disabled>Stop</button>
-          </div>
-
-          <label>Status</label>
-          <pre id="statusRec" class="status"></pre>
+      <div class="record-shell">
+        <!-- Left: camera view -->
+        <div class="record-left">
+          <video id="preview" autoplay muted playsinline></video>
         </div>
+
+        <!-- Right: controls (monochrome, only REC is red) -->
+        <div class="record-right">
+          <div class="record-controls">
+            <button id="btnRender" class="btn">Render</button>
+            <button id="btnRec" class="btn rec">REC</button>
+            <div class="record-toggles">
+              <button id="btnCamera" class="btn" aria-pressed="false">Camera</button>
+              <button id="btnCountIn" class="btn is-on" aria-pressed="true">Count-In</button>
+              <button id="btnHeadphones" class="btn is-on" aria-pressed="true">Headphones</button>
+            </div>
+          </div>
+          <div class="record-status">
+            <label for="statusRec">Status</label>
+            <pre id="statusRec" class="status"></pre>
+          </div>
+        </div>
+      </div>
+
+      <!-- Keep the legacy elements hidden so existing JS logic continues to work -->
+      <div class="hidden">
+        <button id="btnPrepareReader" class="btn">1) Prepare Reader Track</button>
+        <button id="btnPlayReader" class="btn secondary" disabled>Play Test</button>
+        <label><input type="checkbox" id="chkVideo" /></label>
+        <label><input type="checkbox" id="chkCountIn" checked /></label>
+        <label><input type="checkbox" id="chkHeadphones" checked /></label>
+        <button id="btnStartRec" class="btn" disabled>Start</button>
+        <button id="btnStopRec" class="btn secondary" disabled>Stop</button>
+        <audio id="readerAudio" preload="auto" playsinline></audio>
       </div>
     </section>
 
@@ -277,6 +310,9 @@ JANE: Ready?"></textarea>
         $$(".countdown").forEach(x=>x.classList.remove("show"));
         $$(".screen").forEach(s=>s.classList.remove("active"));
         $("#screen-"+name).classList.add("active");
+        
+        // NEW: widen layout only on the Record tab
+        document.body.classList.toggle("tab-record", name === "record");
         $$(".tabbar button").forEach(b=>b.classList.remove("active"));
         const btn=document.querySelector(`.tabbar button[data-tab="${name}"]`);
         if(btn) btn.classList.add("active");
@@ -794,7 +830,54 @@ JANE: Ready?"></textarea>
         R.takes.unshift({ url, name, type: blob.type, size: blob.size });
         renderTakes();
         R.btnStop.disabled = true; R.btnStart.disabled = false; setStatusRec("Saved to Gallery.");
+        setRecUi(false);
       }
+
+      /* === New Record UI wiring: Render + Monochrome toggles + single REC/STOP === */
+      const btnRender = $("#btnRender");
+      const btnRec = $("#btnRec");
+      const btnCamera = $("#btnCamera");
+      const btnCountIn = $("#btnCountIn");
+      const btnHeadphones = $("#btnHeadphones");
+
+      function setPressed(btn, on){
+        if(!btn) return;
+        btn.classList.toggle("is-on", !!on);
+        btn.setAttribute("aria-pressed", on ? "true" : "false");
+      }
+      function setRecUi(on){
+        if(!btnRec) return;
+        btnRec.classList.toggle("active", !!on);
+        btnRec.textContent = on ? "STOP" : "REC";
+      }
+
+      // Render = existing prepareReader()
+      btnRender?.addEventListener("click", ()=> prepareReader());
+
+      // Monochrome toggles flip the hidden checkboxes your logic already uses
+      btnCamera?.addEventListener("click", ()=>{
+        if(!R.chkVideo) return;
+        R.chkVideo.checked = !R.chkVideo.checked;
+        setPressed(btnCamera, R.chkVideo.checked);
+        R.chkVideo.dispatchEvent(new Event("change"));
+      });
+      btnCountIn?.addEventListener("click", ()=>{
+        if(!R.chkCountIn) return;
+        R.chkCountIn.checked = !R.chkCountIn.checked;
+        setPressed(btnCountIn, R.chkCountIn.checked);
+      });
+      btnHeadphones?.addEventListener("click", ()=>{
+        if(!R.chkHeadphones) return;
+        R.chkHeadphones.checked = !R.chkHeadphones.checked;
+        setPressed(btnHeadphones, R.chkHeadphones.checked);
+      });
+
+      // One-button REC/STOP that drives your existing start/stop functions
+      btnRec?.addEventListener("click", ()=>{
+        const recording = R.rec && R.rec.state === "recording";
+        if(!recording){ startRecording(); setRecUi(true); }
+        else { stopRecording(); /* UI resets in finalizeTake via setRecUi(false) */ }
+      });
 
       function renderTakes(){
         const box=$("#takes");
