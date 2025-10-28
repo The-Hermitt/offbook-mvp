@@ -366,24 +366,27 @@
       box-shadow:0 18px 40px rgba(3,6,15,0.35);
     }
 
-    /* === Record: 16x9 + right rail (uniform pills / responsive, with grid areas) === */
+    /* === Record: 16x9 + right rail (uniform pills / responsive with grid areas) === */
     .record-grid{
       display:grid;
-      grid-template-columns: 1fr 320px;
+      grid-template-columns: minmax(0,1.2fr) 300px; /* more space to the preview */
       grid-template-rows: auto auto;
       grid-template-areas:
         "preview rail"
         "status  rail";
-      gap:16px;
+      gap:14px;
       align-items:start;
     }
+
     .preview-wrap{ grid-area: preview; width:100%;
       background:rgba(9,12,20,0.6);
       border:1px solid var(--border);
       border-radius:22px;
-      padding:10px;
+      padding:12px;
       box-shadow:0 25px 55px rgba(3,6,15,0.45);
+      position:relative;
     }
+
     .vid16x9{
       width:100%;
       aspect-ratio:16/9;
@@ -393,8 +396,11 @@
       object-fit:cover;
       display:block;
     }
+
     .control-rail{ grid-area: rail; display:grid; grid-template-columns: 1fr; gap:12px }
-    .control-rail .btn{ width:100%; min-height:48px; border-radius:18px }
+    .control-rail .btn{ width:100%; min-height:48px; border-radius:18px } /* uniform pills */
+
+    /* REC visual states */
     .btn.rec{
       background:radial-gradient(120px 120px at 50% 30%, rgba(255,88,88,0.4), rgba(255,0,0,0.15)), linear-gradient(135deg, #ff6666, #ff2d2d);
       color:#fff; box-shadow:0 18px 36px rgba(255,80,80,0.35);
@@ -403,9 +409,32 @@
       background:linear-gradient(135deg, #191b28, #121522);
       color:#ff6969; border:1px solid rgba(255,120,120,0.4);
     }
-    #statusRec{ grid-area: status; min-height:22px }
 
-    /* --- Portrait: single column, 2x2 controls; status on right of row 3 --- */
+    #statusRec{
+      grid-area: status;
+      min-height:22px;
+      padding:10px 12px;
+      white-space:pre;                 /* no weird line breaks */
+      overflow:auto;
+    }
+
+    /* Flip camera translucent overlay */
+    .flipcam{
+      position:absolute;
+      right:16px; bottom:16px;
+      width:44px; height:44px;
+      border-radius:999px;
+      border:1px solid rgba(147,160,195,0.35);
+      background:rgba(12,15,24,0.55);
+      color:#cfd7ff;
+      font-weight:700;
+      box-shadow:0 10px 24px rgba(3,6,15,0.35);
+      backdrop-filter:blur(8px);
+      cursor:pointer;
+    }
+    .flipcam:active{ transform:scale(0.98) }
+
+    /* --- Portrait (stack): Render+REC full width, then 2x2 control rows --- */
     @media (max-width: 860px){
       .record-grid{
         grid-template-columns: 1fr;
@@ -417,15 +446,32 @@
         gap:12px;
       }
       .control-rail{
+        display:grid;
         grid-template-columns: 1fr 1fr;
         gap:12px;
+        align-items:start;
       }
+      /* Row 1: Render + REC full width */
       #btnRender{ grid-column: 1 / -1; }
       #btnRec{ grid-column: 1 / -1; }
+
+      /* Row 2: Camera | Count-in */
       #btnCamera{ grid-column: 1 / 2; }
       #btnCountIn{ grid-column: 2 / 3; }
-      #btnHeadphones{ grid-column: 1 / 2; }
-      #statusRec{ grid-column: 2 / 3; }
+
+      /* Row 3: Headphones full width; Status full width under it */
+      #btnHeadphones{ grid-column: 1 / -1; }
+      #statusRec{ grid-column: 1 / -1; }
+
+      /* Prevent odd narrow wrapping on status in portrait */
+      #statusRec{ white-space: normal; min-height: 44px; }
+    }
+
+    /* --- Landscape: single rail column with identical widths --- */
+    @media (min-width: 861px){
+      .control-rail{ grid-template-columns: 1fr; }
+      /* ensure status stays under preview column */
+      #statusRec{ grid-column: 1 / 2; }
     }
 
     /* L→R dots for loading */
@@ -591,6 +637,10 @@ JANE: Ready?"></textarea>
           <audio id="readerAudio" preload="auto" playsinline></audio>
         </div>
 
+          <!-- overlay flip button -->
+          <button id="btnFlipCam" class="flipcam" aria-label="Flip camera" title="Flip camera">⟳</button>
+        </div>
+
         <!-- Right: compact control rail -->
         <div class="control-rail">
           <button id="btnRender" class="btn rail">Render</button>
@@ -600,7 +650,7 @@ JANE: Ready?"></textarea>
           <button id="btnHeadphones" class="btn secondary rail" aria-pressed="true">Headphones: On</button>
         </div>
 
-        <!-- Status: under the video in landscape; grid-placed in portrait -->
+        <!-- Status under preview in landscape; spans full width in portrait -->
         <pre id="statusRec" class="status"></pre>
       </div>
     </section>
@@ -648,13 +698,25 @@ JANE: Ready?"></textarea>
       function showErr(msg){ errbar.textContent=msg; errbar.classList.add("show"); }
 
       function showScreen(name){
-        // hide any overlays that could block touches
         $$(".countdown").forEach(x=>x.classList.remove("show"));
+        stopAllAudioHard();
+        if(name!=="record"){
+          try{ if(R?.recording){ stopRecording(); } }catch{}
+          try{ cleanupStream(); }catch{}
+        }
         $$(".screen").forEach(s=>s.classList.remove("active"));
         $("#screen-"+name).classList.add("active");
         $$(".tabbar button").forEach(b=>b.classList.remove("active"));
         const btn=document.querySelector(`.tabbar button[data-tab="${name}"]`);
         if(btn) btn.classList.add("active");
+        if(name==="rehearse"){
+          try{ primeReaderFromCacheIfAvailable(); }catch{}
+        }else if(name==="record"){
+          try{ primeReaderFromCacheIfAvailable(); }catch{}
+          try{ requestMicPermissionOnce(); }catch{}
+          try{ startPreviewIfNeeded(); }catch{}
+          try{ setRailStates(); }catch{}
+        }
       }
       $$(".tabbar button").forEach(b=>b.addEventListener("click",()=>showScreen(b.dataset.tab)));
 
@@ -669,6 +731,34 @@ JANE: Ready?"></textarea>
       // helpers
       const setStatus = msg => $("#status").textContent = msg || "";
       const setStatusPdf = msg => $("#statusPdf").textContent = msg || "";
+
+      // --- Global audio stop (kills any lingering playback/SR) ---
+      function stopAllAudioHard() {
+        try { window.speechSynthesis?.cancel(); } catch {}
+        try { E?.rehearseAudio?.pause(); E.rehearseAudio.currentTime = 0; } catch {}
+        try { R?.audio?.pause(); R.audio.currentTime = 0; } catch {}
+        try { sr?.stop(); } catch {}
+        try { clearMy?.(); } catch {}
+        try { playing = false; } catch {}
+      }
+
+      // Persist cached reader clips across tabs (and reloads)
+      const ReaderCache = {
+        get() {
+          try {
+            const raw = sessionStorage.getItem("rr_map_v1");
+            if (!raw) return new Map();
+            const arr = JSON.parse(raw);
+            return new Map(arr);
+          } catch { return new Map(); }
+        },
+        set(map) {
+          try {
+            const arr = Array.from(map.entries());
+            sessionStorage.setItem("rr_map_v1", JSON.stringify(arr));
+          } catch {}
+        }
+      };
 
       async function safeJson(r){ const t=await r.text(); try{return JSON.parse(t)}catch{return {raw:t}} }
 
@@ -963,6 +1053,20 @@ JANE: Ready?"></textarea>
 
       // OpenAI pre-render (status shows actual error text)
       const RR = { map: new Map(), failures: 0, rendering: false, dotsTimer: null, dotsState: [0,0,0] };
+
+      function primeReaderFromCacheIfAvailable(){
+        try{
+          if(RR.map && RR.map.size) return true;
+          const cached = ReaderCache.get();
+          if(cached && typeof cached.size === "number" && cached.size){
+            RR.map = new Map(cached);
+            return true;
+          }
+        }catch{}
+        return false;
+      }
+
+      primeReaderFromCacheIfAvailable();
       function setRehearseRenderStatus(msg, cls){
         const el = $("#rehearseRenderStatus");
         el.innerHTML = "";
@@ -984,43 +1088,74 @@ JANE: Ready?"></textarea>
       async function renderRehearseVoices(){
         if(RR.rendering) return;
         const scene = getScene();
-        const list = buildFiltered(scene);
+        const list  = buildFiltered(scene);
         if(!list.length){ setRehearseRenderStatus("No lines to render.","err"); return; }
-        RR.rendering = true; RR.failures = 0; RR.map.clear(); startDots(); setRehearseRenderStatus("Preparing voices…","");
+
+        RR.rendering = true; RR.failures = 0; RR.map.clear(); startDots(); setRehearseRenderStatus("Preparing voices…"," ");
 
         const voiceFor = (name)=> (S.voice_map[name] || S.supportedVoices[0] || "alloy");
-        const model = ($("#selTtsModel")).value || "tts-1";
+        const model    = ($("#selTtsModel")).value || "tts-1";
 
-        const concurrency = 3;
+        const CONCURRENCY = isIOS ? 2 : 3;
+        const MAX_ATTEMPTS = 3;
+        const TIMEOUT_MS   = 30000;
+
         let i = 0, done = 0, firstErr = null;
-        async function next(){
-          if(i>=list.length) return;
-          const myIndex = i++; const ln = list[myIndex];
-          if(ln.speaker === myName()){ done++; setRehearseRenderStatus(`Preparing voices… ${done}/${list.length}`,""); return next(); }
+        const run = async () => {
+          for(;;){
+            const myIndex = i++;
+            if (myIndex >= list.length) return;
 
-          const ctrl = new AbortController();
-          const to = setTimeout(()=>ctrl.abort(), 15000);
+            const ln = list[myIndex];
+            if (ln.speaker === myName()){ done++; setRehearseRenderStatus(`Preparing voices… ${done}/${list.length}`," "); continue; }
 
-          try{
-            const r = await fetch("/debug/tts_line", { method:"POST", headers:JSON_HDRS, body:JSON.stringify({ voice: voiceFor(ln.speaker), model, text: ln.text }), signal: ctrl.signal });
-            const txt = await r.text();
-            let j = {}; try { j = JSON.parse(txt); } catch {}
-            if(r.ok && j && j.url){ RR.map.set(myIndex, j.url); }
-            else { RR.failures++; if(!firstErr) firstErr = txt || ("HTTP "+r.status); }
-          }catch(e){ RR.failures++; if(!firstErr) firstErr = String(e||"error"); }
-          finally{ clearTimeout(to); done++; if(done%2===0) setRehearseRenderStatus(`Preparing voices… ${done}/${list.length}`, ""); }
+            const attempt = async (n) => {
+              const ctrl = new AbortController();
+              const to   = setTimeout(()=>ctrl.abort(), TIMEOUT_MS);
+              try {
+                const r = await fetch("/debug/tts_line", {
+                  method:"POST", headers:JSON_HDRS,
+                  body:JSON.stringify({ voice: voiceFor(ln.speaker), model, text: ln.text }),
+                  signal: ctrl.signal
+                });
+                const txt = await r.text();
+                let j={}; try { j = JSON.parse(txt); } catch {}
+                if (r.ok && j && j.url) return j.url;
 
-          return next();
-        }
-        await Promise.all(Array.from({length:concurrency},()=>next()));
+                if ([429,500,502,503,504].includes(r.status)) throw new Error("retryable "+r.status);
+                throw new Error("bad "+r.status+" "+txt.slice(0,80));
+              } catch (e) {
+                if (n < MAX_ATTEMPTS) {
+                  const backoff = 400 * Math.pow(2, n) + Math.random()*150;
+                  await new Promise(res => setTimeout(res, backoff));
+                  return attempt(n+1);
+                }
+                throw e;
+              } finally { clearTimeout(to); }
+            };
+
+            try {
+              const url = await attempt(0);
+              RR.map.set(myIndex, url);
+            } catch(e) {
+              RR.failures++; if(!firstErr) firstErr = String(e||"error");
+            } finally {
+              done++; if (done % 2 === 0) setRehearseRenderStatus(`Preparing voices… ${done}/${list.length}`, "");
+            }
+          }
+        };
+
+        await Promise.all(Array.from({length:CONCURRENCY}, run));
 
         RR.rendering = false; stopDots();
+        ReaderCache.set(RR.map);
+
         const okCount = RR.map.size;
         setRehearseRenderStatus(
           okCount
-            ? `Voices ready: ${okCount} lines${RR.failures? ` (fallback on ${RR.failures})`:""}${firstErr? ` — last error: ${String(firstErr).slice(0,120)}`:""}`
+            ? `Voices ready: ${okCount} lines${RR.failures ? ` (fallback on ${RR.failures})`:""}${firstErr? ` — last error: ${String(firstErr).slice(0,120)}`:""}`
             : `No OpenAI clips prepared${firstErr? ` — error: ${String(firstErr).slice(0,160)}`:""}`,
-          okCount? (RR.failures?"warn":"ok") : "err"
+          okCount ? (RR.failures ? "warn":"ok") : "err"
         );
       }
       function clearRehearseRender(){ RR.map.clear(); RR.failures=0; stopDots(); setRehearseRenderStatus("Cleared pre-render.","warn"); }
@@ -1087,6 +1222,11 @@ JANE: Ready?"></textarea>
         headphonesOn: true,
         recording: false,
         prevSrToggle: null,
+        facing: "user",               // or "environment"
+        mixCtx: null,
+        mixDest: null,
+        mixGainReader: null,
+        mixGainMic: null,
       };
       R.audio?.setAttribute("playsinline","");
 
@@ -1129,6 +1269,61 @@ JANE: Ready?"></textarea>
           stopMicMonitor();
         }
         updateMicBadge();
+      }
+
+      async function buildMixedStreamIfPossible(rawStream){
+        if(!rawStream) return rawStream;
+        try{
+          R.mixCtx = new (window.AudioContext||window.webkitAudioContext)();
+          if(R.mixCtx?.state === "suspended"){ try{ await R.mixCtx.resume(); }catch{} }
+          const speakers = R.mixCtx.destination;
+          R.mixDest = R.mixCtx.createMediaStreamDestination();
+
+          const micNode = R.mixCtx.createMediaStreamSource(rawStream);
+          R.mixGainMic = R.mixCtx.createGain();
+          R.mixGainMic.gain.value = 1.0;
+          micNode.connect(R.mixGainMic);
+          R.mixGainMic.connect(R.mixDest);
+
+          R.mixGainReader = R.mixCtx.createGain();
+          R.mixGainReader.gain.value = R.headphonesOn ? 1.0 : 0.0;
+          const readerRecordGain = R.mixCtx.createGain();
+          readerRecordGain.gain.value = 1.0;
+          const readerEl = (RR.map && RR.map.size>0) ? E?.rehearseAudio : R.audio;
+          if(readerEl){
+            try{
+              const src = R.mixCtx.createMediaElementSource(readerEl);
+              src.connect(R.mixGainReader);
+              src.connect(readerRecordGain);
+            }catch(e){
+              if(typeof readerEl.captureStream === "function"){
+                try{
+                  const rs = readerEl.captureStream();
+                  const s2 = R.mixCtx.createMediaStreamSource(rs);
+                  s2.connect(R.mixGainReader);
+                  s2.connect(readerRecordGain);
+                }catch{}
+              }
+            }
+          }
+
+          R.mixGainReader.connect(speakers);
+          readerRecordGain.connect(R.mixDest);
+
+          const tracks = [];
+          if(R.cameraOn){
+            try{ rawStream.getVideoTracks().forEach(t=>tracks.push(t)); }catch{}
+          }
+          try{ R.mixDest.stream.getAudioTracks().forEach(t=>tracks.push(t)); }catch{}
+          if(tracks.length) return new MediaStream(tracks);
+        }catch(e){
+          try{ R.mixCtx?.close(); }catch{}
+        }
+        R.mixCtx = null;
+        R.mixDest = null;
+        R.mixGainReader = null;
+        R.mixGainMic = null;
+        return rawStream;
       }
 
       /* --- Render reader (animated dots in status) --- */
@@ -1191,85 +1386,163 @@ JANE: Ready?"></textarea>
       }
 
       /* --- Recording flow --- */
-      async function startPreviewIfNeeded(){
-        if(!R.cameraOn){ R.preview.srcObject=null; return; }
+      async function startPreviewIfNeeded(forceRestart=false){
+        if(!R.cameraOn){
+          try{ cleanupStream(); }catch{}
+          if(R.preview) R.preview.srcObject=null;
+          return;
+        }
         try{
-          if(!R.stream){ const st = await navigator.mediaDevices.getUserMedia({ video:true, audio:true }); R.stream = st; }
-          R.preview.srcObject = R.stream;
+          if(forceRestart && R.stream){ cleanupStream(); }
+          if(!R.stream){
+            R.stream = await navigator.mediaDevices.getUserMedia({
+              video: { facingMode: R.facing },
+              audio: { echoCancellation:true, noiseSuppression:true, autoGainControl:false }
+            });
+          }
+          if(R.preview){
+            try{ R.preview.muted = true; }catch{}
+            R.preview.srcObject = R.stream;
+            if(typeof R.preview.play === "function"){
+              R.preview.play().catch(()=>{});
+            }
+          }
         }catch(e){ setStatusRec("Camera/mic permission denied: "+e); }
       }
 
+      let useBackCamera = false;
+      async function applyCameraFacing(){
+        R.facing = useBackCamera ? "environment" : "user";
+        if(!R.cameraOn) return;
+        try{ await startPreviewIfNeeded(true); }
+        catch(e){ setStatusRec("Camera switch error: "+e); }
+      }
+
       async function startRecording(){
+        primeReaderFromCacheIfAvailable();
         const prepped = (RR.map && RR.map.size > 0) || !!R.download_url;
         if(!prepped){ setStatusRec("Render first."); return; }
+
+        const useCachedReader = !!(RR.map && RR.map.size > 0);
+
+        stopAllAudioHard();
+        try{ sr?.stop(); }catch{}
+        try{ clearMy(); }catch{}
+
+        cleanupStream();
+        try{ R.mixCtx?.close(); }catch{}
+        R.mixCtx = null; R.mixDest = null; R.mixGainReader = null; R.mixGainMic = null;
+
+        let userStream;
         try{
           const needVideo = !!R.cameraOn;
-          R.stream = await navigator.mediaDevices.getUserMedia({ audio:true, video:needVideo });
-          R.preview.srcObject = needVideo ? R.stream : null;
+          userStream = await navigator.mediaDevices.getUserMedia({
+            audio: { echoCancellation:true, noiseSuppression:true, autoGainControl:false },
+            video: needVideo ? { facingMode: R.facing } : false
+          });
         }catch(e){ setStatusRec("Permission error: "+e); return; }
+        R.stream = userStream;
+        if(R.cameraOn && R.preview){
+          R.preview.srcObject = R.stream;
+          if(typeof R.preview.play === "function"){ R.preview.play().catch(()=>{}); }
+        }
 
-        await doBeepsAndCountdown(); // count-in beeps if enabled
+        await doBeepsAndCountdown();
 
-        /* Enable the same listen/respond flow as Rehearse */
+        const finalStream = await buildMixedStreamIfPossible(R.stream);
+
         R.prevSrToggle = srToggleOn;
         try{
-          // grant mic & energy monitor so auto-advance works like Rehearse
           await requestMicPermissionOnce();
-          srToggleOn = true;    // mirror "Mic: On"
+          srToggleOn = true;
           startMicMonitor();
         }catch{}
         updateMicBadge();
 
-        /* Begin capture */
+        try{ idx = 0; }catch{}
+        try{ highlightCurrent?.(); }catch{}
+        try{ clearMy(); }catch{}
+
         R.chunks = [];
         const mime = pickMime(!!R.cameraOn);
-        try{ R.rec = mime ? new MediaRecorder(R.stream, { mimeType: mime }) : new MediaRecorder(R.stream); }
-        catch{ R.rec = new MediaRecorder(R.stream); }
+        try{ R.rec = mime ? new MediaRecorder(finalStream, { mimeType: mime }) : new MediaRecorder(finalStream); }
+        catch{ R.rec = new MediaRecorder(finalStream); }
+
         R.rec.ondataavailable = (e)=>{ if(e.data && e.data.size>0) R.chunks.push(e.data); };
         R.rec.onstop = ()=>{
-          try{ playing = false; window.speechSynthesis?.cancel(); E?.rehearseAudio?.pause(); }catch{}
-          try{ sr?.stop(); }catch{}
+          stopAllAudioHard();
           resetMicAfterRecording();
+          try{ R.mixCtx?.close(); }catch{}
+          R.mixCtx = null; R.mixDest = null; R.mixGainReader = null; R.mixGainMic = null;
           finalizeTake();
           cleanupStream();
+          if(R.cameraOn){ try{ startPreviewIfNeeded(); }catch{} }
           R.recording=false;
           setRailStates();
         };
-        R.recording = true; setRailStates();
-        R.rec.start();
 
-        /* Kick off line-by-line playback using the same step() as Rehearse */
-        try{
-          playing = true;
-          step(true);
-          // watcher: when reader flow finishes, stop the recorder automatically
-          const endWatch = setInterval(()=>{
-            if(!R.recording) return clearInterval(endWatch);
-            if(!playing){
-              try{ R.rec?.stop(); }catch{}
-              clearInterval(endWatch);
-            }
-          }, 300);
-        }catch{}
+        R.recording = true;
+        setRailStates();
 
-        try{ R.audio.currentTime = 0; await R.audio.play(); }catch{}
-        R.audio.onended = ()=>{ setTimeout(()=>{ try{ R.rec?.stop(); }catch{} }, 120); };
+        try{ R.rec.start(); }
+        catch(e){
+          R.recording = false;
+          setRailStates();
+          setStatusRec("Recorder error: "+e);
+          stopAllAudioHard();
+          resetMicAfterRecording();
+          try{ R.mixCtx?.close(); }catch{}
+          R.mixCtx = null; R.mixDest = null; R.mixGainReader = null; R.mixGainMic = null;
+          cleanupStream();
+          if(R.cameraOn){ try{ startPreviewIfNeeded(); }catch{} }
+          return;
+        }
+
         setStatusRec("Recording…");
+
+        await new Promise(r=>setTimeout(r,220));
+
+        if(useCachedReader){
+          try{
+            playing = true;
+            step(true);
+            const endWatch = setInterval(()=>{
+              if(!R.recording) return clearInterval(endWatch);
+              if(!playing){
+                try{ R.rec?.stop(); }catch{}
+                clearInterval(endWatch);
+              }
+            }, 300);
+          }catch{}
+        }
+
+        if(R.audio){
+          if(R.download_url && !useCachedReader){
+            try{ R.audio.currentTime = 0; await R.audio.play(); }catch{}
+            R.audio.onended = ()=>{ setTimeout(()=>{ try{ R.rec?.stop(); }catch{} }, 120); };
+          }else{
+            try{ R.audio.pause(); R.audio.currentTime = 0; }catch{}
+            R.audio.onended = null;
+          }
+        }
       }
 
       function stopRecording(){
+        if(!R.recording){
+          stopAllAudioHard();
+          cleanupStream();
+          return;
+        }
         try{ R.rec?.stop(); }catch{}
-        // stop the reader flow too
-        try{ playing = false; window.speechSynthesis?.cancel(); E?.rehearseAudio?.pause(); }catch{}
-        try{ sr?.stop(); }catch{}
-        resetMicAfterRecording();
-        cleanupStream();
+        R.recording = false;
+        setRailStates();
         setStatusRec("Stopping…");
       }
 
       function finalizeTake(){
         const isVid = !!R.cameraOn;
         const blob = new Blob(R.chunks, { type: (R.rec && R.rec.mimeType) ? R.rec.mimeType : (isVid ? "video/mp4" : "audio/mp4") });
+        if (!blob || !blob.size) { setStatusRec("No data captured."); return; }
         const url = URL.createObjectURL(blob);
         const ts = new Date().toISOString().replace(/[:.]/g,"-");
         const ext = (blob.type.startsWith("video/") ? "mp4" : (blob.type.includes("webm") ? "webm" : "m4a"));
@@ -1280,14 +1553,19 @@ JANE: Ready?"></textarea>
 
       /* --- Button wiring --- */
       R.btnRender?.addEventListener("click", async ()=>{
+        // If we already have pre-rendered clips in RR.map from Rehearse, reuse them.
+        const hasCached = primeReaderFromCacheIfAvailable() || (RR.map && RR.map.size);
+        if(hasCached && RR.map && RR.map.size){
+          setStatusRec(`Voices ready: ${RR.map.size} lines (cached).`);
+          return;
+        }
         setStatusRec("Preparing voices…");
         try{
-          // fills RR.map
-          await renderRehearseVoices();
-          setStatusRec("Reader ready.");
-        }catch(e){
-          setStatusRec("Render error: "+e);
-        }
+          await renderRehearseVoices(); // fills RR.map
+          if(RR.map.size){ setStatusRec("Reader ready."); return; }
+        }catch(e){ /* fall through to server render */ }
+        // Fallback: server-side combined reader track
+        await prepareReader();
       });
 
       R.btnRec?.addEventListener("click", ()=>{
@@ -1302,7 +1580,16 @@ JANE: Ready?"></textarea>
       });
 
       R.btnCountIn?.addEventListener("click", ()=>{ R.countInOn = !R.countInOn; setRailStates(); });
-      R.btnHeadphones?.addEventListener("click", ()=>{ R.headphonesOn = !R.headphonesOn; setRailStates(); });
+      R.btnHeadphones?.addEventListener("click", ()=>{
+        R.headphonesOn = !R.headphonesOn;
+        try{ if(R.mixGainReader) R.mixGainReader.gain.value = R.headphonesOn ? 1.0 : 0.0; }catch{}
+        setRailStates();
+      });
+
+      $("#btnFlipCam")?.addEventListener("click", async ()=>{
+        useBackCamera = !useBackCamera;
+        await applyCameraFacing();
+      });
 
       /* Warm permissions when user navigates to Record */
       const _origShowScreen = showScreen;
