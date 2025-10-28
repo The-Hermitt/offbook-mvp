@@ -733,10 +733,21 @@ JANE: Ready?"></textarea>
       const setStatusPdf = msg => $("#statusPdf").textContent = msg || "";
 
       // --- Global audio stop (kills any lingering playback/SR) ---
+      function resetReaderActiveSources(){
+        try{
+          if(R && R.readerActiveSources instanceof Set){
+            R.readerActiveSources.forEach(src=>{ try{ if(src && typeof src.stop === "function") src.stop(0); }catch{} });
+            R.readerActiveSources.clear();
+          }
+          if(R && !(R.readerActiveSources instanceof Set)) R.readerActiveSources = new Set();
+        }catch{}
+      }
+
       function stopAllAudioHard() {
         try { window.speechSynthesis?.cancel(); } catch {}
         try { E?.rehearseAudio?.pause(); E.rehearseAudio.currentTime = 0; } catch {}
         try { R?.audio?.pause(); R.audio.currentTime = 0; } catch {}
+        resetReaderActiveSources();
         try { sr?.stop(); } catch {}
         try { clearMy?.(); } catch {}
         try { playing = false; } catch {}
@@ -1056,10 +1067,14 @@ JANE: Ready?"></textarea>
 
       function primeReaderFromCacheIfAvailable(){
         try{
-          if(RR.map && RR.map.size) return true;
+          if(RR.map && RR.map.size){ try{ preloadReaderBuffers(); }catch{}; return true; }
           const cached = ReaderCache.get();
           if(cached && typeof cached.size === "number" && cached.size){
+            R.readerBuffers = new Map();
+            resetReaderActiveSources();
+            R.readerLoading = false;
             RR.map = new Map(cached);
+            try{ preloadReaderBuffers(); }catch{}
             return true;
           }
         }catch{}
@@ -1091,7 +1106,7 @@ JANE: Ready?"></textarea>
         const list  = buildFiltered(scene);
         if(!list.length){ setRehearseRenderStatus("No lines to render.","err"); return; }
 
-        RR.rendering = true; RR.failures = 0; RR.map.clear(); startDots(); setRehearseRenderStatus("Preparing voices…"," ");
+  RR.rendering = true; RR.failures = 0; RR.map.clear(); R.readerBuffers = new Map(); resetReaderActiveSources(); R.readerLoading = false; startDots(); setRehearseRenderStatus("Preparing voices…"," ");
 
         const voiceFor = (name)=> (S.voice_map[name] || S.supportedVoices[0] || "alloy");
         const model    = ($("#selTtsModel")).value || "tts-1";
@@ -1157,12 +1172,43 @@ JANE: Ready?"></textarea>
             : `No OpenAI clips prepared${firstErr? ` — error: ${String(firstErr).slice(0,160)}`:""}`,
           okCount ? (RR.failures ? "warn":"ok") : "err"
         );
+        try{ preloadReaderBuffers(); }catch{}
       }
-      function clearRehearseRender(){ RR.map.clear(); RR.failures=0; stopDots(); setRehearseRenderStatus("Cleared pre-render.","warn"); }
+  function clearRehearseRender(){ RR.map.clear(); RR.failures=0; stopDots(); R.readerBuffers = new Map(); resetReaderActiveSources(); R.readerLoading=false; setRehearseRenderStatus("Cleared pre-render.","warn"); }
       $("#btnRehearseRender")?.addEventListener("click", renderRehearseVoices);
       $("#btnRehearseClear")?.addEventListener("click", clearRehearseRender);
 
       async function playOpenAiIfCached(i){
+        const buf = R.readerBuffers.get(i);
+        if(buf){
+          await ensureReaderCtx();
+          if(!R.readerCtx || !R.readerGain) return false;
+          const ctx = R.readerCtx;
+          const lookahead = 0.05;
+          const startAt = Math.max((ctx.currentTime||0) + lookahead, 0);
+          const src = ctx.createBufferSource();
+          src.buffer = buf;
+          const g = ctx.createGain();
+          const fadeInEnd = startAt + 0.03;
+          const fadeOutStart = Math.max(startAt, startAt + buf.duration - 0.02);
+          g.gain.setValueAtTime(0.0001, startAt);
+          g.gain.linearRampToValueAtTime(1.0, fadeInEnd);
+          g.gain.setValueAtTime(1.0, fadeOutStart);
+          g.gain.linearRampToValueAtTime(0.0001, startAt + buf.duration);
+          src.connect(g);
+          g.connect(R.readerGain);
+          if(R.readerActiveSources) R.readerActiveSources.add(src);
+          const done = new Promise(res=>{ src.onended=()=>res(null); src.onerror=()=>res(null); });
+          src.start(startAt);
+          try{
+            await done;
+          } finally {
+            try{ R.readerActiveSources?.delete(src); }catch{}
+            try{ src.disconnect(); g.disconnect(); }catch{}
+          }
+          return true;
+        }
+
         const url = RR.map.get(i);
         if(!url) return false;
         try{
@@ -1170,7 +1216,12 @@ JANE: Ready?"></textarea>
           await E.rehearseAudio.play();
           await new Promise(res=>{ E.rehearseAudio.onended=()=>res(null); E.rehearseAudio.onerror=()=>res(null); });
           return true;
-        }catch{ return false; }
+        }catch{}
+        finally{
+          E.rehearseAudio.onended = null;
+          E.rehearseAudio.onerror = null;
+        }
+        return false;
       }
 
       async function step(playMode){
@@ -1227,10 +1278,112 @@ JANE: Ready?"></textarea>
         mixDest: null,
         mixGainReader: null,
         mixGainMic: null,
+        micHPF: null,
+        micCompressor: null,
+        readerCtx: null,
+        readerGain: null,
+        readerBuffers: new Map(),
+        readerLoading: false,
+        readerDirectConnected: false,
+        readerBridge: null,
+        readerBridgeSource: null,
+        readerRecordGain: null,
+        readerActiveSources: new Set(),
+        duckHintShown: false,
       };
       R.audio?.setAttribute("playsinline","");
 
       function setStatusRec(t){ R.status.textContent = t || " "; } // keep height
+
+      function micConstraints(recordingPhase){
+        if(recordingPhase){
+          return {
+            echoCancellation: false,
+            noiseSuppression: false,
+            autoGainControl: false,
+            channelCount: 1,
+            sampleRate: 48000,
+            sampleSize: 16,
+            advanced: [
+              { echoCancellation:false },
+              { noiseSuppression:false },
+              { autoGainControl:false },
+              { googEchoCancellation:false },
+              { googAutoGainControl:false },
+              { googNoiseSuppression:false }
+            ]
+          };
+        }
+        return {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: false,
+          channelCount: 1
+        };
+      }
+
+      async function ensureReaderCtx(){
+        if(R.readerCtx && R.readerCtx.state === "closed"){ R.readerCtx = null; R.readerGain = null; R.readerDirectConnected = false; }
+        if(!R.readerCtx){
+          R.readerCtx = new (window.AudioContext||window.webkitAudioContext)();
+          if(R.readerCtx?.state === "suspended"){ try{ await R.readerCtx.resume(); }catch{} }
+          R.readerGain = R.readerCtx.createGain();
+          R.readerGain.gain.value = 1.0;
+          try{ R.readerGain.connect(R.readerCtx.destination); R.readerDirectConnected = true; }
+          catch{}
+          R.readerActiveSources = new Set();
+        }else if(R.readerCtx?.state === "suspended"){
+          try{ await R.readerCtx.resume(); }catch{}
+        }
+        return R.readerCtx;
+      }
+
+      function restoreReaderDirectMonitor(){
+        if(R.readerCtx && R.readerGain){
+          try{ R.readerGain.disconnect(); }catch{}
+          try{ R.readerGain.connect(R.readerCtx.destination); R.readerDirectConnected = true; }
+          catch{}
+        }
+        R.readerBridge = null;
+        R.readerBridgeSource = null;
+        R.readerRecordGain = null;
+      }
+
+      async function preloadReaderBuffers(){
+        if(!RR.map || !RR.map.size || R.readerLoading) return;
+        R.readerLoading = true;
+        try{
+          await ensureReaderCtx();
+          const entries = Array.from(RR.map.entries());
+          let idx = 0;
+          const workers = Math.min(3, entries.length);
+          async function worker(){
+            for(;;){
+              const current = idx++;
+              if(current >= entries.length) break;
+              const [i, url] = entries[current];
+              if(R.readerBuffers.has(i)) continue;
+              try{
+                const suffix = url.includes("?") ? "&" : "?";
+                const resp = await fetch(url + suffix + "t=" + Date.now());
+                if(!resp.ok) continue;
+                const buf = await resp.arrayBuffer();
+                const ctx = R.readerCtx;
+                if(!ctx) continue;
+                const audio = await new Promise((resolve,reject)=>{
+                  try{
+                    const maybe = ctx.decodeAudioData(buf, resolve, reject);
+                    if(maybe && typeof maybe.then === "function") maybe.then(resolve).catch(reject);
+                  }catch(e){ reject(e); }
+                });
+                if(audio) R.readerBuffers.set(i, audio);
+              }catch{}
+            }
+          }
+          await Promise.all(Array.from({length:workers}, ()=>worker()));
+        }catch{}
+        finally{ R.readerLoading = false; }
+      }
 
       function setRailStates(){
         R.btnCamera.setAttribute("aria-pressed", R.cameraOn ? "true":"false");
@@ -1280,15 +1433,45 @@ JANE: Ready?"></textarea>
           R.mixDest = R.mixCtx.createMediaStreamDestination();
 
           const micNode = R.mixCtx.createMediaStreamSource(rawStream);
+
+          R.micHPF = R.mixCtx.createBiquadFilter();
+          R.micHPF.type = "highpass";
+          R.micHPF.frequency.value = 120;
+          R.micHPF.Q.value = 0.707;
+
+          R.micCompressor = R.mixCtx.createDynamicsCompressor();
+          R.micCompressor.threshold.value = -28;
+          R.micCompressor.knee.value = 24;
+          R.micCompressor.ratio.value = 3;
+          R.micCompressor.attack.value = 0.005;
+          R.micCompressor.release.value = 0.12;
+
           R.mixGainMic = R.mixCtx.createGain();
           R.mixGainMic.gain.value = 1.0;
-          micNode.connect(R.mixGainMic);
+
+          micNode.connect(R.micHPF);
+          R.micHPF.connect(R.micCompressor);
+          R.micCompressor.connect(R.mixGainMic);
           R.mixGainMic.connect(R.mixDest);
 
           R.mixGainReader = R.mixCtx.createGain();
           R.mixGainReader.gain.value = R.headphonesOn ? 1.0 : 0.0;
           const readerRecordGain = R.mixCtx.createGain();
           readerRecordGain.gain.value = 1.0;
+
+          if(R.readerCtx && R.readerGain){
+            try{ R.readerGain.disconnect(); R.readerDirectConnected = false; }catch{}
+            try{
+              R.readerBridge = R.readerCtx.createMediaStreamDestination();
+              R.readerGain.connect(R.readerBridge);
+              R.readerDirectConnected = false;
+              const bridgeSource = R.mixCtx.createMediaStreamSource(R.readerBridge.stream);
+              R.readerBridgeSource = bridgeSource;
+              bridgeSource.connect(R.mixGainReader);
+              bridgeSource.connect(readerRecordGain);
+            }catch{}
+          }
+
           const readerEl = (RR.map && RR.map.size>0) ? E?.rehearseAudio : R.audio;
           if(readerEl){
             try{
@@ -1309,6 +1492,7 @@ JANE: Ready?"></textarea>
 
           R.mixGainReader.connect(speakers);
           readerRecordGain.connect(R.mixDest);
+          R.readerRecordGain = readerRecordGain;
 
           const tracks = [];
           if(R.cameraOn){
@@ -1318,11 +1502,17 @@ JANE: Ready?"></textarea>
           if(tracks.length) return new MediaStream(tracks);
         }catch(e){
           try{ R.mixCtx?.close(); }catch{}
+          restoreReaderDirectMonitor();
         }
         R.mixCtx = null;
         R.mixDest = null;
         R.mixGainReader = null;
         R.mixGainMic = null;
+        R.micHPF = null;
+        R.micCompressor = null;
+        R.readerRecordGain = null;
+        R.readerBridge = null;
+        R.readerBridgeSource = null;
         return rawStream;
       }
 
@@ -1397,8 +1587,17 @@ JANE: Ready?"></textarea>
           if(!R.stream){
             R.stream = await navigator.mediaDevices.getUserMedia({
               video: { facingMode: R.facing },
-              audio: { echoCancellation:true, noiseSuppression:true, autoGainControl:false }
+              audio: micConstraints(false)
             });
+          }
+          const at = R.stream?.getAudioTracks?.()[0];
+          if(at){
+            const settings = at.getSettings ? at.getSettings() : {};
+            console.log("[offbook] mic settings (preview)", settings);
+            if(!R.duckHintShown && (settings.echoCancellation === true || settings.noiseSuppression === true)){
+              setStatusRec("Note: Your device may still apply echo/ducking. Use wired/Bluetooth headphones for best results.");
+              R.duckHintShown = true;
+            }
           }
           if(R.preview){
             try{ R.preview.muted = true; }catch{}
@@ -1430,18 +1629,27 @@ JANE: Ready?"></textarea>
         try{ clearMy(); }catch{}
 
         cleanupStream();
-        try{ R.mixCtx?.close(); }catch{}
-        R.mixCtx = null; R.mixDest = null; R.mixGainReader = null; R.mixGainMic = null;
+  try{ R.mixCtx?.close(); }catch{}
+  R.mixCtx = null; R.mixDest = null; R.mixGainReader = null; R.mixGainMic = null; R.micHPF = null; R.micCompressor = null;
 
         let userStream;
         try{
           const needVideo = !!R.cameraOn;
           userStream = await navigator.mediaDevices.getUserMedia({
-            audio: { echoCancellation:true, noiseSuppression:true, autoGainControl:false },
+            audio: micConstraints(true),
             video: needVideo ? { facingMode: R.facing } : false
           });
         }catch(e){ setStatusRec("Permission error: "+e); return; }
         R.stream = userStream;
+        const track = R.stream?.getAudioTracks?.()[0];
+        if(track){
+          const settings = track.getSettings ? track.getSettings() : {};
+          console.log("[offbook] mic settings (record)", settings);
+          if(!R.duckHintShown && (settings.echoCancellation === true || settings.noiseSuppression === true)){
+            setStatusRec("Note: Your device may still apply echo/ducking. Use wired/Bluetooth headphones for best results.");
+            R.duckHintShown = true;
+          }
+        }
         if(R.cameraOn && R.preview){
           R.preview.srcObject = R.stream;
           if(typeof R.preview.play === "function"){ R.preview.play().catch(()=>{}); }
@@ -1449,6 +1657,7 @@ JANE: Ready?"></textarea>
 
         await doBeepsAndCountdown();
 
+        if(useCachedReader){ try{ await ensureReaderCtx(); }catch{} }
         const finalStream = await buildMixedStreamIfPossible(R.stream);
 
         R.prevSrToggle = srToggleOn;
@@ -1473,7 +1682,9 @@ JANE: Ready?"></textarea>
           stopAllAudioHard();
           resetMicAfterRecording();
           try{ R.mixCtx?.close(); }catch{}
-          R.mixCtx = null; R.mixDest = null; R.mixGainReader = null; R.mixGainMic = null;
+          R.mixCtx = null; R.mixDest = null; R.mixGainReader = null; R.mixGainMic = null; R.micHPF = null; R.micCompressor = null;
+          R.readerRecordGain = null; R.readerBridge = null; R.readerBridgeSource = null;
+          restoreReaderDirectMonitor();
           finalizeTake();
           cleanupStream();
           if(R.cameraOn){ try{ startPreviewIfNeeded(); }catch{} }
@@ -1492,7 +1703,8 @@ JANE: Ready?"></textarea>
           stopAllAudioHard();
           resetMicAfterRecording();
           try{ R.mixCtx?.close(); }catch{}
-          R.mixCtx = null; R.mixDest = null; R.mixGainReader = null; R.mixGainMic = null;
+          R.mixCtx = null; R.mixDest = null; R.mixGainReader = null; R.mixGainMic = null; R.micHPF = null; R.micCompressor = null; R.readerRecordGain = null; R.readerBridge = null; R.readerBridgeSource = null;
+          restoreReaderDirectMonitor();
           cleanupStream();
           if(R.cameraOn){ try{ startPreviewIfNeeded(); }catch{} }
           return;
@@ -1531,6 +1743,7 @@ JANE: Ready?"></textarea>
         if(!R.recording){
           stopAllAudioHard();
           cleanupStream();
+          restoreReaderDirectMonitor();
           return;
         }
         try{ R.rec?.stop(); }catch{}
@@ -1557,12 +1770,13 @@ JANE: Ready?"></textarea>
         const hasCached = primeReaderFromCacheIfAvailable() || (RR.map && RR.map.size);
         if(hasCached && RR.map && RR.map.size){
           setStatusRec(`Voices ready: ${RR.map.size} lines (cached).`);
+          try{ preloadReaderBuffers(); }catch{}
           return;
         }
         setStatusRec("Preparing voices…");
         try{
           await renderRehearseVoices(); // fills RR.map
-          if(RR.map.size){ setStatusRec("Reader ready."); return; }
+          if(RR.map.size){ setStatusRec("Reader ready."); try{ preloadReaderBuffers(); }catch{}; return; }
         }catch(e){ /* fall through to server render */ }
         // Fallback: server-side combined reader track
         await prepareReader();
@@ -1601,6 +1815,20 @@ JANE: Ready?"></textarea>
           setRailStates();
         }
       };
+
+      window.addEventListener("pagehide", ()=>{
+        resetReaderActiveSources();
+        try{ R.readerCtx?.close(); }catch{}
+        R.readerCtx = null;
+        R.readerGain = null;
+        R.readerBridge = null;
+        R.readerBridgeSource = null;
+        R.readerRecordGain = null;
+        R.readerDirectConnected = false;
+        R.readerBuffers = new Map();
+        R.readerLoading = false;
+        R.duckHintShown = false;
+      });
 
       // initial safe boot
       try{
