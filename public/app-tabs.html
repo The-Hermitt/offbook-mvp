@@ -587,6 +587,7 @@
         grid-template-areas:"preview rail";
         grid-template-rows:1fr;
         gap:12px;
+        align-items:start;
       }
       body.record-active #screen-record .preview-wrap{
         padding:8px;
@@ -2012,6 +2013,96 @@ JANE: Ready?"></textarea>
           await Promise.all(Array.from({length:workers}, ()=>worker()));
         }catch{}
         finally{ if(hasR()) R.readerLoading = false; }
+      }
+
+      function micConstraints(recordingPhase){
+        if(recordingPhase){
+          return {
+            echoCancellation: false,
+            noiseSuppression: false,
+            autoGainControl: false,
+            channelCount: 1,
+            sampleRate: 48000,
+            sampleSize: 16,
+            advanced: [
+              { echoCancellation:false },
+              { noiseSuppression:false },
+              { autoGainControl:false },
+              { googEchoCancellation:false },
+              { googAutoGainControl:false },
+              { googNoiseSuppression:false }
+            ]
+          };
+        }
+        return {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: false,
+          channelCount: 1
+        };
+      }
+
+      async function ensureReaderCtx(){
+        if(R.readerCtx && R.readerCtx.state === "closed"){ R.readerCtx = null; R.readerGain = null; R.readerDirectConnected = false; }
+        if(!R.readerCtx){
+          R.readerCtx = new (window.AudioContext||window.webkitAudioContext)();
+          if(R.readerCtx?.state === "suspended"){ try{ await R.readerCtx.resume(); }catch{} }
+          R.readerGain = R.readerCtx.createGain();
+          R.readerGain.gain.value = 1.0;
+          try{ R.readerGain.connect(R.readerCtx.destination); R.readerDirectConnected = true; }
+          catch{}
+          R.readerActiveSources = new Set();
+        }else if(R.readerCtx?.state === "suspended"){
+          try{ await R.readerCtx.resume(); }catch{}
+        }
+        return R.readerCtx;
+      }
+
+      function restoreReaderDirectMonitor(){
+        if(R.readerCtx && R.readerGain){
+          try{ R.readerGain.disconnect(); }catch{}
+          try{ R.readerGain.connect(R.readerCtx.destination); R.readerDirectConnected = true; }
+          catch{}
+        }
+        R.readerBridge = null;
+        R.readerBridgeSource = null;
+        R.readerRecordGain = null;
+      }
+
+      async function preloadReaderBuffers(){
+        if(!RR.map || !RR.map.size || R.readerLoading) return;
+        R.readerLoading = true;
+        try{
+          await ensureReaderCtx();
+          const entries = Array.from(RR.map.entries());
+          let idx = 0;
+          const workers = Math.min(3, entries.length);
+          async function worker(){
+            for(;;){
+              const current = idx++;
+              if(current >= entries.length) break;
+              const [i, url] = entries[current];
+              if(R.readerBuffers.has(i)) continue;
+              try{
+                const suffix = url.includes("?") ? "&" : "?";
+                const resp = await fetch(url + suffix + "t=" + Date.now());
+                if(!resp.ok) continue;
+                const buf = await resp.arrayBuffer();
+                const ctx = R.readerCtx;
+                if(!ctx) continue;
+                const audio = await new Promise((resolve,reject)=>{
+                  try{
+                    const maybe = ctx.decodeAudioData(buf, resolve, reject);
+                    if(maybe && typeof maybe.then === "function") maybe.then(resolve).catch(reject);
+                  }catch(e){ reject(e); }
+                });
+                if(audio) R.readerBuffers.set(i, audio);
+              }catch{}
+            }
+          }
+          await Promise.all(Array.from({length:workers}, ()=>worker()));
+        }catch{}
+        finally{ R.readerLoading = false; }
       }
 
       function setRailStates(){
