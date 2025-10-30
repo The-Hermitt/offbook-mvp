@@ -4,8 +4,15 @@
   <meta charset="utf-8" />
   <title>OFFBOOK — Rehearsal MVP</title>
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <!-- PWA / iOS standalone niceties -->
+  <link rel="manifest" href="/manifest.webmanifest">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="apple-touch-icon" href="/icons/icon-192.png">
     <style>
+    /* Safe-area headroom (iOS Dynamic Island / status bars) */
     :root {
+      --safe-top: env(safe-area-inset-top, 0px);
       --bg:#05070d;
       --panel:rgba(18,21,30,0.78);
       --panel-2:rgba(12,14,22,0.85);
@@ -18,6 +25,20 @@
       --ok:#16a34a;
       --warn:#f4c542;
       --maxw:760px;
+      --rail-w: clamp(160px, 22vw, 220px);
+      --btn-h: 44px;
+      --btn-fs: 14px;
+      --btn-pad-v: 10px;
+      --btn-pad-h: 12px;
+  --preview-ar: 16/9;
+  --tabsH: 86px;
+  --railW: 200px;
+    }
+    /* Orientation utility classes */
+    @media (orientation: portrait){ .landscape-only{ display:none !important; } }
+    @media (orientation: landscape){ .portrait-only{ display:none !important; } }
+    @media (max-width: 600px){
+      :root{ --tabsH: 102px; }
     }
     *{ box-sizing:border-box }
     html,body{
@@ -33,7 +54,11 @@
       font-family:"SF Pro Display","SF Pro Text",-apple-system,system-ui,"Segoe UI",Roboto,Arial,sans-serif;
       -webkit-font-smoothing:antialiased;
     }
-    body{ position:relative }
+    /* Give the whole app a small buffer at the very top */
+    body{
+      position:relative;
+      padding-top:max(8px, var(--safe-top));
+    }
     body::before{
       content:"";
       position:fixed;
@@ -44,8 +69,9 @@
       opacity:0.7;
       z-index:0;
     }
+    /* If a header is still present anywhere, respect safe-area */
     header{
-      padding:28px 20px 18px;
+      padding:calc(28px + var(--safe-top)) 20px 18px;
       position:relative;
       z-index:1;
     }
@@ -55,6 +81,7 @@
       display:flex;
       align-items:center;
       gap:16px;
+      position:relative;
     }
     .brand-copy{
       display:flex;
@@ -62,18 +89,23 @@
       gap:4px;
     }
     .brand-title{
-      font-size:22px;
+      font-size:18px;
       font-weight:700;
       letter-spacing:.4px;
     }
     .brand-subtitle{
+      position:absolute;
+      right:0;
+      top:2px;
       font-size:13px;
       color:var(--muted);
       letter-spacing:2.4px;
       text-transform:uppercase;
+      white-space:nowrap;
     }
     main{
-      padding:8px 20px 120px;
+      /* existing padding stays; add safe-top on top */
+      padding:calc(8px + var(--safe-top)) 20px 120px;
       max-width:var(--maxw);
       margin:0 auto;
       position:relative;
@@ -89,7 +121,8 @@
       z-index:-1;
       pointer-events:none;
     }
-    main > *:first-child{ margin-top:20px }
+  /* First card breathing room (covers all tabs) */
+  main > *:first-child{ margin-top:max(8px, calc(var(--safe-top) / 2)); }
     .card{
       background:var(--panel);
       border:1px solid var(--border);
@@ -247,7 +280,7 @@
       letter-spacing:.3px;
     }
     .small{ font-size:12px; color:var(--muted); letter-spacing:.2px }
-
+    
     /* Rehearse render status — keep visible and readable */
     #rehearseRenderStatus{
       display:block;
@@ -326,16 +359,6 @@
     .btn.icon::before{ content:"⟲"; font-weight:900; font-size:20px; line-height:1; display:block; }
 
     /* Record */
-    .rec-grid{ display:grid; grid-template-columns:1fr; gap:12px }
-    .vid{
-      width:100%;
-      aspect-ratio:9/16;
-      background:#000;
-      border-radius:22px;
-      border:1px solid rgba(118,130,164,0.25);
-      object-fit:cover;
-      box-shadow:0 25px 55px rgba(0,0,0,0.55);
-    }
     .countdown{
       position:fixed;
       inset:0;
@@ -366,39 +389,303 @@
       box-shadow:0 18px 40px rgba(3,6,15,0.35);
     }
 
-    /* === Record: 16x9 + right rail (uniform pills / responsive with grid areas) === */
+    /* === Record: narrow rail alongside preview === */
     .record-grid{
       display:grid;
-      grid-template-columns: minmax(0,1.2fr) 300px; /* more space to the preview */
-      grid-template-rows: auto auto;
-      grid-template-areas:
-        "preview rail"
-        "status  rail";
+      grid-template-columns: minmax(0,1fr) var(--rail-w);
+      grid-template-rows: 1fr;
+      grid-template-areas:"preview rail";
       gap:14px;
-      align-items:start;
+      align-items:stretch;
+      padding:calc(16px + env(safe-area-inset-top,0px)) calc(16px + env(safe-area-inset-right,0px)) calc(24px + env(safe-area-inset-bottom,0px)) calc(16px + env(safe-area-inset-left,0px));
     }
 
-    .preview-wrap{ grid-area: preview; width:100%;
-      background:rgba(9,12,20,0.6);
+    .preview-wrap{
+      grid-area:preview;
+      width:100%;
+      background:rgba(9,12,20,0.45);
       border:1px solid var(--border);
-      border-radius:22px;
-      padding:12px;
+      border-radius:18px;
+      padding:8px;
       box-shadow:0 25px 55px rgba(3,6,15,0.45);
       position:relative;
     }
 
-    .vid16x9{
+    #preview{
       width:100%;
-      aspect-ratio:16/9;
-      background:#000;
+      object-fit:cover;
       border-radius:16px;
       border:1px solid rgba(118,130,164,0.25);
-      object-fit:cover;
+      background:#000;
       display:block;
+      aspect-ratio:var(--preview-ar, 16/9);
+      transition:aspect-ratio .25s ease;
     }
 
-    .control-rail{ grid-area: rail; display:grid; grid-template-columns: 1fr; gap:12px }
-    .control-rail .btn{ width:100%; min-height:48px; border-radius:18px } /* uniform pills */
+    .control-rail{
+      grid-area:rail;
+      display:grid;
+      gap:12px;
+      align-content:start;
+      justify-items:stretch;
+      grid-auto-rows:minmax(var(--btn-h), auto);
+      grid-auto-flow:row;
+    }
+
+    .control-rail .btn{
+      width:100%;
+      min-height:var(--btn-h);
+      font-size:var(--btn-fs);
+      padding:var(--btn-pad-v) var(--btn-pad-h);
+      border-radius:18px;
+      box-shadow:0 12px 24px rgba(0,0,0,0.28);
+    }
+
+    /* Button-as-progress */
+    .btn-render.progressing{
+      position:relative;
+      color:#fff;
+    }
+    .btn-render.progressing::after{
+      content:"";
+      position:absolute;
+      inset:0;
+      background:linear-gradient(90deg, rgba(255,255,255,0.15), rgba(255,255,255,0.35));
+      transform:translateX(-100%);
+      animation:renderSweep 1.2s linear infinite;
+      border-radius:inherit;
+    }
+    @keyframes renderSweep{ to{ transform:translateX(100%); } }
+
+    body.record-active{
+      height:100vh;
+      overflow:hidden;
+    }
+    body.record-active main{
+      height:100%;
+      overflow:hidden;
+    }
+    body.record-active #screen-record .record-grid{
+      height:100%;
+      overflow:hidden;
+    }
+    @media (max-width: 860px){
+      .record-grid{
+        grid-template-columns: 1fr;
+        grid-template-rows: auto auto;
+        grid-template-areas:
+          "preview"
+          "rail";
+        gap:12px;
+      }
+      .control-rail{
+        grid-template-columns: repeat(2,1fr);
+        grid-auto-rows: var(--btn-h);
+        align-items:start;
+      }
+      #btnRender, #btnRec{ grid-column: 1 / -1; }
+      #btnHeadphones{ grid-column: 1 / -1; }
+    }
+
+    /* Portrait Record: cap preview so controls always fit without scrolling */
+    body.record-active.is-portrait #screen-record .record-grid{
+      grid-template-areas:
+        "preview"
+        "rail";
+      gap:8px;
+      height:calc(100dvh - env(safe-area-inset-bottom,0px));
+    }
+    body.record-active.is-portrait #screen-record #preview{
+      width:100%;
+      height:100%;
+      aspect-ratio:9/16;
+      object-fit:cover;
+    }
+
+    /* ===== Record (portrait): remove stacked headroom and hug status bar ===== */
+    @media (orientation: portrait){
+      .record-card{ overflow:hidden; }
+      /* kill the global main top padding + first-child margin while recording */
+      body.record-active main{
+        padding-top:calc(env(safe-area-inset-top,0px) + 2px) !important;
+        padding-bottom:calc(env(safe-area-inset-bottom,0px) + var(--tabsH) + 8px) !important;
+      }
+      body.record-active main > *:first-child{ margin-top:0 !important; }
+
+      /* shrink the record card’s own top padding (was adding more headroom) */
+      body.record-active #screen-record .card.record-grid{
+        padding-top:calc(env(safe-area-inset-top,0px) + 2px) !important;
+        gap:8px;
+      }
+
+      /* trim interior padding above the preview so the video can move up */
+      body.record-active #screen-record .preview-wrap{
+        padding-top:4px !important;
+        /* tabs height + two control rows ≈ 150px total */
+        max-height:calc(100dvh - var(--tabsH) - 150px) !important;
+        margin-top:0 !important;
+      }
+
+      /* ensure preview area expands to fill remaining height exactly */
+      body.record-active #screen-record .record-grid{
+        height:calc(100dvh - env(safe-area-inset-bottom,0px) - var(--tabsH)) !important;
+        grid-template-rows:1fr auto !important;
+      }
+      /* compact buttons remain */
+      body.record-active.is-portrait{ --btn-h:40px; --btn-fs:13px; }
+      #screen-record .control-rail{
+        display:grid;
+        grid-template-columns:1fr 1fr;
+        grid-template-areas:
+          "camera headphones"
+          "rec     rec";
+        grid-auto-rows:var(--btn-h);
+        gap:10px;
+        padding-bottom:0;
+        margin-top:-6px;
+      }
+      .record-card .controls-stack{ gap:8px; }
+      body.record-active #screen-record .pos-camera{ grid-area:camera; }
+      body.record-active #screen-record .pos-headphones{ grid-area:headphones; }
+      body.record-active #screen-record .pos-rec{
+        grid-area:rec;
+        width:100%;
+      }
+      body.record-active #screen-record #btnRec{ grid-column:1 / -1; }
+      body.record-active #screen-record #btnRender,
+      body.record-active #screen-record #btnHeadphones{
+        grid-column:auto !important;
+      }
+    }
+
+    /* —— Force REC full-width in portrait ———————————————————————— */
+    @media (orientation: portrait){
+      body.record-active #screen-record .control-rail{
+        display:grid !important;
+        grid-template-columns:1fr 1fr !important;
+        grid-auto-rows:var(--btn-h);
+        gap:10px;
+      }
+      /* camera | headphones on row 1, REC across row 2 */
+      body.record-active #screen-record #btnRec{
+        grid-column:1 / -1 !important;
+        width:100% !important;
+      }
+    }
+
+  #screen-record{ max-height:100dvh; overflow:hidden; }
+
+    @media (orientation: landscape) and (max-width: 1024px){
+      body.record-active main{
+        max-width:none;
+        margin:0;
+        padding:calc(12px + env(safe-area-inset-top,0px)) calc(12px + env(safe-area-inset-right,0px)) calc(96px + env(safe-area-inset-bottom,0px)) calc(12px + env(safe-area-inset-left,0px));
+      }
+      body.record-active main::before{ display:none; }
+      body.record-active #screen-record .record-grid{
+        grid-template-columns:minmax(0, calc(100% - var(--railW) - 12px)) var(--railW);
+        grid-template-areas:"preview rail";
+        grid-template-rows:1fr;
+        gap:12px;
+        align-items:start;
+      }
+      body.record-active #screen-record .preview-wrap{
+        padding:8px;
+        border-radius:18px;
+      }
+      body.record-active #screen-record #preview{
+        border-radius:14px;
+      }
+      body.record-active #screen-record .control-rail{
+        position:sticky;
+        top:calc(env(safe-area-inset-top,0px) + 8px);
+        align-self:start;
+        gap:8px;
+      }
+      body.record-active #screen-record .control-rail .btn{
+        font-size:11px;
+        min-height:30px;
+        padding:6px 8px;
+        border-radius:10px;
+        line-height:1.1;
+      }
+      body.record-active .tabbar{
+        padding:6px 8px calc(env(safe-area-inset-bottom,0px) + 8px);
+      }
+    }
+
+    @media (orientation: landscape) and (max-width: 1024px){
+      body.record-active #screen-record .record-grid{
+        grid-template-areas:"preview rail";
+        grid-template-rows:1fr;
+        align-items:stretch;
+      }
+      body.record-active #screen-record .control-rail{
+        height:100%;
+        align-content:space-between;
+        gap:8px;
+      }
+    }
+
+    /* Landscape Record: fill the viewport, minimize gutters */
+    @media (orientation: landscape) and (max-width: 1024px){
+      body.record-active #screen-record .card.record-grid{
+        padding:8px;
+        border-radius:16px;
+      }
+      body.record-active #screen-record .record-grid{
+        grid-template-areas:"preview rail";
+        grid-template-rows:1fr;
+        gap:8px;
+        height:calc(100vh - calc(env(safe-area-inset-bottom,0px) + 64px));
+      }
+      body.record-active #screen-record .preview-wrap{
+        padding:6px;
+        border-radius:14px;
+        height:100%;
+      }
+      body.record-active #screen-record #preview{
+        height:100%;
+        width:100%;
+        aspect-ratio:auto;
+        object-fit:cover;
+      }
+      body.record-active #screen-record .control-rail{
+        height:100%;
+        align-content:space-between;
+        gap:8px;
+      }
+    }
+
+    @media (orientation: landscape){
+      body.record-active main{
+        /* lift content slightly to free space near the tabbar */
+        padding-bottom:calc(env(safe-area-inset-bottom,0px) + 92px);
+        padding-top:calc(env(safe-area-inset-top,0px) + 2px);
+      }
+      #screen-record .record-grid{ gap:10px; }
+      body.record-active #screen-record .record-grid{
+        align-items:stretch;
+      }
+      body.record-active #screen-record .control-rail{
+        display:flex;
+        flex-direction:column;
+        justify-content:space-between;
+        gap:10px;
+        padding-block:0;
+        padding-top:0;
+        padding-bottom:0;
+        height:100%;
+        margin:0;
+        align-self:stretch;
+        position:sticky;
+        /* tuck the rail a bit higher */
+        top:calc(env(safe-area-inset-top,0px) + 4px);
+      }
+      body.record-active #screen-record .control-rail .btn{
+        margin:0;
+      }
+    }
 
     /* REC visual states */
     .btn.rec{
@@ -410,19 +697,15 @@
       color:#ff6969; border:1px solid rgba(255,120,120,0.4);
     }
 
-    #statusRec{
-      grid-area: status;
-      min-height:22px;
-      padding:10px 12px;
-      white-space:pre;                 /* no weird line breaks */
-      overflow:auto;
-    }
-
     /* Flip camera translucent overlay */
     .flipcam{
       position:absolute;
-      right:16px; bottom:16px;
-      width:44px; height:44px;
+      right:12px;
+      bottom:12px;
+      z-index:5;
+      transform:translateZ(0);
+      width:var(--btn-h);
+      height:var(--btn-h);
       border-radius:999px;
       border:1px solid rgba(147,160,195,0.35);
       background:rgba(12,15,24,0.55);
@@ -434,45 +717,19 @@
     }
     .flipcam:active{ transform:scale(0.98) }
 
-    /* --- Portrait (stack): Render+REC full width, then 2x2 control rows --- */
-    @media (max-width: 860px){
-      .record-grid{
-        grid-template-columns: 1fr;
-        grid-template-rows: auto auto auto;
-        grid-template-areas:
-          "preview"
-          "rail"
-          "status";
-        gap:12px;
-      }
-      .control-rail{
-        display:grid;
-        grid-template-columns: 1fr 1fr;
-        gap:12px;
-        align-items:start;
-      }
-      /* Row 1: Render + REC full width */
-      #btnRender{ grid-column: 1 / -1; }
-      #btnRec{ grid-column: 1 / -1; }
+    /* Keep flip camera button pinned inside the preview bottom-right */
+    #screen-record .preview-wrap{ position:relative; }
+    #btnFlipCam{ position:absolute; right:12px; bottom:12px; z-index:5; }
 
-      /* Row 2: Camera | Count-in */
-      #btnCamera{ grid-column: 1 / 2; }
-      #btnCountIn{ grid-column: 2 / 3; }
-
-      /* Row 3: Headphones full width; Status full width under it */
-      #btnHeadphones{ grid-column: 1 / -1; }
-      #statusRec{ grid-column: 1 / -1; }
-
-      /* Prevent odd narrow wrapping on status in portrait */
-      #statusRec{ white-space: normal; min-height: 44px; }
-    }
-
-    /* --- Landscape: single rail column with identical widths --- */
-    @media (min-width: 861px){
-      .control-rail{ grid-template-columns: 1fr; }
-      /* ensure status stays under preview column */
-      #statusRec{ grid-column: 1 / 2; }
-    }
+    
+    /* Gallery */
+  .take-card{ position:relative; border:1px solid rgba(147,160,195,0.28); border-radius:18px; padding:12px; margin-bottom:12px; background:rgba(9,12,20,0.7); }
+  .take-thumb{ width:100%; border-radius:14px; display:block; background:#000; object-fit:cover; }
+    .take-row{ display:flex; align-items:center; justify-content:space-between; gap:10px; margin-top:8px; }
+    .take-meta{ font-size:12px; color:var(--muted); }
+    .take-note{ width:100%; margin-top:8px; font-size:13px; border-radius:12px; padding:10px 12px; background:rgba(10,12,20,0.5); border:1px solid rgba(147,160,195,0.3); color:var(--text); }
+    .chip-filter{ display:inline-block; padding:6px 10px; border-radius:999px; border:1px solid rgba(147,160,195,0.32); background:rgba(12,15,24,0.7); margin-right:6px; cursor:pointer; }
+    .chip-filter.active{ border-color:var(--focus); }
 
     /* L→R dots for loading */
     .dots { display:inline-flex; gap:6px; align-items:center; vertical-align:middle }
@@ -495,19 +752,77 @@
       -webkit-backdrop-filter:blur(14px);
     }
     .errbar.show{ display:block }
+
+    /* === Record (portrait) — tuck all frames to the very top =============== */
+    @media (orientation: portrait){
+
+      /* 1) Remove the global top padding while recording (main will handle safe area) */
+      body.record-active{
+        padding-top:0 !important;
+      }
+
+      /* 2) Hide the rounded glass/backdrop behind the content in record-portrait
+            so we don't see a "second frame" above the preview */
+      body.record-active main::before{
+        display:none !important;
+      }
+
+      /* 3) Make main hug the status bar (keep safe-area) and reserve bottom for tabs */
+      body.record-active main{
+        padding-top:calc(env(safe-area-inset-top, 0px) + 0px) !important;
+        padding-bottom:calc(env(safe-area-inset-bottom, 0px) + var(--tabsH)) !important;
+      }
+
+      /* 4) Remove any top spacing from the record card and grid */
+      body.record-active #screen-record .card.record-grid{
+        margin-top:0 !important;
+        padding-top:0 !important;
+      }
+      body.record-active #screen-record .record-grid{
+        height:calc(100dvh - var(--tabsH)) !important;
+        grid-template-rows:1fr auto !important; /* preview grows, controls stick */
+      }
+
+      /* 5) Preview wrapper: no top padding/margin; let the video sit flush */
+      body.record-active #screen-record .preview-wrap{
+        margin-top:0 !important;
+        padding-top:0 !important;
+        /* cap so controls never get pushed off-screen */
+        max-height:calc(100dvh - var(--tabsH) - (var(--btn-h) * 2 + 10px) - env(safe-area-inset-bottom,0px)) !important;
+      }
+
+      /* 6) Video keeps portrait aspect and fills the wrapper */
+      body.record-active #screen-record #preview{
+        width:100%;
+        height:100%;
+        aspect-ratio:9 / 16;
+        object-fit:cover;
+      }
+
+      /* 7) Control rail: two rows (camera|headphones, then full-width REC) */
+      body.record-active #screen-record .control-rail{
+        display:grid !important;
+        grid-template-columns:1fr 1fr !important;
+        grid-template-areas:
+          "camera headphones"
+          "rec     rec";
+        grid-auto-rows:var(--btn-h);
+        gap:10px;
+        padding-bottom:0;
+        margin-top:0;
+      }
+      body.record-active #screen-record .pos-camera{ grid-area:camera; }
+      body.record-active #screen-record .pos-headphones{ grid-area:headphones; }
+      body.record-active #screen-record .pos-rec{ grid-area:rec; width:100%; }
+      body.record-active #screen-record #btnRec{
+        grid-column:1 / -1 !important;
+        width:100% !important;
+      }
+    }
   </style>
 </head>
 <body>
   <div id="errbar" class="errbar" role="alert"></div>
-  <header>
-    <div class="brand">
-      <div class="brand-copy">
-        <span class="brand-title">OFFBOOK</span>
-        <span class="brand-subtitle">Rehearse. Record. Book.</span>
-      </div>
-    </div>
-  </header>
-
   <main>
     <!-- IMPORT -->
     <section id="screen-import" class="screen active">
@@ -630,28 +945,22 @@ JANE: Ready?"></textarea>
 
     <!-- RECORD -->
     <section id="screen-record" class="screen">
-      <div class="card record-grid">
-        <!-- Left: 16x9 preview window -->
+      <div class="card record-grid record-card">
+        <!-- Preview -->
         <div class="preview-wrap">
-          <video id="preview" class="vid16x9" autoplay muted playsinline></video>
+          <video id="preview" autoplay muted playsinline></video>
           <audio id="readerAudio" preload="auto" playsinline></audio>
-        </div>
-
-          <!-- overlay flip button -->
           <button id="btnFlipCam" class="flipcam" aria-label="Flip camera" title="Flip camera">⟳</button>
         </div>
 
-        <!-- Right: compact control rail -->
-        <div class="control-rail">
-          <button id="btnRender" class="btn rail">Render</button>
-          <button id="btnRec" class="btn rec">REC</button>
-          <button id="btnCamera" class="btn secondary rail" aria-pressed="false">Camera: Off</button>
-          <button id="btnCountIn" class="btn secondary rail" aria-pressed="true">Count-in: On</button>
-          <button id="btnHeadphones" class="btn secondary rail" aria-pressed="true">Headphones: On</button>
+        <!-- Controls -->
+        <div class="control-rail controls-stack">
+          <button id="btnRender" class="btn btn-render rail landscape-only pos-render">Render</button>
+          <button id="btnRec" class="btn rec pos-rec">REC</button>
+          <button id="btnCamera" class="btn secondary rail pos-camera" aria-pressed="false">Camera: Off</button>
+          <button id="btnCountIn" class="btn secondary rail landscape-only pos-countin" aria-pressed="true">Count-in: On</button>
+          <button id="btnHeadphones" class="btn secondary rail pos-headphones" aria-pressed="true">Headphones: On</button>
         </div>
-
-        <!-- Status under preview in landscape; spans full width in portrait -->
-        <pre id="statusRec" class="status"></pre>
       </div>
     </section>
 
@@ -660,12 +969,62 @@ JANE: Ready?"></textarea>
       <div class="card">
         <h3>Gallery</h3>
         <div id="takes"></div>
-        <div class="hint">Takes are saved locally in your browser. Download to keep.</div>
+        <div class="hint">Takes are saved on this device for 14 days (max 10). Use “Download” to save/share.</div>
       </div>
     </section>
 
-    <!-- SETTINGS -->
-    <section id="screen-settings" class="screen"><div class="card"><h3>Settings</h3><p class="hint">Defaults & storage (future).</p></div></section>
+    <!-- INFO -->
+    <section id="screen-info" class="screen">
+      <div class="card">
+        <h3>Info & How to Use</h3>
+        <p class="hint">Quick start guide. Headphones recommended for clean timing.</p>
+
+        <ol style="margin:0; padding-left:18px; line-height:1.55">
+          <li><b>Import</b>
+            <div class="small">
+              • <b>Paste Script Text</b> (most reliable) — give it a title and press <i>Continue → Assign</i>.<br>
+              • <b>Upload PDF</b> — text PDFs auto-extract; scanned PDFs show <i>Try OCR</i> for the first 3 pages.
+            </div>
+          </li>
+          <div class="spacer8"></div>
+          <li><b>Assign</b>
+            <div class="small">
+              • Choose <b>I am…</b> (your role).<br>
+              • Pick partner <b>voices</b>. Save.
+            </div>
+          </li>
+          <div class="spacer8"></div>
+          <li><b>Rehearse</b>
+            <div class="small">
+              • Toggle <b>Edit Script</b> to tweak or delete lines; add with the inline “+ Add here”.<br>
+              • Press <b>Render for rehearsal (OpenAI)</b> to pre-load partner clips. Choose Fast/HD.<br>
+              • Use <b>Play / Prev / Next</b>. Turn <b>Mic: On</b> to enable listen/respond.<br>
+              • <b>Interruption rule:</b> if your line ends with an em dash “—”, the partner comes in fast.<br>
+              • Pacing select adjusts small gaps after partner lines.
+            </div>
+          </li>
+          <div class="spacer8"></div>
+          <li><b>Record</b>
+            <div class="small">
+              • <b>Render</b> reuses cached rehearsal clips when available (best timing).<br>
+              • Toggle <b>Camera / Count-in / Headphones</b>. Tap <b>REC</b> to start/stop.
+            </div>
+          </li>
+          <div class="spacer8"></div>
+          <li><b>Gallery</b>
+            <div class="small">
+              • Plays inline. <b>Download</b> or <b>Share</b>. Auto-prunes after 14 days (max 10).<br>
+              • Filter by aspect (16:9 / 9:16). Add a note per take.
+            </div>
+          </li>
+        </ol>
+
+        <div class="spacer12"></div>
+        <div class="small">
+          <b>Tips:</b> Use wired/Bluetooth headphones to avoid echo/ducking. If TTS shows a 429 quota message, top up credits and press Render again. “Clear Render” removes cached clips.
+        </div>
+      </div>
+    </section>
   </main>
 
   <!-- Bottom bar -->
@@ -676,7 +1035,7 @@ JANE: Ready?"></textarea>
       <button data-tab="rehearse" role="tab" aria-selected="false">Rehearse</button>
       <button data-tab="record" role="tab" aria-selected="false">Record</button>
       <button data-tab="gallery" role="tab" aria-selected="false">Gallery</button>
-      <button data-tab="settings" role="tab" aria-selected="false">Settings</button>
+      <button data-tab="info" role="tab" aria-selected="false">Info</button>
     </div>
   </nav>
 
@@ -686,24 +1045,71 @@ JANE: Ready?"></textarea>
 
   <!-- App -->
   <script type="module">
+    import { expectedMinMsFor, AFTER_ADV_COOLDOWN_MS, isSpeaking, endsWithDashy, readyForAdvance } from "./js/speech-timing.js";
     const boot = () => {
       const qs = new URLSearchParams(location.search);
       const secret = qs.get("secret") || "1976";
       const JSON_HDRS = { "Content-Type":"application/json", ...(secret?{"X-Shared-Secret":secret}:{}) };
-      const $ = (s,r=document)=>r.querySelector(s);
-      const $$ = (s,r=document)=>Array.from(r.querySelectorAll(s));
+    const $ = (s,r=document)=>r.querySelector(s);
+    const $$ = (s,r=document)=>Array.from(r.querySelectorAll(s));
+    // --- TDZ fix: declare R early so Safari doesn't throw before it's assigned ---
+    let R = null;
+      // --- Belt & suspenders guard (safe checks for the Record state object) ---
+      const hasR = () => !!(typeof R !== "undefined" && R && typeof R === "object");
+      // Tight mode when recording
+      const tightMode = () => (typeof R !== "undefined" && R && R.recording === true);
       const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform==='MacIntel' && navigator.maxTouchPoints>1);
+
+      const mqlPortrait = window.matchMedia('(orientation: portrait)');
+      const isPortrait = () => mqlPortrait.matches;
+      const applyOrientationClasses = (event)=>{
+        const portrait = event ? event.matches : isPortrait();
+        document.body.classList.toggle('is-portrait', portrait);
+        document.body.classList.toggle('is-landscape', !portrait);
+        updateRecordLayout();
+      };
+      applyOrientationClasses();
+      if(typeof mqlPortrait.addEventListener === 'function'){
+        mqlPortrait.addEventListener('change', applyOrientationClasses);
+      } else if(typeof mqlPortrait.addListener === 'function') {
+        mqlPortrait.addListener(applyOrientationClasses);
+      }
 
       const errbar=$("#errbar");
       function showErr(msg){ errbar.textContent=msg; errbar.classList.add("show"); }
 
+      // --- Screen Wake Lock to prevent auto-sleep during rehearse/record ---
+      let wakeLock = null;
+      async function acquireWakeLock(){
+        try{
+          if("wakeLock" in navigator && document.visibilityState === "visible"){
+            wakeLock = await navigator.wakeLock.request("screen");
+            wakeLock?.addEventListener?.("release", ()=>{ wakeLock=null; });
+          }
+        }catch{ /* ignore */ }
+      }
+      function releaseWakeLock(){ try{ wakeLock?.release(); }catch{} wakeLock=null; }
+      document.addEventListener("visibilitychange", ()=>{
+        const onActiveTab = document.querySelector(".tabbar button.active")?.dataset.tab;
+        if(document.visibilityState === "visible" && (onActiveTab==="rehearse" || onActiveTab==="record")){
+          acquireWakeLock();
+        }else{
+          releaseWakeLock();
+        }
+      });
+
       function showScreen(name){
-        $$(".countdown").forEach(x=>x.classList.remove("show"));
-        stopAllAudioHard();
+  $$(".countdown").forEach(x=>x.classList.remove("show"));
+  stopAllAudioHard();
+        try{
+          if(name==="rehearse" || name==="record") acquireWakeLock();
+          else releaseWakeLock();
+        }catch{}
         if(name!=="record"){
           try{ if(R?.recording){ stopRecording(); } }catch{}
           try{ cleanupStream(); }catch{}
         }
+        document.body.classList.toggle("record-active", name==="record");
         $$(".screen").forEach(s=>s.classList.remove("active"));
         $("#screen-"+name).classList.add("active");
         $$(".tabbar button").forEach(b=>b.classList.remove("active"));
@@ -712,10 +1118,13 @@ JANE: Ready?"></textarea>
         if(name==="rehearse"){
           try{ primeReaderFromCacheIfAvailable(); }catch{}
         }else if(name==="record"){
+          try{ updateRecordLayout(); }catch{}
           try{ primeReaderFromCacheIfAvailable(); }catch{}
           try{ requestMicPermissionOnce(); }catch{}
           try{ startPreviewIfNeeded(); }catch{}
           try{ setRailStates(); }catch{}
+        }else if(name==="gallery"){
+          renderGallery().catch(()=>{});
         }
       }
       $$(".tabbar button").forEach(b=>b.addEventListener("click",()=>showScreen(b.dataset.tab)));
@@ -814,13 +1223,18 @@ JANE: Ready?"></textarea>
 
       // Import: PDF
       $("#btnPdfUpload")?.addEventListener("click", async ()=>{
-        const title=$("#titlePdf").value||"PDF Sides"; const file=$("#pdfFile").files[0];
-        if(!file){ setStatusPdf("Choose a PDF first."); return; }
-        const fd=new FormData(); fd.append("title",title); fd.append("pdf",file);
+        const title=$("#titlePdf").value||"PDF Sides";
+        const pdfInput=$("#pdfFile");
+        const f=pdfInput?.files?.[0];
+        if(!f){ setStatusPdf("No file selected"); return; }
+        const fd=new FormData();
+        fd.append("title",title);
+        fd.append("pdf",f,f.name); // enforce field name
         const hdrs={}; if(secret) hdrs["X-Shared-Secret"]=secret;
+        const url=secret?`/debug/upload_script_upload?secret=${encodeURIComponent(secret)}`:"/debug/upload_script_upload";
         setStatusPdf("Uploading PDF…");
         try{
-          const r=await fetch("/debug/upload_script_upload",{method:"POST",headers:hdrs,body:fd});
+          const r=await fetch(url,{method:"POST",headers:hdrs,body:fd});
           const j=await safeJson(r);
           if(!r.ok){ setStatusPdf("Error "+r.status+": "+JSON.stringify(j)); return; }
           const sp=(j.speakers||[]).join(", "); const note=j.note?(" note="+j.note):"";
@@ -916,12 +1330,13 @@ JANE: Ready?"></textarea>
       const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
       const sr=SR?new SR():null;
       let srToggleOn=false, srPermGranted=false, srActive=false;
-      let myLineStartMs=0, firstEnergyAt=0, advanceLock=false, advanceCoolUntil=0;
+  let myLineStartMs=0, firstEnergyAt=0, advanceLock=false;
+  let lastAdvanceAt=0;
       let latestTranscript="", silenceTimer=null, lastResultAt=0;
 
       // energy monitor
       let micStream=null, audioCtx=null, analyser=null, energy=0, speaking=false, lastEnergyAt=0;
-      const ENERGY_TALK_THRESH=0.035, ENERGY_SILENCE_THRESH=0.020;
+  const ENERGY_SILENCE_THRESH=0.020;
 
       function rms(buf){ let sum=0; for(let i=0;i<buf.length;i++){ const v=buf[i]/128-1; sum+=v*v; } return Math.sqrt(sum/buf.length); }
       function startMicMonitor(){
@@ -933,13 +1348,17 @@ JANE: Ready?"></textarea>
           analyser=audioCtx.createAnalyser(); analyser.fftSize=2048;
           src.connect(analyser);
           const data=new Uint8Array(analyser.fftSize);
+          const energyWindow=[];
           const tick=()=>{
             if(!analyser) return;
             analyser.getByteTimeDomainData(data);
             const v=rms(data);
             energy = energy*0.85 + v*0.15;
             const now=performance.now();
-            if(energy>ENERGY_TALK_THRESH){ if(!speaking){ firstEnergyAt=now; } speaking=true; lastEnergyAt=now; }
+            energyWindow.push(energy);
+            if(energyWindow.length>12) energyWindow.shift();
+            const talking = isSpeaking(energyWindow);
+            if(talking){ if(!speaking){ firstEnergyAt=now; } speaking=true; lastEnergyAt=now; }
             else if(energy<ENERGY_SILENCE_THRESH){ if(now-(lastEnergyAt||now)>140){ speaking=false; } }
             requestAnimationFrame(tick);
           };
@@ -948,20 +1367,32 @@ JANE: Ready?"></textarea>
       }
       function stopMicMonitor(){ try{ micStream?.getTracks().forEach(t=>t.stop()); }catch{}; micStream=null; try{ audioCtx?.close(); }catch{}; audioCtx=null; analyser=null; energy=0; speaking=false; }
 
-      function minElapsedFor(text){ const t=(text||"").trim(); if(t.length<=6) return 180; if(t.length<=15) return 220; if(t.length<=40) return 300; return 420; }
-      function silenceDebounceFor(text){ const t=(text||"").trim(); if(t.length<=6) return 180; if(t.length<=15) return 220; if(t.length<=40) return 260; return 320; }
-      const AFTER_ADV_COOLDOWN_MS=140;
-      const MIN_PROGRESS_FOR_SILENCE = 0.35;
+      function minElapsedFor(text){
+        const base = expectedMinMsFor(text || "");
+        // Slightly tighter so we can advance as soon as you finish
+        return tightMode()
+          ? Math.max(160, Math.round(base * 0.62))
+          : Math.round(base * 0.98);
+      }
+      function silenceDebounceFor(text){
+        const base = expectedMinMsFor(text || "");
+        // Aim for ~0.45–0.55s typical "after last energy" window
+        const scaled = tightMode()
+          ? Math.round(base * 0.48)
+          : Math.round(base * 0.58);
+        return Math.min(Math.max(140, scaled), 900);
+      }
 
-      function tokens(s){ return (s||"").toLowerCase().replace(/[^a-z0-9' ]+/g," ").split(/\s+/).filter(Boolean); }
-      function lastCueWords(text){ const tks=tokens(text).filter(w=>!["uh","um"].includes(w)); if(!tks.length) return ""; const take=Math.min(2,tks.length); return tks.slice(-take).join(" "); }
-      function transcriptContainsCue(tr){ const cue=lastCueWords(current()?.text||""); if(!cue) return false; return tokens(tr).join(" ").includes(cue); }
-      function norm(s){ return (s||"").toLowerCase().replace(/[^a-z0-9' ]+/g," ").trim(); }
-      function progressRatio(lineText, tr){ const a=norm(lineText); const b=norm(tr); if(!a) return 0; return Math.min(1, b.length / a.length); }
 
       function filtered(){ return buildFiltered(getScene()); }
       function current(){ return filtered()[idx]; }
       function onMyLine(){ const ln=current(); return !!ln && ln.speaker===myName(); }
+      function sceneHasDashyUserLine(){
+        const list = filtered();
+        const me = myName();
+        if(!list.length || !me) return false;
+        return list.some(ln => ln && ln.speaker === me && endsWithDashy(ln.text || ""));
+      }
       function maybeSetMyLineStart(){ if(onMyLine() && !myLineStartMs) myLineStartMs=performance.now(); }
       function clearMy(){ myLineStartMs=0; firstEnergyAt=0; advanceLock=false; latestTranscript=""; lastResultAt=0; if(silenceTimer){ clearTimeout(silenceTimer); silenceTimer=null; } }
 
@@ -981,39 +1412,63 @@ JANE: Ready?"></textarea>
 
       function advanceFromMyLine(){
         const now=performance.now();
-        if(advanceLock||now<advanceCoolUntil) return;
+        // DO NOT TUNE in Record; Rehearse is the source of truth.
+        const cooldown = tightMode() ? Math.max(80, Math.round(AFTER_ADV_COOLDOWN_MS * 0.35)) : AFTER_ADV_COOLDOWN_MS;
+        if(advanceLock || (now - lastAdvanceAt) < cooldown) return;
         if(!onMyLine()) return;
+        const ln = current();
+        if(!ln) return;
         const elapsed=now-(myLineStartMs||now);
-        if(elapsed < minElapsedFor(current()?.text||"")) return;
+        if(elapsed < minElapsedFor(ln.text||"")) return;
 
         advanceLock=true;
-        const list=filtered(); if(!list.length) return;
+        const list=filtered(); if(!list.length){ advanceLock=false; return; }
         idx=Math.min(idx+1,list.length-1);
         highlightCurrent();
         clearMy();
+        lastAdvanceAt = now;
         try{ sr?.stop(); }catch{}
+        if(R?.rec && typeof R.rec.state === "string" && R.rec.state === "inactive"){
+          try{ R.rec.start(); R.recording = true; setRailStates(); }
+          catch{}
+        }
         const next=current();
-        advanceCoolUntil=now+AFTER_ADV_COOLDOWN_MS;
         if(next && next.speaker===myName()){
           if(srToggleOn && srPermGranted){ setTimeout(()=>{ if(sr && !srActive) try{ sr.start(); }catch{}; },80); }
-        }else{
-          if(!playing) playing=true;
-          step(true);
+        }else if(next){
+          playing = true;
+          Promise.resolve(step(true, { immediate: true })).catch(()=>{});
         }
+        advanceLock=false;
       }
 
       function armSilenceDebounce(){
         if(silenceTimer) clearTimeout(silenceTimer);
-        const need = silenceDebounceFor(current()?.text||"");
+        const ln = current();
+        if(!ln) return;
+        const need = silenceDebounceFor(ln.text||"");
         silenceTimer = setTimeout(()=>{
-          if(!(onMyLine() && srToggleOn && srPermGranted)) return;
-          const now=performance.now();
-          const elapsed=now-(myLineStartMs||now);
-          if(!firstEnergyAt || elapsed < minElapsedFor(current()?.text||"")) return;
-          const quietLongEnough = !speaking && (now - Math.max(lastResultAt||firstEnergyAt, firstEnergyAt)) >= need;
-          const cueOk = transcriptContainsCue(latestTranscript);
-          const progressOk = progressRatio(current()?.text||"", latestTranscript) >= MIN_PROGRESS_FOR_SILENCE;
-          if(quietLongEnough && (cueOk || progressOk)){ advanceFromMyLine(); }
+          if(!onMyLine()) return;
+          const now = performance.now();
+          const elapsed = now - (myLineStartMs||now);
+          if(!firstEnergyAt || elapsed < 60) return;
+          const shouldAdvance = readyForAdvance({
+            text: ln.text,
+            interim: latestTranscript,
+            isSilentNow: !speaking,
+            elapsedMs: elapsed,
+            lastAdvanceAt,
+            dashyMode: endsWithDashy(ln.text)
+          });
+          const timeSinceEnergy = now - (lastEnergyAt || now);
+          const enoughSilence = timeSinceEnergy >= Math.min(900, Math.max(140, silenceDebounceFor(ln.text)));
+          const enoughElapsed = elapsed >= minElapsedFor(ln.text);
+          const dashy = endsWithDashy(ln.text);
+          if( (dashy && shouldAdvance && enoughElapsed) ||
+              (!dashy && shouldAdvance && enoughSilence && enoughElapsed) ){
+            silenceTimer = null;
+            advanceFromMyLine();
+          }
         }, need);
       }
 
@@ -1025,12 +1480,44 @@ JANE: Ready?"></textarea>
         sr.onresult=(ev)=>{
           if(!(onMyLine() && srToggleOn && srPermGranted)) return;
           maybeSetMyLineStart();
-          const now=performance.now(); if(now<advanceCoolUntil) return;
+          const now=performance.now();
           const ln=current(); if(!ln) return;
-          const last=ev.results?.[ev.results.length-1]; const alt=last?.[0]; const isFinal=!!last?.isFinal;
-          latestTranscript=(alt?.transcript||"").trim(); lastResultAt=now;
+
+          const last=ev.results?.[ev.results.length-1];
+          const alt=last?.[0];
+          const isFinal=!!last?.isFinal;
+          latestTranscript=(alt?.transcript||"").trim();
+          lastResultAt=now;
+
           const elapsed=now-(myLineStartMs||now);
-          if(isFinal && elapsed>=minElapsedFor(ln.text)){ return advanceFromMyLine(); }
+
+          const dashy = endsWithDashy(ln.text); // only end-dash matters
+          const shouldAdvance = readyForAdvance({
+            text: ln.text,
+            interim: latestTranscript,
+            isSilentNow: !speaking,
+            elapsedMs: elapsed,
+            lastAdvanceAt,
+            dashyMode: dashy
+          });
+          const enoughElapsed = elapsed >= minElapsedFor(ln.text);
+          const timeSinceEnergy = now - (lastEnergyAt || now);
+          const enoughSilence = timeSinceEnergy >= Math.min(1100, Math.max(180, silenceDebounceFor(ln.text)));
+
+          // Dash at end = allow fast cut-in once minima met
+          if(dashy){
+            if((shouldAdvance && enoughElapsed) || (isFinal && enoughElapsed)){
+              return advanceFromMyLine();
+            }
+          }else{
+            // Normal lines: require final result OR adequate silence, plus minima
+            if((isFinal && enoughElapsed) || (shouldAdvance && enoughSilence && enoughElapsed)){
+              return advanceFromMyLine();
+            }
+          }
+
+          // For non-dashy user lines we wait slightly longer before auto-advance.
+          // Dashy end ("—" at end) still advances fast via readyForAdvance().
           armSilenceDebounce();
         };
       }
@@ -1040,6 +1527,15 @@ JANE: Ready?"></textarea>
         if(!(onMyLine()) || (E.inlineForm&&E.inlineForm.isConnected)) return;
         if(!srActive){ try{ sr.start(); }catch{} }
       }, 300);
+
+      // Re-start SR if it ever drops while on your line (Record only)
+      setInterval(()=>{
+        if(!tightMode()) return;
+        if(!(onMyLine()) || (E.inlineForm&&E.inlineForm.isConnected)) return;
+        if(sr && srToggleOn && srPermGranted && !srActive){
+          try{ sr.start(); }catch{}
+        }
+      }, 250);
 
       $("#btnMic")?.addEventListener("click", async ()=>{
         const srAvailable = !!sr;
@@ -1067,14 +1563,23 @@ JANE: Ready?"></textarea>
 
       function primeReaderFromCacheIfAvailable(){
         try{
-          if(RR.map && RR.map.size){ try{ preloadReaderBuffers(); }catch{}; return true; }
+          if(RR.map && RR.map.size){
+            if(hasR()){
+              try{ preloadReaderBuffers(); }catch{}
+            }
+            return true;
+          }
           const cached = ReaderCache.get();
           if(cached && typeof cached.size === "number" && cached.size){
-            R.readerBuffers = new Map();
+            if(hasR()){
+              R.readerBuffers = new Map();
+              R.readerLoading = false;
+            }
             resetReaderActiveSources();
-            R.readerLoading = false;
             RR.map = new Map(cached);
-            try{ preloadReaderBuffers(); }catch{}
+            if(hasR()){
+              try{ preloadReaderBuffers(); }catch{}
+            }
             return true;
           }
         }catch{}
@@ -1085,20 +1590,48 @@ JANE: Ready?"></textarea>
       function setRehearseRenderStatus(msg, cls){
         const el = $("#rehearseRenderStatus");
         el.innerHTML = "";
-        if(!msg){ el.textContent = " "; return; } // keep the bar’s height even when idle
-        const span = document.createElement("span");
-        if(cls) span.style.color = (cls==="ok"? "var(--ok)" : cls==="err" ? "var(--danger)" : cls==="warn" ? "var(--warn)" : "var(--muted)");
-        span.textContent = msg + " ";
-        el.appendChild(span);
-        if(RR.rendering){
-          const dots = document.createElement("span");
-          dots.className = "dots";
-          dots.innerHTML = `<span class="dot ${RR.dotsState[0]?"on":""}"></span><span class="dot ${RR.dotsState[1]?"on":""}"></span><span class="dot ${RR.dotsState[2]?"on":""}"></span>`;
-          el.appendChild(dots);
+        if(!msg){ el.textContent = " "; }
+        else{
+          const span = document.createElement("span");
+          if(cls) span.style.color = (cls==="ok"? "var(--ok)" : cls==="err" ? "var(--danger)" : cls==="warn" ? "var(--warn)" : "var(--muted)");
+          span.textContent = msg + " ";
+          el.appendChild(span);
+        }
+
+        if(hasR() && R.btnRender){
+          const btn = R.btnRender;
+          const base = btn.dataset.defaultLabel || "Render";
+          if(!btn.dataset.defaultLabel) btn.dataset.defaultLabel = base;
+          if(RR.rendering){
+            btn.disabled = true;
+            btn.classList.add("progressing");
+            btn.textContent = "Rendering…";
+          } else {
+            btn.disabled = false;
+            btn.classList.remove("progressing");
+            btn.textContent = base;
+          }
         }
       }
-      function startDots(){ stopDots(); RR.dotsTimer=setInterval(()=>{ if(RR.dotsState.join("")==="000"){ RR.dotsState=[1,0,0]; } else if(RR.dotsState[0]){ RR.dotsState=[0,1,0]; } else if(RR.dotsState[1]){ RR.dotsState=[0,0,1]; } else { RR.dotsState=[0,0,0]; } setRehearseRenderStatus("Preparing voices…",""); }, 320); }
-      function stopDots(){ if(RR.dotsTimer){ clearInterval(RR.dotsTimer); RR.dotsTimer=null; RR.dotsState=[0,0,0]; } }
+      function startDots(){
+        stopDots();
+        RR.dotsTimer = setInterval(()=>{
+          if(RR.dotsState.join("")==="000"){ RR.dotsState=[1,0,0]; }
+          else if(RR.dotsState[0]){ RR.dotsState=[0,1,0]; }
+          else if(RR.dotsState[1]){ RR.dotsState=[0,0,1]; }
+          else { RR.dotsState=[0,0,0]; }
+          setRehearseRenderStatus("Preparing voices…","");
+        }, 320);
+      }
+      function stopDots(){
+        if(RR.dotsTimer){
+          clearInterval(RR.dotsTimer);
+          RR.dotsTimer=null;
+          RR.dotsState=[0,0,0];
+        }
+        // keep last message but stop the animated dots
+        setRehearseRenderStatus(document.getElementById("rehearseRenderStatus")?.textContent || "", "");
+      }
 
       async function renderRehearseVoices(){
         if(RR.rendering) return;
@@ -1106,14 +1639,18 @@ JANE: Ready?"></textarea>
         const list  = buildFiltered(scene);
         if(!list.length){ setRehearseRenderStatus("No lines to render.","err"); return; }
 
-  RR.rendering = true; RR.failures = 0; RR.map.clear(); R.readerBuffers = new Map(); resetReaderActiveSources(); R.readerLoading = false; startDots(); setRehearseRenderStatus("Preparing voices…"," ");
+  RR.rendering = true; RR.failures = 0; RR.map.clear();
+        if(hasR()){ R.readerBuffers = new Map(); R.readerLoading = false; }
+        resetReaderActiveSources();
+        startDots();
+        setRehearseRenderStatus("Preparing voices…"," ");
 
         const voiceFor = (name)=> (S.voice_map[name] || S.supportedVoices[0] || "alloy");
         const model    = ($("#selTtsModel")).value || "tts-1";
 
-        const CONCURRENCY = isIOS ? 2 : 3;
+        const CONCURRENCY = 2;       // keep bursts gentle across all devices
         const MAX_ATTEMPTS = 3;
-        const TIMEOUT_MS   = 30000;
+        const TIMEOUT_MS   = 45000;  // occasional cold starts or queueing
 
         let i = 0, done = 0, firstErr = null;
         const run = async () => {
@@ -1124,22 +1661,59 @@ JANE: Ready?"></textarea>
             const ln = list[myIndex];
             if (ln.speaker === myName()){ done++; setRehearseRenderStatus(`Preparing voices… ${done}/${list.length}`," "); continue; }
 
+            let countedByAttempt = false;
             const attempt = async (n) => {
               const ctrl = new AbortController();
               const to   = setTimeout(()=>ctrl.abort(), TIMEOUT_MS);
               try {
-                const r = await fetch("/debug/tts_line", {
-                  method:"POST", headers:JSON_HDRS,
-                  body:JSON.stringify({ voice: voiceFor(ln.speaker), model, text: ln.text }),
+                // allow either header or query param auth (some proxies drop custom headers)
+                const ttsUrl = secret
+                  ? `/debug/tts_line?secret=${encodeURIComponent(secret)}`
+                  : "/debug/tts_line";
+
+                // normalize & guard input
+                const cleanText = (ln.text || "").replace(/\s+/g, " ").trim();
+                if (!cleanText) {
+                  countedByAttempt = true;
+                  done++;
+                  setRehearseRenderStatus(`Preparing voices… ${done}/${list.length}`, "");
+                  return;
+                }
+
+                const r = await fetch(ttsUrl, {
+                  method: "POST",
+                  headers: { ...JSON_HDRS, "Accept": "application/json" },
+                  body: JSON.stringify({ voice: voiceFor(ln.speaker), model, text: cleanText }),
                   signal: ctrl.signal
                 });
                 const txt = await r.text();
-                let j={}; try { j = JSON.parse(txt); } catch {}
+                let j = {};
+                try { j = JSON.parse(txt); } catch { /* non-JSON body */ }
+
                 if (r.ok && j && j.url) return j.url;
 
-                if ([429,500,502,503,504].includes(r.status)) throw new Error("retryable "+r.status);
-                throw new Error("bad "+r.status+" "+txt.slice(0,80));
+                // If OpenAI says quota exceeded (HTTP 429), don't retry — surface a clear error.
+                if (r.status === 429) {
+                  const msg = (j?.error?.message || j?.message || txt || "quota exceeded").toString().slice(0, 240);
+                  const err = new Error("quota-exceeded: " + msg);
+                  err.code = 429;
+                  err.retry = false;
+                  throw err;
+                }
+
+                // Map common upstream failures to a retryable bucket
+                if ([408, 409, 425, 500, 502, 503, 504].includes(r.status)) {
+                  const err = new Error("retryable " + r.status + (j?.error ? ` ${j.error}` : ""));
+                  err.code = r.status;
+                  err.retry = true;
+                  throw err;
+                }
+
+                // surface a shorter, cleaner message
+                const snippet = (txt || "").toString().slice(0, 120).replace(/\s+/g, " ");
+                throw new Error(`bad ${r.status} ${snippet}`);
               } catch (e) {
+                if (e?.code === 429) throw e; // do not retry quota errors
                 if (n < MAX_ATTEMPTS) {
                   const backoff = 400 * Math.pow(2, n) + Math.random()*150;
                   await new Promise(res => setTimeout(res, backoff));
@@ -1149,13 +1723,17 @@ JANE: Ready?"></textarea>
               } finally { clearTimeout(to); }
             };
 
+            let url;
             try {
-              const url = await attempt(0);
-              RR.map.set(myIndex, url);
+              url = await attempt(0);
+              if (url) RR.map.set(myIndex, url);
             } catch(e) {
               RR.failures++; if(!firstErr) firstErr = String(e||"error");
             } finally {
-              done++; if (done % 2 === 0) setRehearseRenderStatus(`Preparing voices… ${done}/${list.length}`, "");
+              if (!countedByAttempt) {
+                done++;
+                if (done % 2 === 0) setRehearseRenderStatus(`Preparing voices… ${done}/${list.length}`, "");
+              }
             }
           }
         };
@@ -1166,12 +1744,20 @@ JANE: Ready?"></textarea>
         ReaderCache.set(RR.map);
 
         const okCount = RR.map.size;
-        setRehearseRenderStatus(
-          okCount
-            ? `Voices ready: ${okCount} lines${RR.failures ? ` (fallback on ${RR.failures})`:""}${firstErr? ` — last error: ${String(firstErr).slice(0,120)}`:""}`
-            : `No OpenAI clips prepared${firstErr? ` — error: ${String(firstErr).slice(0,160)}`:""}`,
-          okCount ? (RR.failures ? "warn":"ok") : "err"
-        );
+        const errText = String(firstErr || "");
+        if (!okCount && /quota-exceeded|exceeded your current quota|HTTP 429/i.test(errText)) {
+          setRehearseRenderStatus(
+            "OpenAI quota exceeded — add credits or raise your limit, then try again.",
+            "err"
+          );
+        } else {
+          setRehearseRenderStatus(
+            okCount
+              ? `Voices ready: ${okCount} lines${RR.failures ? ` (fallback on ${RR.failures})`:""}`
+              : `No OpenAI clips prepared${firstErr ? ` — error: ${errText.slice(0,160)}` : ""}`,
+            okCount ? (RR.failures ? "warn":"ok") : "err"
+          );
+        }
         try{ preloadReaderBuffers(); }catch{}
       }
   function clearRehearseRender(){ RR.map.clear(); RR.failures=0; stopDots(); R.readerBuffers = new Map(); resetReaderActiveSources(); R.readerLoading=false; setRehearseRenderStatus("Cleared pre-render.","warn"); }
@@ -1224,9 +1810,23 @@ JANE: Ready?"></textarea>
         return false;
       }
 
-      async function step(playMode){
+      async function playPartnerLine(index, { immediate = false } = {}){
+        const list = filtered();
+        if(!list.length) return false;
+        const ln = list[index];
+        if(!ln || ln.speaker === myName()) return false;
+        const paceSelect = document.getElementById("selPace");
+        let pace = Number((paceSelect && paceSelect.value) || 0);
+        if(tightMode() || immediate) pace = 0;
+        const usedOpenAi = await playOpenAiIfCached(index);
+        if(!usedOpenAi){ await synthSpeak(ln.text); }
+        if(pace > 0){ await new Promise(r=>setTimeout(r, pace)); }
+        return true;
+      }
+
+      async function step(playMode, opts = {}){
         const list=filtered(); if(!list.length) return;
-        const pace=Number(($("#selPace")?.value)||0);
+        const immediate = !!opts.immediate;
         const ln=current(); if(!ln){ playing=false; $("#btnPlay").textContent="Play"; return; }
         // keep bubble synced even if audio fails
         highlightCurrent();
@@ -1236,9 +1836,7 @@ JANE: Ready?"></textarea>
           if(playMode){ playing=false; $("#btnPlay").textContent="Play"; }
         }else{
           const i = idx;
-          const usedOpenAi = await playOpenAiIfCached(i);
-          if(!usedOpenAi){ await synthSpeak(ln.text); }
-          if(pace>0) await new Promise(r=>setTimeout(r,pace));
+          await playPartnerLine(i, { immediate });
           if(playing){ idx=Math.min(idx+1,list.length-1); step(true); }
         }
       }
@@ -1252,8 +1850,27 @@ JANE: Ready?"></textarea>
       function applyEditModeUI(){ $("#btnToggleEditMode")?.setAttribute("aria-pressed",S.editMode?"true":"false"); $("#editModeState").textContent=S.editMode?"On":"Off"; $$(".editbar",$("#lines")).forEach(el=>el.style.display=S.editMode?"flex":"none"); $$(".inline-slot",$("#lines")).forEach(el=>el.style.display=S.editMode?"flex":"none"); if(E.inlineForm && E.inlineForm.isConnected){ try{ E.inlineForm.remove(); }catch{}; E.currentSlotPlace=null; } }
 
       /* ----------------- RECORD TAB (updated for 16x9 + right rail) ----------------- */
-      const R = {
-        status: $("#statusRec"),
+
+      /* --- Orientation-aware preview aspect --- */
+      function applyPreviewAspect(portrait = isPortrait()){
+        const aspectRatio = portrait ? "9/16" : "16/9";
+        const logicalAspect = portrait ? "9:16" : "16:9";
+        const previewEl = (typeof R !== "undefined" && hasR() && R?.preview) || document.getElementById("preview");
+        if(previewEl){
+          previewEl.style.aspectRatio = aspectRatio;
+        }
+        try{ document.documentElement?.style.setProperty("--preview-ar", aspectRatio); }catch{}
+        if(hasR()){ R.currentAspect = logicalAspect; }
+      }
+
+      function updateRecordLayout(){
+        try{ applyPreviewAspect(isPortrait()); }catch{}
+      }
+
+      window.addEventListener("resize", ()=>updateRecordLayout());
+      window.addEventListener("orientationchange", ()=>updateRecordLayout());
+
+      R = {
         btnRender: $("#btnRender"),
         btnRec: $("#btnRec"),
         btnCamera: $("#btnCamera"),
@@ -1267,7 +1884,6 @@ JANE: Ready?"></textarea>
         stream: null,
         render_id: "",
         download_url: "",
-        takes: [],
         cameraOn: false,
         countInOn: true,
         headphonesOn: true,
@@ -1290,10 +1906,114 @@ JANE: Ready?"></textarea>
         readerRecordGain: null,
         readerActiveSources: new Set(),
         duckHintShown: false,
+        currentAspect: isPortrait() ? "9:16" : "16:9",
+        forcePerLine: false,
       };
+      if(R.btnRender && !R.btnRender.dataset.defaultLabel){
+        R.btnRender.dataset.defaultLabel = R.btnRender.textContent || "Render";
+      }
       R.audio?.setAttribute("playsinline","");
 
-      function setStatusRec(t){ R.status.textContent = t || " "; } // keep height
+      function setStatusRec(t){
+        const btn = R.btnRender;
+        if(!btn) return;
+  const base = btn.dataset.defaultLabel || "Render";
+  if(!btn.dataset.defaultLabel) btn.dataset.defaultLabel = base;
+        const text = (t && String(t).trim()) ? t : base;
+        btn.classList.remove("progressing");
+        btn.textContent = text;
+      }
+
+      function micConstraints(recordingPhase){
+        if(recordingPhase){
+          return {
+            echoCancellation: false,
+            noiseSuppression: false,
+            autoGainControl: false,
+            channelCount: 1,
+            sampleRate: 48000,
+            sampleSize: 16,
+            advanced: [
+              { echoCancellation:false },
+              { noiseSuppression:false },
+              { autoGainControl:false },
+              { googEchoCancellation:false },
+              { googAutoGainControl:false },
+              { googNoiseSuppression:false }
+            ]
+          };
+        }
+        return {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: false,
+          channelCount: 1
+        };
+      }
+
+      async function ensureReaderCtx(){
+        if(R.readerCtx && R.readerCtx.state === "closed"){ R.readerCtx = null; R.readerGain = null; R.readerDirectConnected = false; }
+        if(!R.readerCtx){
+          R.readerCtx = new (window.AudioContext||window.webkitAudioContext)();
+          if(R.readerCtx?.state === "suspended"){ try{ await R.readerCtx.resume(); }catch{} }
+          R.readerGain = R.readerCtx.createGain();
+          R.readerGain.gain.value = 1.0;
+          try{ R.readerGain.connect(R.readerCtx.destination); R.readerDirectConnected = true; }
+          catch{}
+          R.readerActiveSources = new Set();
+        }else if(R.readerCtx?.state === "suspended"){
+          try{ await R.readerCtx.resume(); }catch{}
+        }
+        return R.readerCtx;
+      }
+
+      function restoreReaderDirectMonitor(){
+        if(R.readerCtx && R.readerGain){
+          try{ R.readerGain.disconnect(); }catch{}
+          try{ R.readerGain.connect(R.readerCtx.destination); R.readerDirectConnected = true; }
+          catch{}
+        }
+        R.readerBridge = null;
+        R.readerBridgeSource = null;
+        R.readerRecordGain = null;
+      }
+
+      async function preloadReaderBuffers(){
+        if(!RR.map || !RR.map.size || (hasR() && R.readerLoading)) return;
+        if(!hasR()) return;
+        R.readerLoading = true;
+        try{
+          await ensureReaderCtx();
+          const entries = Array.from(RR.map.entries());
+          let idx = 0;
+          const workers = Math.min(3, entries.length);
+          async function worker(){
+            for(;;){
+              const current = idx++;
+              if(current >= entries.length) break;
+              const [i, url] = entries[current];
+              if(R.readerBuffers.has(i)) continue;
+              try{
+                const suffix = url.includes("?") ? "&" : "?";
+                const resp = await fetch(url + suffix + "t=" + Date.now());
+                if(!resp.ok) continue;
+                const buf = await resp.arrayBuffer();
+                const ctx = R.readerCtx;
+                if(!ctx) continue;
+                const audio = await new Promise((resolve,reject)=>{
+                  try{
+                    const maybe = ctx.decodeAudioData(buf, resolve, reject);
+                    if(maybe && typeof maybe.then === "function") maybe.then(resolve).catch(reject);
+                  }catch(e){ reject(e); }
+                });
+                if(audio) R.readerBuffers.set(i, audio);
+              }catch{}
+            }
+          }
+          await Promise.all(Array.from({length:workers}, ()=>worker()));
+        }catch{}
+        finally{ if(hasR()) R.readerLoading = false; }
+      }
 
       function micConstraints(recordingPhase){
         if(recordingPhase){
@@ -1472,7 +2192,9 @@ JANE: Ready?"></textarea>
             }catch{}
           }
 
-          const readerEl = (RR.map && RR.map.size>0) ? E?.rehearseAudio : R.audio;
+          const readerEl = (RR.map && RR.map.size>0)
+            ? E?.rehearseAudio
+            : (R.forcePerLine ? null : R.audio);
           if(readerEl){
             try{
               const src = R.mixCtx.createMediaElementSource(readerEl);
@@ -1523,8 +2245,13 @@ JANE: Ready?"></textarea>
         let dotsTimer = setInterval(()=>{
           dots = (dots+1)%4;
           setStatusRec("Preparing reader track" + ".".repeat(dots));
+          R.btnRender?.classList.add("progressing");
         }, 320);
-        setStatusRec("Preparing reader track."); R.btnRender.disabled = true;
+        setStatusRec("Preparing reader track.");
+        if(R.btnRender){
+          R.btnRender.disabled = true;
+          R.btnRender.classList.add("progressing");
+        }
         try{
           const r = await fetch("/debug/render", { method:"POST", headers:JSON_HDRS, body:JSON.stringify({ script_id:S.script_id, my_role:(S.role||"").toUpperCase(), pace_ms:0 }) });
           const j = await safeJson(r);
@@ -1580,6 +2307,7 @@ JANE: Ready?"></textarea>
         if(!R.cameraOn){
           try{ cleanupStream(); }catch{}
           if(R.preview) R.preview.srcObject=null;
+          try{ updateRecordLayout(); }catch{}
           return;
         }
         try{
@@ -1605,6 +2333,7 @@ JANE: Ready?"></textarea>
             if(typeof R.preview.play === "function"){
               R.preview.play().catch(()=>{});
             }
+            try{ updateRecordLayout(); }catch{}
           }
         }catch(e){ setStatusRec("Camera/mic permission denied: "+e); }
       }
@@ -1613,16 +2342,26 @@ JANE: Ready?"></textarea>
       async function applyCameraFacing(){
         R.facing = useBackCamera ? "environment" : "user";
         if(!R.cameraOn) return;
-        try{ await startPreviewIfNeeded(true); }
+        try{
+          await startPreviewIfNeeded(true);
+          updateRecordLayout();
+        }
         catch(e){ setStatusRec("Camera switch error: "+e); }
       }
 
       async function startRecording(){
-        primeReaderFromCacheIfAvailable();
-        const prepped = (RR.map && RR.map.size > 0) || !!R.download_url;
-        if(!prepped){ setStatusRec("Render first."); return; }
+  primeReaderFromCacheIfAvailable();
+  const dashyScene = sceneHasDashyUserLine();
+  const hasClipMap = !!(RR.map && RR.map.size > 0);
+  const hasSingleTrack = !!R.download_url;
+  const usePerLinePlayback = dashyScene || hasClipMap;
+  const useSingleTrackPlayback = !usePerLinePlayback && hasSingleTrack;
+  const prepped = usePerLinePlayback || hasSingleTrack;
+  if(!prepped){ setStatusRec("Render first."); return; }
 
-        const useCachedReader = !!(RR.map && RR.map.size > 0);
+  R.forcePerLine = dashyScene;
+
+  const useCachedReader = usePerLinePlayback;
 
         stopAllAudioHard();
         try{ sr?.stop(); }catch{}
@@ -1678,22 +2417,31 @@ JANE: Ready?"></textarea>
         catch{ R.rec = new MediaRecorder(finalStream); }
 
         R.rec.ondataavailable = (e)=>{ if(e.data && e.data.size>0) R.chunks.push(e.data); };
-        R.rec.onstop = ()=>{
+        R.rec.onstop = async ()=>{
           stopAllAudioHard();
           resetMicAfterRecording();
           try{ R.mixCtx?.close(); }catch{}
           R.mixCtx = null; R.mixDest = null; R.mixGainReader = null; R.mixGainMic = null; R.micHPF = null; R.micCompressor = null;
           R.readerRecordGain = null; R.readerBridge = null; R.readerBridgeSource = null;
           restoreReaderDirectMonitor();
-          finalizeTake();
+          try{ await finalizeTake(); }
+          catch(e){ console.error("[offbook] finalizeTake error", e); setStatusRec("Save failed. Download immediately to keep the take."); }
           cleanupStream();
           if(R.cameraOn){ try{ startPreviewIfNeeded(); }catch{} }
           R.recording=false;
+          R.forcePerLine = false;
           setRailStates();
         };
 
         R.recording = true;
         setRailStates();
+        // Re-arm SR immediately for your first line in Record
+        try{
+          if(sr && srToggleOn && srPermGranted && onMyLine()){
+            try{ sr.stop(); }catch{}
+            setTimeout(()=>{ try{ sr.start(); }catch{} }, 50);
+          }
+        }catch{}
 
         try{ R.rec.start(); }
         catch(e){
@@ -1717,7 +2465,7 @@ JANE: Ready?"></textarea>
         if(useCachedReader){
           try{
             playing = true;
-            step(true);
+            Promise.resolve(step(true, { immediate: dashyScene })).catch(()=>{});
             const endWatch = setInterval(()=>{
               if(!R.recording) return clearInterval(endWatch);
               if(!playing){
@@ -1729,7 +2477,7 @@ JANE: Ready?"></textarea>
         }
 
         if(R.audio){
-          if(R.download_url && !useCachedReader){
+          if(useSingleTrackPlayback){
             try{ R.audio.currentTime = 0; await R.audio.play(); }catch{}
             R.audio.onended = ()=>{ setTimeout(()=>{ try{ R.rec?.stop(); }catch{} }, 120); };
           }else{
@@ -1748,21 +2496,271 @@ JANE: Ready?"></textarea>
         }
         try{ R.rec?.stop(); }catch{}
         R.recording = false;
+        R.forcePerLine = false;
         setRailStates();
         setStatusRec("Stopping…");
       }
 
-      function finalizeTake(){
+      async function finalizeTake(){
         const isVid = !!R.cameraOn;
         const blob = new Blob(R.chunks, { type: (R.rec && R.rec.mimeType) ? R.rec.mimeType : (isVid ? "video/mp4" : "audio/mp4") });
-        if (!blob || !blob.size) { setStatusRec("No data captured."); return; }
-        const url = URL.createObjectURL(blob);
-        const ts = new Date().toISOString().replace(/[:.]/g,"-");
-        const ext = (blob.type.startsWith("video/") ? "mp4" : (blob.type.includes("webm") ? "webm" : "m4a"));
-        const name = `${isVid?"take-video":"take-audio"}-${ts}.${ext}`;
-        R.takes.unshift({ url, name, type: blob.type, size: blob.size });
-        setStatusRec("Saved to Gallery.");
+        if(!blob || !blob.size){ setStatusRec("No data captured."); return; }
+        const aspect = R.currentAspect || (isPortrait() ? "9:16" : "16:9");
+        try{
+          await saveTakeToDB({ blob, isVid, aspect });
+          setStatusRec("Saved to Gallery.");
+        }catch(err){
+          console.error("[offbook] take save error", err);
+          setStatusRec("Saved (temp), DB error");
+        }finally{
+          try{ await renderGallery(); }catch{}
+        }
       }
+
+      /* -------- IndexedDB small wrapper -------- */
+      const GalleryDB = (() => {
+        const DB_NAME = "gallery-db-v1";
+        const STORE = "takes";
+        let db = null;
+        function open(){
+          if(!("indexedDB" in window)) return Promise.reject(new Error("indexeddb-unavailable"));
+          return new Promise((res, rej)=>{
+            const req = indexedDB.open(DB_NAME, 1);
+            req.onupgradeneeded = () => {
+              const d = req.result;
+              if(!d.objectStoreNames.contains(STORE)){
+                const os = d.createObjectStore(STORE, { keyPath:"id" });
+                os.createIndex("created", "created");
+              }
+            };
+            req.onsuccess = () => { db = req.result; res(db); };
+            req.onerror = () => rej(req.error);
+          });
+        }
+        async function ready(){ return db || open(); }
+        async function put(rec){
+          await ready();
+          return new Promise((res, rej)=>{
+            const tx = db.transaction(STORE, "readwrite");
+            tx.objectStore(STORE).put(rec);
+            tx.oncomplete = () => res();
+            tx.onerror = () => rej(tx.error);
+          });
+        }
+        async function getAll(){
+          await ready();
+          return new Promise((res, rej)=>{
+            const tx = db.transaction(STORE, "readonly");
+            const req = tx.objectStore(STORE).getAll();
+            req.onsuccess = () => res(req.result || []);
+            req.onerror = () => rej(req.error);
+          });
+        }
+        async function del(id){
+          await ready();
+          return new Promise((res, rej)=>{
+            const tx = db.transaction(STORE, "readwrite");
+            tx.objectStore(STORE).delete(id);
+            tx.oncomplete = () => res();
+            tx.onerror = () => rej(tx.error);
+          });
+        }
+        return { put, getAll, del };
+      })();
+
+      /* ---- Helpers for short labels + pruning ---- */
+      const G = { filter:"all", urls:new Map() };
+
+      function shortLabel(n){
+        const num = Math.max(1, n);
+        return "TK" + String(num).padStart(2, "0");
+      }
+
+      async function pruneTakes(){
+        const MAX_ITEMS = 10;
+        const MAX_AGE_MS = 14*24*3600*1000;
+        const list = (await GalleryDB.getAll()).sort((a,b)=>b.created-a.created);
+        const now = Date.now();
+        const recent = [];
+        for(const t of list){
+          if(now - t.created > MAX_AGE_MS){ await GalleryDB.del(t.id); continue; }
+          recent.push(t);
+        }
+        if(recent.length > MAX_ITEMS){
+          for(const t of recent.slice(MAX_ITEMS)){ await GalleryDB.del(t.id); }
+        }
+      }
+
+      async function saveTakeToDB({ blob, isVid, aspect }){
+        if(!("indexedDB" in window)) throw new Error("indexeddb-unavailable");
+        const id = (crypto && typeof crypto.randomUUID === "function") ? crypto.randomUUID() : `take-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+        const created = Date.now();
+        const type = blob.type || (isVid ? "video/mp4" : "audio/mp4");
+        const size = blob.size || 0;
+        const existing = (await GalleryDB.getAll()).length;
+        const short = shortLabel(existing + 1);
+    const ext = type.includes("webm") ? "webm" : (isVid ? "mp4" : "m4a");
+    const stamp = new Date(created).toISOString().replace(/[:.]/g,"-");
+    const name = `${isVid?"take-video":"take-audio"}-${stamp}.${ext}`;
+    const safeAspect = typeof aspect === "string" ? aspect : "16:9";
+    await GalleryDB.put({ id, created, name, short, type, size, aspect: safeAspect, blob, note:"" });
+        await pruneTakes();
+      }
+
+      /* ---- Gallery rendering with filters + actions ---- */
+      async function loadTakes(){
+        const all = await GalleryDB.getAll();
+        return all.sort((a,b)=>b.created-a.created);
+      }
+
+      function fmtMB(n){
+        if(!n || !isFinite(n)) return "0 MB";
+        return Math.max(1, Math.round(n / 1048576)) + " MB";
+      }
+
+      function kindFrom(type=""){
+        if(type.startsWith("video/")) return "MP4";
+        if(type.includes("webm")) return "WEBM";
+        return "M4A";
+      }
+
+      const escapeHtml = (value)=>String(value ?? "").replace(/[&<>"']/g, ch=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[ch]||ch));
+
+      function resetGalleryUrls(){
+        G.urls.forEach(url=>{ try{ URL.revokeObjectURL(url); }catch{} });
+        G.urls.clear();
+      }
+
+      async function renderGallery(){
+        const wrap = $("#takes");
+        if(!wrap) return;
+        resetGalleryUrls();
+        try{ await pruneTakes(); }catch{}
+        let all;
+        try{
+          all = await loadTakes();
+        }catch(err){
+          console.warn("[offbook] gallery load error", err);
+          wrap.innerHTML = `<p class="hint">Gallery storage unavailable on this device.</p>`;
+          return;
+    }
+    const list = all.filter(t => G.filter === "all" ? true : (t.aspect === G.filter));
+
+        const filters = `
+          <div style="margin-bottom:8px">
+            <span class="chip-filter ${G.filter==='all'?'active':''}" data-filt="all">All</span>
+            <span class="chip-filter ${G.filter==='16:9'?'active':''}" data-filt="16:9">16:9</span>
+            <span class="chip-filter ${G.filter==='9:16'?'active':''}" data-filt="9:16">9:16</span>
+          </div>`;
+
+        if(!list.length){
+          wrap.innerHTML = filters + `<p class="hint">No takes yet.</p>`;
+          bindGalleryFilters(wrap);
+          return;
+        }
+
+        const cardMap = new Map();
+        const cardsHtml = list.map(t=>{
+          const src = URL.createObjectURL(t.blob);
+          G.urls.set(t.id, src);
+          cardMap.set(t.id, { ...t, url: src });
+          const meta = `${escapeHtml(t.aspect || '—')} • ${escapeHtml(fmtMB(t.size))} • ${escapeHtml(kindFrom(t.type))}`;
+          const shortName = escapeHtml(t.short || t.name || "Take");
+          const noteSafe = escapeHtml(t.note || "");
+          return `
+            <div class="take-card" data-id="${escapeHtml(t.id)}">
+              <video class="take-thumb" src="${escapeHtml(src)}" playsinline preload="metadata"></video>
+              <div class="take-row" style="justify-content:space-between;align-items:center;">
+                <div>
+                  <div style="font-weight:700">${shortName}</div>
+                  <div class="take-meta">${meta}</div>
+                </div>
+                <div class="row" style="flex:0 0 auto; gap:8px; align-items:center;">
+                  <button class="btn sm secondary" data-act="play">Play</button>
+                  <button class="btn sm" data-act="dl">Download</button>
+                  <button class="btn sm secondary" data-act="del">Delete</button>
+                </div>
+              </div>
+              <textarea class="take-note" placeholder="Add a note…">${noteSafe}</textarea>
+            </div>`;
+        }).join("");
+
+        wrap.innerHTML = filters + cardsHtml;
+        bindGalleryFilters(wrap);
+        bindGalleryCards(wrap, cardMap);
+      }
+
+      function bindGalleryFilters(root){
+        $$(".chip-filter", root).forEach(el=>{
+          el.onclick = ()=>{
+            const sel = el.getAttribute("data-filt") || "all";
+            if(G.filter !== sel){ G.filter = sel; renderGallery().catch(()=>{}); }
+          };
+        });
+      }
+
+      function bindGalleryCards(root, map){
+        $$(".take-card", root).forEach(card=>{
+          const id = card.getAttribute("data-id");
+          const rec = id ? map.get(id) : null;
+          if(!rec) return;
+          const video = card.querySelector("video");
+          const btnPlay = card.querySelector('[data-act="play"]');
+          const btnDl = card.querySelector('[data-act="dl"]');
+          const btnDel = card.querySelector('[data-act="del"]');
+          const noteEl = card.querySelector('.take-note');
+
+          btnPlay?.addEventListener("click", ()=>{
+            if(!video) return;
+            if(video.paused){
+              try{ video.currentTime = 0; video.play(); }catch{}
+              if(btnPlay) btnPlay.textContent = "Pause";
+            }else{
+              video.pause();
+              if(btnPlay) btnPlay.textContent = "Play";
+            }
+          });
+          video?.addEventListener("ended", ()=>{ if(btnPlay) btnPlay.textContent = "Play"; });
+          video?.addEventListener("pause", ()=>{ if(btnPlay && !video.error) btnPlay.textContent = "Play"; });
+
+          btnDl?.addEventListener("click", async ()=>{
+            try{
+              const file = new File([rec.blob], rec.name, { type: rec.type });
+              if(navigator.canShare && navigator.canShare({ files:[file] })){
+                try{ await navigator.share({ files:[file], title: rec.short || rec.name }); }
+                catch{}
+              }else{
+                const url = URL.createObjectURL(rec.blob);
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = rec.name;
+                document.body.appendChild(a);
+                a.click();
+                setTimeout(()=>{ URL.revokeObjectURL(url); a.remove(); }, 1200);
+              }
+            }catch(err){
+              console.error("[offbook] download/share error", err);
+              alert("Unable to share this take.");
+            }
+          });
+
+          btnDel?.addEventListener("click", async ()=>{
+            if(rec.url){ try{ URL.revokeObjectURL(rec.url); }catch{} }
+            try{ await GalleryDB.del(rec.id); }catch{}
+            renderGallery().catch(()=>{});
+          });
+
+          noteEl?.addEventListener("blur", async ()=>{
+            try{
+              const { url, ...rest } = rec;
+              const updated = { ...rest, note: noteEl.value };
+              await GalleryDB.put(updated);
+              rec.note = updated.note;
+            }catch(err){ console.warn("[offbook] note save failed", err); }
+          });
+        });
+      }
+
 
       /* --- Button wiring --- */
       R.btnRender?.addEventListener("click", async ()=>{
@@ -1791,6 +2789,7 @@ JANE: Ready?"></textarea>
         R.cameraOn = !R.cameraOn;
         setRailStates();
         await startPreviewIfNeeded();
+        try{ updateRecordLayout(); }catch{}
       });
 
       R.btnCountIn?.addEventListener("click", ()=>{ R.countInOn = !R.countInOn; setRailStates(); });
@@ -1812,27 +2811,33 @@ JANE: Ready?"></textarea>
         if(name==="record"){
           try{ requestMicPermissionOnce(); }catch{}
           try{ startPreviewIfNeeded(); }catch{}
+          try{ updateRecordLayout(); }catch{}
           setRailStates();
         }
       };
 
       window.addEventListener("pagehide", ()=>{
+        releaseWakeLock();
         resetReaderActiveSources();
-        try{ R.readerCtx?.close(); }catch{}
-        R.readerCtx = null;
-        R.readerGain = null;
-        R.readerBridge = null;
-        R.readerBridgeSource = null;
-        R.readerRecordGain = null;
-        R.readerDirectConnected = false;
-        R.readerBuffers = new Map();
-        R.readerLoading = false;
-        R.duckHintShown = false;
+        if(hasR()){
+          try{ R.readerCtx?.close(); }catch{}
+          R.readerCtx = null;
+          R.readerGain = null;
+          R.readerBridge = null;
+          R.readerBridgeSource = null;
+          R.readerRecordGain = null;
+          R.readerDirectConnected = false;
+          R.readerBuffers = new Map();
+          R.readerLoading = false;
+          R.duckHintShown = false;
+        }
+        resetGalleryUrls();
       });
 
       // initial safe boot
       try{
-        hydrateRehearse(); applyEditModeUI(); (function initAssign(){ $("#pillScript").textContent="script: "+(S.script_id||"—"); })();
+  hydrateRehearse(); applyEditModeUI(); (function initAssign(){ $("#pillScript").textContent="script: "+(S.script_id||"—"); })();
+  renderGallery().catch(()=>{});
       }catch(e){ showErr("UI init error: "+e); }
     };
 

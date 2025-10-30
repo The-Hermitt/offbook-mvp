@@ -11,7 +11,7 @@
   },
   "dependencies": {
     "cors": "^2.8.5",
-    "express": "^4.19.2",
+    "express": "^4.21.2",
     "multer": "^1.4.5-lts.2",
     "pdf-parse": "^1.1.1",
     "undici": "^6.19.4"
@@ -22,5 +22,10 @@
     "cross-env": "^7.0.3",
     "tsx": "^4.19.1",
     "typescript": "^5.6.3"
-  }
+  },
+  "description": "Upload a script PDF, select a role, assign AI voices to partners, and render a “reader” track (AI reads partner lines; you perform yours). Works via REST debug routes and an HTTP MCP endpoint for the ChatGPT Apps SDK.",
+  "main": "index.js",
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
 }
