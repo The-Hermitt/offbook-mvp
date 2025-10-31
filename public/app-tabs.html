@@ -819,6 +819,92 @@
         width:100% !important;
       }
     }
+
+    /* Rehearse: center the "Edit mode" pill and prevent flex stretching */
+    #screen-rehearse .row > .badge{
+      flex:0 0 auto !important;
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      text-align:center;
+      white-space:nowrap;
+      line-height:1.2;
+      padding:6px 12px;
+    }
+
+    /* === Record: rule-of-thirds overlay ====================================== */
+    #screen-record .preview-wrap{ position:relative; }
+
+    .grid-overlay{
+      position:absolute;
+      inset:8px;
+      border-radius:inherit;
+      pointer-events:none;
+      display:none;
+      z-index:4;
+    }
+    .grid-overlay .v,
+    .grid-overlay .h{
+      position:absolute;
+      background:rgba(230,240,255,0.38);
+      box-shadow:0 0 0 1px rgba(0,0,0,0.18) inset;
+      transform:translateZ(0);
+    }
+    .grid-overlay .v{ top:0; bottom:0; width:1px; }
+    .grid-overlay .h{ left:0; right:0; height:1px; }
+    .grid-overlay .v1{ left:33.333%; }
+    .grid-overlay .v2{ left:66.666%; }
+    .grid-overlay .h1{ top:33.333%; }
+    .grid-overlay .h2{ top:66.666%; }
+
+    /* Align overlay inset with the tighter padding used on small landscape */
+    @media (orientation: landscape) and (max-width: 1024px){
+      body.record-active #screen-record .grid-overlay{ inset:6px; }
+    }
+
+    /* === Record: Count-in picker ================================================= */
+    .countin-menu{
+      position:fixed;
+      z-index:1100;
+      display:none;
+      background:rgba(12,15,24,0.96);
+      border:1px solid var(--border);
+      border-radius:12px;
+      padding:6px;
+      box-shadow:0 18px 40px rgba(3,6,15,0.45);
+      backdrop-filter:blur(10px);
+    }
+    .countin-menu[hidden]{ display:none; }
+    .countin-menu button{
+      display:block;
+      width:100%;
+      background:transparent;
+      color:var(--text);
+      border:1px solid rgba(147,160,195,0.28);
+      border-radius:10px;
+      padding:8px 10px;
+      margin:4px 0;
+      font-weight:700;
+      letter-spacing:.2px;
+    }
+    .countin-menu button:active{ transform:scale(0.98); }
+
+    /* Hide picker in portrait just in case */
+    @media (orientation: portrait){
+      .countin-menu{ display:none !important; }
+    }
+
+    /* Record (rail buttons): prevent iOS long-press text selection/callout */
+    #screen-record .control-rail .btn,
+    #screen-record .control-rail .btn *{
+      -webkit-user-select:none;
+      user-select:none;
+      -webkit-touch-callout:none;
+    }
+    /* Remove the gray tap flash for nicer feel */
+    #screen-record .control-rail .btn{
+      -webkit-tap-highlight-color:transparent;
+    }
   </style>
 </head>
 <body>
@@ -950,6 +1036,11 @@ JANE: Ready?"></textarea>
         <div class="preview-wrap">
           <video id="preview" autoplay muted playsinline></video>
           <audio id="readerAudio" preload="auto" playsinline></audio>
+          <!-- Rule-of-thirds overlay (hidden by default) -->
+          <div id="gridOverlay" class="grid-overlay" aria-hidden="true">
+            <span class="v v1"></span><span class="v v2"></span>
+            <span class="h h1"></span><span class="h h2"></span>
+          </div>
           <button id="btnFlipCam" class="flipcam" aria-label="Flip camera" title="Flip camera">⟳</button>
         </div>
 
@@ -957,8 +1048,9 @@ JANE: Ready?"></textarea>
         <div class="control-rail controls-stack">
           <button id="btnRender" class="btn btn-render rail landscape-only pos-render">Render</button>
           <button id="btnRec" class="btn rec pos-rec">REC</button>
+          <button id="btnGrid" class="btn secondary rail landscape-only pos-grid" aria-pressed="false">Grid: Off</button>
           <button id="btnCamera" class="btn secondary rail pos-camera" aria-pressed="false">Camera: Off</button>
-          <button id="btnCountIn" class="btn secondary rail landscape-only pos-countin" aria-pressed="true">Count-in: On</button>
+          <button id="btnCountIn" class="btn secondary rail landscape-only pos-countin" aria-pressed="false">Count-in: Off</button>
           <button id="btnHeadphones" class="btn secondary rail pos-headphones" aria-pressed="true">Headphones: On</button>
         </div>
       </div>
@@ -1067,6 +1159,7 @@ JANE: Ready?"></textarea>
         document.body.classList.toggle('is-portrait', portrait);
         document.body.classList.toggle('is-landscape', !portrait);
         updateRecordLayout();
+        try{ syncGridOverlayVisibility(); }catch{}
       };
       applyOrientationClasses();
       if(typeof mqlPortrait.addEventListener === 'function'){
@@ -1119,6 +1212,7 @@ JANE: Ready?"></textarea>
           try{ primeReaderFromCacheIfAvailable(); }catch{}
         }else if(name==="record"){
           try{ updateRecordLayout(); }catch{}
+          try{ syncGridOverlayVisibility(); }catch{}
           try{ primeReaderFromCacheIfAvailable(); }catch{}
           try{ requestMicPermissionOnce(); }catch{}
           try{ startPreviewIfNeeded(); }catch{}
@@ -1865,14 +1959,16 @@ JANE: Ready?"></textarea>
 
       function updateRecordLayout(){
         try{ applyPreviewAspect(isPortrait()); }catch{}
+        try{ syncGridOverlayVisibility(); }catch{}
       }
 
-      window.addEventListener("resize", ()=>updateRecordLayout());
-      window.addEventListener("orientationchange", ()=>updateRecordLayout());
+  window.addEventListener("resize", ()=>{ updateRecordLayout(); try{ syncGridOverlayVisibility(); }catch{} });
+  window.addEventListener("orientationchange", ()=>{ updateRecordLayout(); try{ syncGridOverlayVisibility(); }catch{} });
 
       R = {
         btnRender: $("#btnRender"),
         btnRec: $("#btnRec"),
+        btnGrid: $("#btnGrid"),
         btnCamera: $("#btnCamera"),
         btnCountIn: $("#btnCountIn"),
         btnHeadphones: $("#btnHeadphones"),
@@ -1882,12 +1978,12 @@ JANE: Ready?"></textarea>
         chunks: [],
         rec: null,
         stream: null,
-        render_id: "",
-        download_url: "",
-        cameraOn: false,
-        countInOn: true,
-        headphonesOn: true,
-        recording: false,
+    render_id: "",
+    download_url: "",
+    cameraOn: false,
+    countInOn: false,
+    headphonesOn: true,
+    recording: false,
         prevSrToggle: null,
         facing: "user",               // or "environment"
         mixCtx: null,
@@ -1906,8 +2002,10 @@ JANE: Ready?"></textarea>
         readerRecordGain: null,
         readerActiveSources: new Set(),
         duckHintShown: false,
-        currentAspect: isPortrait() ? "9:16" : "16:9",
-        forcePerLine: false,
+    currentAspect: isPortrait() ? "9:16" : "16:9",
+    forcePerLine: false,
+    gridOn: false,
+    countInSecs: 3,
       };
       if(R.btnRender && !R.btnRender.dataset.defaultLabel){
         R.btnRender.dataset.defaultLabel = R.btnRender.textContent || "Render";
@@ -2108,13 +2206,31 @@ JANE: Ready?"></textarea>
       function setRailStates(){
         R.btnCamera.setAttribute("aria-pressed", R.cameraOn ? "true":"false");
         R.btnCamera.textContent = "Camera: " + (R.cameraOn ? "On" : "Off");
-        R.btnCountIn.setAttribute("aria-pressed", R.countInOn ? "true":"false");
-        R.btnCountIn.textContent = "Count-in: " + (R.countInOn ? "On" : "Off");
+        if(R.btnCountIn){
+          R.btnCountIn.setAttribute("aria-pressed", R.countInOn ? "true":"false");
+          const countLabel = R.countInOn
+            ? `Count-in: On (${Number(R.countInSecs) || 3}s)`
+            : "Count-in: Off";
+          R.btnCountIn.textContent = countLabel;
+        }
         R.btnHeadphones.setAttribute("aria-pressed", R.headphonesOn ? "true":"false");
         R.btnHeadphones.textContent = "Headphones: " + (R.headphonesOn ? "On" : "Off");
+        if(R.btnGrid){
+          R.btnGrid.setAttribute("aria-pressed", R.gridOn ? "true" : "false");
+          R.btnGrid.textContent = "Grid: " + (R.gridOn ? "On" : "Off");
+        }
         if(R.recording){ R.btnRec.classList.add("recording"); R.btnRec.textContent = "STOP"; }
         else { R.btnRec.classList.remove("recording"); R.btnRec.textContent = "REC"; }
       }
+
+      function syncGridOverlayVisibility(){
+        const ov = document.getElementById("gridOverlay");
+        if(!ov) return;
+        const show = !!(hasR() && R.gridOn && !isPortrait());
+        ov.style.display = show ? "block" : "none";
+      }
+
+      syncGridOverlayVisibility();
 
       function pickMime(video){
         const vids = ["video/mp4;codecs=avc1.42E01E,mp4a.40.2","video/mp4","video/webm;codecs=vp8,opus","video/webm"];
@@ -2278,28 +2394,36 @@ JANE: Ready?"></textarea>
         }
       }
 
-      /* --- Count-in: visible 3-2-1 with slower beeps --- */
+      /* --- Count-in: configurable visible countdown --- */
       async function doBeepsAndCountdown(){
         if(!R.countInOn) return;
-        const overlay = $("#countdown"), num = $("#countNum");
-        if(overlay){ overlay.style.display="flex"; }
+        const N = Math.min(10, Math.max(3, Number(R.countInSecs) || 3));
 
-        const ctx = new (window.AudioContext||window.webkitAudioContext)();
-        const beep = (freq, dur=0.28)=> new Promise(res=>{
-          const o=ctx.createOscillator(), g=ctx.createGain();
-          o.frequency.value=freq; o.type="sine"; g.gain.value=0.18;
-          o.connect(g); g.connect(ctx.destination); o.start();
-          setTimeout(()=>{ o.stop(); res(); }, dur*1000);
+        const overlay = $("#countdown"), num = $("#countNum");
+        if(overlay){ overlay.style.display = "flex"; }
+
+        const Ctx = (window.AudioContext || window.webkitAudioContext);
+        const ctx = new Ctx();
+        const beep = (freq, dur = 0.28)=> new Promise(res=>{
+          const o = ctx.createOscillator();
+          const g = ctx.createGain();
+          o.frequency.value = freq;
+          o.type = "sine";
+          g.gain.value = 0.18;
+          o.connect(g);
+          g.connect(ctx.destination);
+          o.start();
+          setTimeout(()=>{ o.stop(); res(); }, dur * 1000);
         });
 
-        const step = async (n, freq)=>{ if(num){ num.textContent=String(n); } await beep(freq); await new Promise(r=>setTimeout(r,520)); };
-
-        await step(3, 880);
-        await step(2, 880);
-        await step(1, 660);
+        for(let i = N; i >= 1; i--){
+          if(num) num.textContent = String(i);
+          await beep(i === 1 ? 660 : 880, 0.28);
+          await new Promise(r=>setTimeout(r, 720));
+        }
 
         try{ await ctx.close(); }catch{}
-        if(overlay){ overlay.style.display="none"; }
+        if(overlay){ overlay.style.display = "none"; }
       }
 
       /* --- Recording flow --- */
@@ -2785,6 +2909,12 @@ JANE: Ready?"></textarea>
         else { startRecording(); }
       });
 
+      R.btnGrid?.addEventListener("click", ()=>{
+        R.gridOn = !R.gridOn;
+        setRailStates();
+        syncGridOverlayVisibility();
+      });
+
       R.btnCamera?.addEventListener("click", async ()=>{
         R.cameraOn = !R.cameraOn;
         setRailStates();
@@ -2792,12 +2922,102 @@ JANE: Ready?"></textarea>
         try{ updateRecordLayout(); }catch{}
       });
 
-      R.btnCountIn?.addEventListener("click", ()=>{ R.countInOn = !R.countInOn; setRailStates(); });
       R.btnHeadphones?.addEventListener("click", ()=>{
         R.headphonesOn = !R.headphonesOn;
         try{ if(R.mixGainReader) R.mixGainReader.gain.value = R.headphonesOn ? 1.0 : 0.0; }catch{}
         setRailStates();
       });
+
+      // --- Count-in long-press menu (landscape only) ---
+      const countMenu = $("#countinMenu");
+      let countHoldTimer = null;
+      let countMenuOpen = false;
+
+      function positionCountMenu(){
+        if(!countMenu || !R?.btnCountIn) return;
+        const r = R.btnCountIn.getBoundingClientRect();
+        const menuW = Math.max(120, countMenu.offsetWidth || 0);
+        const left = Math.min(Math.max(8, r.right - menuW), window.innerWidth - menuW - 8);
+        const top = Math.min(r.bottom + 6, window.innerHeight - 8);
+        countMenu.style.left = left + "px";
+        countMenu.style.top = top + "px";
+      }
+
+      function showCountMenu(){
+        if(!countMenu || !R?.btnCountIn) return;
+        if(isPortrait()) return;
+        positionCountMenu();
+        countMenu.style.display = "block";
+        countMenu.removeAttribute("hidden");
+        countMenu.setAttribute("aria-hidden", "false");
+        positionCountMenu();
+        countMenuOpen = true;
+      }
+
+      function hideCountMenu(){
+        if(!countMenu || !countMenuOpen) return;
+        clearTimeout(countHoldTimer);
+        countHoldTimer = null;
+        countMenu.setAttribute("hidden", "true");
+        countMenu.setAttribute("aria-hidden", "true");
+        countMenu.style.display = "none";
+        countMenuOpen = false;
+      }
+
+      R.btnCountIn?.addEventListener("click", (ev)=>{
+        if(countMenuOpen){
+          hideCountMenu();
+          ev.stopPropagation();
+          return;
+        }
+        R.countInOn = !R.countInOn;
+        setRailStates();
+      });
+
+      R.btnCountIn?.addEventListener("pointerdown", ()=>{
+        if(isPortrait()) return;
+        if(countMenuOpen) return;
+        clearTimeout(countHoldTimer);
+        countHoldTimer = setTimeout(showCountMenu, 450);
+      });
+      ["pointerup","pointercancel","pointerleave"].forEach(evt=>{
+        R.btnCountIn?.addEventListener(evt, ()=>{ clearTimeout(countHoldTimer); countHoldTimer = null; });
+      });
+
+      countMenu?.addEventListener("click", (e)=>{
+        const b = e.target.closest("button[data-sec]");
+        if(!b) return;
+        const sec = parseInt(b.getAttribute("data-sec"), 10) || 3;
+        R.countInSecs = sec;
+        hideCountMenu();
+        setRailStates();
+      });
+
+      document.addEventListener("click", (e)=>{
+        if(!countMenuOpen) return;
+        if(e.target === R.btnCountIn || (countMenu && countMenu.contains(e.target))) return;
+        hideCountMenu();
+      });
+
+      // --- iOS guard: block text selection & long-press menu on record rail buttons
+      document.addEventListener("selectstart", (e)=>{
+        if(e.target && e.target.closest("#screen-record .control-rail")){
+          e.preventDefault();
+        }
+      }, { passive:false });
+
+      document.addEventListener("contextmenu", (e)=>{
+        if(e.target && e.target.closest("#screen-record .control-rail")){
+          e.preventDefault();
+        }
+      });
+
+      window.addEventListener("orientationchange", ()=>{
+        hideCountMenu();
+        clearTimeout(countHoldTimer);
+        countHoldTimer = null;
+      });
+      window.addEventListener("resize", ()=>{ if(countMenuOpen) positionCountMenu(); });
 
       $("#btnFlipCam")?.addEventListener("click", async ()=>{
         useBackCamera = !useBackCamera;
@@ -2807,17 +3027,20 @@ JANE: Ready?"></textarea>
       /* Warm permissions when user navigates to Record */
       const _origShowScreen = showScreen;
       showScreen = function(name){
+        try{ hideCountMenu(); }catch{}
         _origShowScreen(name);
         if(name==="record"){
           try{ requestMicPermissionOnce(); }catch{}
           try{ startPreviewIfNeeded(); }catch{}
           try{ updateRecordLayout(); }catch{}
+          try{ syncGridOverlayVisibility(); }catch{}
           setRailStates();
         }
       };
 
       window.addEventListener("pagehide", ()=>{
         releaseWakeLock();
+        try{ hideCountMenu(); }catch{}
         resetReaderActiveSources();
         if(hasR()){
           try{ R.readerCtx?.close(); }catch{}
@@ -2853,6 +3076,13 @@ JANE: Ready?"></textarea>
       if (eb) { eb.textContent = "Fatal init error: "+e; eb.classList.add("show"); }
     }
   </script>
+
+  <!-- Count-in picker (landscape only) -->
+  <div id="countinMenu" class="countin-menu" hidden aria-hidden="true" role="menu">
+    <button type="button" data-sec="3">3 sec</button>
+    <button type="button" data-sec="5">5 sec</button>
+    <button type="button" data-sec="10">10 sec</button>
+  </div>
 
   <div class="countdown" id="countdown" aria-hidden="true" style="display:none">
     <div class="count-num" id="countNum">3</div>
