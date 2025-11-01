@@ -9,6 +9,28 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <link rel="apple-touch-icon" href="/icons/icon-192.png">
+  <script>
+    (function () {
+      const isPWA = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+      const vp = document.querySelector('meta[name=viewport]');
+      if (!vp) return;
+      if (isPWA) {
+        // Lock zoom in PWA so the app feels native (no pinch/double-tap zoom)
+        vp.setAttribute('content','width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover');
+        // Stop pinch/double-tap zoom (iOS only). Keep this scoped to PWA.
+        let lastTouchEnd = 0;
+        document.addEventListener('touchend', function(e){
+          const now = Date.now();
+          if (now - lastTouchEnd <= 350) e.preventDefault();
+          lastTouchEnd = now;
+        }, { passive:false });
+        document.addEventListener('gesturestart', e => e.preventDefault(), { passive:false });
+      } else {
+        // Keep Safari accessible
+        vp.setAttribute('content','width=device-width, initial-scale=1, viewport-fit=cover');
+      }
+    })();
+  </script>
     <style>
     /* Safe-area headroom (iOS Dynamic Island / status bars) */
     :root {
@@ -121,6 +143,10 @@
       z-index:-1;
       pointer-events:none;
     }
+  .hidden{ display:none; }
+  #routeWarn,#routeWarnRecord{ display:none !important; }
+  html { -webkit-text-size-adjust: 100%; }
+  button,[role="button"]{ touch-action:manipulation; }
   /* First card breathing room (covers all tabs) */
   main > *:first-child{ margin-top:max(8px, calc(var(--safe-top) / 2)); }
     .card{
@@ -819,6 +845,125 @@
         width:100% !important;
       }
     }
+
+    /* Rehearse: center the "Edit mode" pill and prevent flex stretching */
+    #screen-rehearse .row > .badge{
+      flex:0 0 auto !important;
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      text-align:center;
+      white-space:nowrap;
+      line-height:1.2;
+      padding:6px 12px;
+    }
+
+    /* === Record: rule-of-thirds overlay ====================================== */
+    #screen-record .preview-wrap{ position:relative; }
+
+    .grid-overlay{
+      position:absolute;
+      inset:8px;
+      border-radius:inherit;
+      pointer-events:none;
+      display:none;
+      z-index:4;
+    }
+    .grid-overlay .v,
+    .grid-overlay .h{
+      position:absolute;
+      background:rgba(230,240,255,0.38);
+      box-shadow:0 0 0 1px rgba(0,0,0,0.18) inset;
+      transform:translateZ(0);
+    }
+    .grid-overlay .v{ top:0; bottom:0; width:1px; }
+    .grid-overlay .h{ left:0; right:0; height:1px; }
+    .grid-overlay .v1{ left:33.333%; }
+    .grid-overlay .v2{ left:66.666%; }
+    .grid-overlay .h1{ top:33.333%; }
+    .grid-overlay .h2{ top:66.666%; }
+
+    /* Align overlay inset with the tighter padding used on small landscape */
+    @media (orientation: landscape) and (max-width: 1024px){
+      body.record-active #screen-record .grid-overlay{ inset:6px; }
+    }
+
+    /* === Record: Count-in picker ================================================= */
+    .countin-menu{
+      position:fixed;
+      z-index:1100;
+      display:none;
+      background:rgba(12,15,24,0.96);
+      border:1px solid var(--border);
+      border-radius:12px;
+      padding:6px;
+      box-shadow:0 18px 40px rgba(3,6,15,0.45);
+      backdrop-filter:blur(10px);
+    }
+    .countin-menu[hidden]{ display:none; }
+    .countin-menu button{
+      display:block;
+      width:100%;
+      background:transparent;
+      color:var(--text);
+      border:1px solid rgba(147,160,195,0.28);
+      border-radius:10px;
+      padding:8px 10px;
+      margin:4px 0;
+      font-weight:700;
+      letter-spacing:.2px;
+    }
+    .countin-menu button:active{ transform:scale(0.98); }
+
+    /* Hide picker in portrait just in case */
+    @media (orientation: portrait){
+      .countin-menu{ display:none !important; }
+    }
+
+    /* Record (rail buttons): prevent iOS long-press text selection/callout */
+    #screen-record .control-rail .btn,
+    #screen-record .control-rail .btn *{
+      -webkit-user-select:none;
+      user-select:none;
+      -webkit-touch-callout:none;
+    }
+    /* Remove the gray tap flash for nicer feel */
+    #screen-record .control-rail .btn{
+      -webkit-tap-highlight-color:transparent;
+    }
+
+    /* --- Route guidance modal -------------------------------------------------- */
+    .ob-hidden { display: none !important; }
+    .ob-modal { position: fixed; inset: 0; z-index: 9999; }
+    .ob-modal__scrim {
+      position: absolute; inset: 0;
+      background: rgba(0,0,0,0.45);
+      backdrop-filter: blur(2px);
+    }
+    .ob-modal__card {
+      position: absolute; left: 50%; top: 50%;
+      transform: translate(-50%, -50%);
+      width: min(520px, 92vw);
+      max-height: calc(100svh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 32px);
+      background: #1a1a1a; color: #f5f5f5;
+      border-radius: 16px; box-shadow: 0 18px 48px rgba(0,0,0,0.4);
+      padding: 20px; overflow: auto;
+    }
+    .ob-modal__title { margin: 0 0 6px; font-size: 18px; font-weight: 700; }
+    .ob-modal__body { margin: 0 0 10px; font-size: 14px; line-height: 1.4; }
+    .ob-modal__details summary { cursor: pointer; margin-bottom: 6px; }
+    .ob-modal__actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+    .ob-modal__close {
+      position: absolute; top: 8px; right: 8px; width: 32px; height: 32px;
+      border-radius: 8px; border: none; background: rgba(255,255,255,0.06); color: #fff; cursor: pointer;
+    }
+    .btn.btn-primary {
+      appearance: none; border: none; border-radius: 12px; padding: 10px 16px;
+      background: #ff4d4f; color: #fff; font-weight: 600; cursor: pointer;
+    }
+    @supports (padding:max(0px)) {
+      .ob-modal__card { padding-bottom: max(20px, env(safe-area-inset-bottom)); }
+    }
   </style>
 </head>
 <body>
@@ -891,6 +1036,13 @@ JANE: Ready?"></textarea>
     <section id="screen-rehearse" class="screen">
       <div class="card">
         <h3>Rehearse</h3>
+  <div id="routeWarn" class="hidden" style="display:none!important;background:#fff4e5;border:1px solid #ffd4a8;color:#8a4b00;padding:10px 12px;border-radius:10px;margin:8px 0;line-height:1.3">
+          <div style="font-weight:600;margin-bottom:4px">Heads-up: iPhone may be in “call” mode</div>
+          <div style="font-size:14px">
+            If you can’t hear the reader during your line, flip your iPhone’s <b>ringer switch ON</b> (side of the phone) and avoid Bluetooth “call audio” mode.
+            <span id="routeWarnMore" data-route-warn-more style="text-decoration:underline;cursor:pointer">Learn how</span>
+          </div>
+        </div>
 
         <div class="hint" id="rehearseBanner"><b>Review and edit your script first</b> before rendering for rehearsal. When ready, press “Render for rehearsal (OpenAI)” to pre-load partner voices for perfect timing.</div>
         <div class="spacer8"></div>
@@ -945,11 +1097,23 @@ JANE: Ready?"></textarea>
 
     <!-- RECORD -->
     <section id="screen-record" class="screen">
+      <div id="routeWarnRecord" class="hidden" style="background:#fff4e5;border:1px solid #ffd4a8;color:#8a4b00;padding:10px 12px;border-radius:10px;margin:8px 0;line-height:1.3">
+        <div style="font-weight:600;margin-bottom:4px">Heads-up: iPhone may be in “call” mode</div>
+        <div style="font-size:14px">
+          If you can’t hear the reader during your line, flip your iPhone’s <b>ringer switch ON</b> (side of the phone) and avoid Bluetooth “call audio” mode.
+          <span id="routeWarnMoreRecord" data-route-warn-more style="text-decoration:underline;cursor:pointer">Learn how</span>
+        </div>
+      </div>
       <div class="card record-grid record-card">
         <!-- Preview -->
         <div class="preview-wrap">
           <video id="preview" autoplay muted playsinline></video>
           <audio id="readerAudio" preload="auto" playsinline></audio>
+          <!-- Rule-of-thirds overlay (hidden by default) -->
+          <div id="gridOverlay" class="grid-overlay" aria-hidden="true">
+            <span class="v v1"></span><span class="v v2"></span>
+            <span class="h h1"></span><span class="h h2"></span>
+          </div>
           <button id="btnFlipCam" class="flipcam" aria-label="Flip camera" title="Flip camera">⟳</button>
         </div>
 
@@ -957,8 +1121,9 @@ JANE: Ready?"></textarea>
         <div class="control-rail controls-stack">
           <button id="btnRender" class="btn btn-render rail landscape-only pos-render">Render</button>
           <button id="btnRec" class="btn rec pos-rec">REC</button>
+          <button id="btnGrid" class="btn secondary rail landscape-only pos-grid" aria-pressed="false">Grid: Off</button>
           <button id="btnCamera" class="btn secondary rail pos-camera" aria-pressed="false">Camera: Off</button>
-          <button id="btnCountIn" class="btn secondary rail landscape-only pos-countin" aria-pressed="true">Count-in: On</button>
+          <button id="btnCountIn" class="btn secondary rail landscape-only pos-countin" aria-pressed="false">Count-in: Off</button>
           <button id="btnHeadphones" class="btn secondary rail pos-headphones" aria-pressed="true">Headphones: On</button>
         </div>
       </div>
@@ -1023,6 +1188,16 @@ JANE: Ready?"></textarea>
         <div class="small">
           <b>Tips:</b> Use wired/Bluetooth headphones to avoid echo/ducking. If TTS shows a 429 quota message, top up credits and press Render again. “Clear Render” removes cached clips.
         </div>
+        <details id="advTroubleshoot" style="margin:12px 0">
+          <summary>Advanced · Troubleshooting</summary>
+          <label style="display:flex;align-items:center;gap:8px;margin-top:8px">
+            <input id="advSpeakerFallback" type="checkbox">
+            <span>Always use phone speaker while I’m speaking (session only)</span>
+          </label>
+          <div style="opacity:.7;font-size:12px;margin-top:4px">
+            Use only if your Bluetooth headphones enter "call mode" and hide the reader audio.
+          </div>
+        </details>
       </div>
     </section>
   </main>
@@ -1054,6 +1229,61 @@ JANE: Ready?"></textarea>
     const $$ = (s,r=document)=>Array.from(r.querySelectorAll(s));
     // --- TDZ fix: declare R early so Safari doesn't throw before it's assigned ---
     let R = null;
+      if(typeof window !== "undefined"){
+        if(typeof window.__OB_BT_IN === "undefined") window.__OB_BT_IN = false;
+        if(typeof window.__OB_MIC_STREAM === "undefined") window.__OB_MIC_STREAM = null;
+        if(typeof window.__OB_MIC_TRACK === "undefined") window.__OB_MIC_TRACK = null;
+        if(typeof window.__OB_AP === "undefined") window.__OB_AP = null;
+        if(typeof window.isRecording === "undefined") window.isRecording = false;
+      }
+      // Reader element singleton (idempotent)
+      window.__OB_READER_EL = window.__OB_READER_EL
+        || document.querySelector('audio[data-reader]')
+        || document.getElementById('readerAudio')
+        || (function(){
+             const a = document.createElement('audio');
+             a.setAttribute('data-reader','1');
+             a.preload = 'auto';
+             a.crossOrigin = 'anonymous';
+             a.style.display = 'none';
+             document.body.appendChild(a);
+             return a;
+           })();
+
+      async function ensureAudioContext() {
+        try {
+          if (!window.audioCtx || window.audioCtx.state === 'closed') {
+            window.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+          }
+          if (window.audioCtx.state === 'suspended') await window.audioCtx.resume();
+        } catch {}
+        return window.audioCtx;
+      }
+
+      // TEMP DIAG: log AudioContext state right before countdown
+      async function _diagAudioCtx(tag) {
+        const st = window.audioCtx?.state;
+        console.debug('[AUDIO]', tag, 'ctx=', st);
+      }
+
+      async function playTestBeep(ms=200) {
+        try {
+          const ctx = window.audioCtx || (window.audioCtx = new (window.AudioContext||window.webkitAudioContext)());
+          if (ctx.state !== 'running') await ctx.resume();
+          const o = ctx.createOscillator();
+          const g = ctx.createGain();
+          o.type = 'sine';
+          o.frequency.value = 880;
+          g.gain.setValueAtTime(0.0001, ctx.currentTime);
+          g.gain.exponentialRampToValueAtTime(0.2, ctx.currentTime + 0.01);
+          g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + ms/1000);
+          o.connect(g).connect(ctx.destination);
+          o.start();
+          o.stop(ctx.currentTime + ms/1000);
+        } catch (err) {
+          console.debug('[AUDIO] playTestBeep error', err);
+        }
+      }
       // --- Belt & suspenders guard (safe checks for the Record state object) ---
       const hasR = () => !!(typeof R !== "undefined" && R && typeof R === "object");
       // Tight mode when recording
@@ -1067,6 +1297,7 @@ JANE: Ready?"></textarea>
         document.body.classList.toggle('is-portrait', portrait);
         document.body.classList.toggle('is-landscape', !portrait);
         updateRecordLayout();
+        try{ syncGridOverlayVisibility(); }catch{}
       };
       applyOrientationClasses();
       if(typeof mqlPortrait.addEventListener === 'function'){
@@ -1116,9 +1347,24 @@ JANE: Ready?"></textarea>
         const btn=document.querySelector(`.tabbar button[data-tab="${name}"]`);
         if(btn) btn.classList.add("active");
         if(name==="rehearse"){
+          // Route inference on tab enter
+          (async () => {
+            try{
+              const bt = await hasBluetoothInput();
+              window.__OB_BT_IN = bt;
+              logRouteCheck('tab:rehearse');
+              if (window.__OB_MIC_TRACK && _route.isiOS && bt && looksLikeHfp(window.__OB_MIC_TRACK)) {
+                _route.warnActive = true;
+                maybeShowRouteModal();
+              } else {
+                showRouteWarn(false);
+              }
+            }catch{ showRouteWarn(false); }
+          })();
           try{ primeReaderFromCacheIfAvailable(); }catch{}
         }else if(name==="record"){
           try{ updateRecordLayout(); }catch{}
+          try{ syncGridOverlayVisibility(); }catch{}
           try{ primeReaderFromCacheIfAvailable(); }catch{}
           try{ requestMicPermissionOnce(); }catch{}
           try{ startPreviewIfNeeded(); }catch{}
@@ -1136,10 +1382,199 @@ JANE: Ready?"></textarea>
 
       // state
       const S={ script_id:"", scenes:[], role:"", voice_map:{}, editMode:false, supportedVoices:["alloy"] };
+  if(typeof window !== "undefined") window.currentSceneId = S.script_id || null;
 
       // helpers
       const setStatus = msg => $("#status").textContent = msg || "";
       const setStatusPdf = msg => $("#statusPdf").textContent = msg || "";
+
+      // --- Route/Ringer Inference (iOS + BT + HFP narrowband) ---------------------
+      const _route = {
+        isiOS: /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream,
+        hasBluetooth: false,
+        checkedBluetooth: false,
+        warnActive: false,
+        lastWarn: null
+      };
+
+      async function hasBluetoothInput(force = false) {
+        if (!force && _route.checkedBluetooth) return !!_route.hasBluetooth;
+        try {
+          const devs = await navigator.mediaDevices.enumerateDevices();
+          const found = devs.some(d => {
+            if (d.kind !== "audioinput") return false;
+            const label = (d.label || "").toLowerCase();
+            return /(bluetooth|airpod|pods|beats|earbud|headset|hands[- ]?free|bose|sony)/.test(label);
+          });
+          _route.hasBluetooth = found;
+          _route.checkedBluetooth = true;
+          if(typeof window !== "undefined") window.__OB_BT_IN = found;
+          return found;
+        } catch {
+          const fallback = force ? false : !!_route.hasBluetooth;
+          if(typeof window !== "undefined") window.__OB_BT_IN = fallback;
+          return fallback;
+        }
+      }
+
+      function looksLikeHfp(track) {
+        try {
+          const st = track?.getSettings?.() || {};
+          const label = (track?.label || "").toLowerCase();
+          const sr = Number(st.sampleRate) || 0;
+          const ch = Number(st.channelCount) || 0;
+          if (sr && sr <= 16000) return true;
+          if (sr && sr <= 24000 && /(bluetooth|airpod|beats|headset|hands[- ]?free|earbud|bose|sony|pods)/.test(label)) return true;
+          if (!sr && /(sco|hfp|hands[- ]?free|headset)/.test(label)) return true;
+          return false;
+        } catch { return false; }
+      }
+
+      // Passive playback-energy probe to detect "audio routed but inaudible" during SR
+      function makeEnergyProbe(audioCtx) {
+        const analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 512;
+        const data = new Uint8Array(analyser.frequencyBinCount);
+        let lastRms = 0;
+        function rms() {
+          analyser.getByteTimeDomainData(data);
+          let sum = 0;
+          for (let i = 0; i < data.length; i++) { const v = (data[i] - 128) / 128; sum += v * v; }
+          return Math.sqrt(sum / data.length);
+        }
+        return { analyser, sample: () => (lastRms = rms()), last: () => lastRms };
+      }
+
+      function showRouteWarn(on) {
+        logRouteCheck(on ? "show:on" : "show:off");
+        ["routeWarn", "routeWarnRecord"].forEach(id => {
+          const el = document.getElementById(id);
+          if (!el) return;
+          el.classList.toggle("hidden", !on);
+        });
+        _route.warnActive = !!on;
+      }
+
+      function logRouteCheck(src){
+        try{
+          const track = typeof window !== "undefined" ? window.__OB_MIC_TRACK : null;
+          const settings = track?.getSettings?.() || {};
+          const payload = {
+            isiOS: _route.isiOS,
+            bt: typeof window !== "undefined" ? window.__OB_BT_IN : undefined,
+            hfp: track ? looksLikeHfp(track) : false,
+            sampleRate: settings.sampleRate,
+            ch: settings.channelCount
+          };
+          if(src) payload.src = src;
+          console.debug('[RouteCheck]', payload);
+        }catch{}
+      }
+
+      function maybeShowRouteModal(){
+        if(typeof RouteModal === "undefined" || !RouteModal) return;
+        if(typeof window !== "undefined" && window.isRecording){
+          document.addEventListener('ob:recording:stopped', () => {
+            if (!RouteModal.inCooldown()) RouteModal.open();
+          }, { once: true });
+        }else{
+          if (!RouteModal.inCooldown()) RouteModal.open();
+        }
+      }
+
+      function getRouteProbe(audioCtx){
+        if(typeof window === "undefined") return null;
+        const existing = window.__OB_AP;
+        if(existing && existing.analyser && existing.analyser.context === audioCtx) return existing;
+        const probe = makeEnergyProbe(audioCtx);
+        window.__OB_AP = probe;
+        return probe;
+      }
+
+      function tapReaderNode(node){
+        if(!node || typeof node.connect !== "function") return;
+        if(node.__obProbeConnected) return;
+        try{
+          const ctx = node.context;
+          if(!ctx) return;
+          const probe = getRouteProbe(ctx);
+          if(probe && probe.analyser){
+            try{ node.connect(probe.analyser); node.__obProbeConnected = true; }catch{}
+          }
+        }catch{}
+      }
+
+      let srEnergyTimer = null;
+
+      function stopRouteEnergyPolling(){ if(srEnergyTimer){ clearInterval(srEnergyTimer); srEnergyTimer = null; } }
+
+      function startRouteEnergyPolling(){
+        if(typeof window === "undefined") return;
+        try{ tapReaderNode(R?.readerGain); }catch{}
+        const probe = window.__OB_AP;
+        if(!probe || typeof probe.sample !== "function") return;
+        let ticks = 0;
+        stopRouteEnergyPolling();
+        srEnergyTimer = setInterval(()=>{
+          ticks++;
+          try{
+            const e = probe.sample();
+            logRouteCheck(`energyPoll:${ticks}`);
+            // very low RMS while "playing" suggests wrong route
+            if (_route?.isiOS && (window.__OB_BT_IN || false) && (looksLikeHfp(window.__OB_MIC_TRACK) || (window.__OB_AP?.last?.() ?? 0) < 0.01)) {
+              _route.warnActive = true;
+              if (!RouteModal.inCooldown()) RouteModal.open();
+            }
+          }catch{}
+          if(ticks >= 3) stopRouteEnergyPolling();
+        }, 300);
+      }
+
+      async function inferRouteWarning({ track, phase } = {}) {
+        if (!_route.isiOS) {
+          if (_route.warnActive) showRouteWarn(false);
+          return false;
+        }
+
+        if (!_route.checkedBluetooth) {
+          try {
+            const hasBt = await hasBluetoothInput();
+            if (hasBt) _route.hasBluetooth = true;
+          } catch {}
+        }
+
+        if (!track) {
+          if (!_route.warnActive) showRouteWarn(false);
+          return _route.warnActive;
+        }
+
+        const settings = track.getSettings ? track.getSettings() : {};
+        const sampleRate = Number(settings.sampleRate) || 0;
+        const channelCount = Number(settings.channelCount) || 0;
+        const label = (track.label || "").toLowerCase();
+        if (label && /(bluetooth|airpod|pods|beats|earbud|headset|hands[- ]?free|bose|sony)/.test(label)) {
+          _route.hasBluetooth = true;
+          _route.checkedBluetooth = true;
+        }
+
+        const probableHfp = looksLikeHfp(track);
+        logRouteCheck('inferRouteWarning');
+        if (probableHfp) {
+          _route.lastWarn = { phase: phase || "", sampleRate, channelCount, label };
+          _route.warnActive = true;
+          maybeShowRouteModal();
+          return true;
+        }
+
+        if (sampleRate && sampleRate >= 22050) {
+          _route.lastWarn = null;
+          showRouteWarn(false);
+          return false;
+        }
+
+        if (!_route.warnActive) showRouteWarn(false);
+        return false;
+      }
 
       // --- Global audio stop (kills any lingering playback/SR) ---
       function resetReaderActiveSources(){
@@ -1160,6 +1595,7 @@ JANE: Ready?"></textarea>
         try { sr?.stop(); } catch {}
         try { clearMy?.(); } catch {}
         try { playing = false; } catch {}
+        stopRouteEnergyPolling();
       }
 
       // Persist cached reader clips across tabs (and reloads)
@@ -1195,6 +1631,7 @@ JANE: Ready?"></textarea>
           const r=await fetch("/debug/scenes?script_id="+encodeURIComponent(S.script_id),{headers:JSON_HDRS});
           const j=await safeJson(r); if(!r.ok) return;
           S.scenes=j.scenes||[];
+          if(typeof window !== "undefined") window.currentSceneId = S.script_id || null;
           await loadSupportedVoices();
           hydrateAssign(); hydrateRehearse(); applyEditModeUI();
         }catch(e){ showErr("Init warning: couldn’t load scenes. You can still re-import."); }
@@ -1288,7 +1725,15 @@ JANE: Ready?"></textarea>
         selPace:"#selPace", btnMic:$("#btnMic"), micBadge:$("#micBadge"),
         btnToggleEditMode:$("#btnToggleEditMode"), editModeState:$("#editModeState"),
         inlineForm:null, currentSlotPlace:null,
-        rehearseAudio:(()=>{ const a=document.createElement("audio"); a.preload="auto"; a.setAttribute("playsinline",""); a.style.display="none"; document.body.appendChild(a); return a; })()
+        rehearseAudio:(()=>{
+          const a=document.createElement("audio");
+          a.preload="auto";
+          a.setAttribute("playsinline","");
+          a.style.display="none";
+          document.body.appendChild(a);
+          if(typeof window !== "undefined" && !window.__OB_READER_EL){ window.__OB_READER_EL = a; }
+          return a;
+        })()
       };
       let idx=0, playing=false;
 
@@ -1339,10 +1784,26 @@ JANE: Ready?"></textarea>
   const ENERGY_SILENCE_THRESH=0.020;
 
       function rms(buf){ let sum=0; for(let i=0;i<buf.length;i++){ const v=buf[i]/128-1; sum+=v*v; } return Math.sqrt(sum/buf.length); }
-      function startMicMonitor(){
+      async function startMicMonitor(){
         if(micStream) return;
-        navigator.mediaDevices.getUserMedia({audio:true}).then(stream=>{
+        try{
+          const stream = await navigator.mediaDevices.getUserMedia({audio:true});
+          // after getUserMedia:
           micStream=stream;
+          window.__OB_MIC_STREAM = stream;
+          const track = (typeof stream?.getAudioTracks === "function") ? stream.getAudioTracks()[0] : null;
+          window.__OB_MIC_TRACK = track || null;
+          logRouteCheck('startMicMonitor');
+          try{
+            const bt = window.__OB_BT_IN || await hasBluetoothInput();
+            window.__OB_BT_IN = bt;
+            if (_route?.isiOS && (window.__OB_BT_IN || false) && (looksLikeHfp(window.__OB_MIC_TRACK) || (window.__OB_AP?.last?.() ?? 0) < 0.01)) {
+              _route.warnActive = true;
+              if (!RouteModal.inCooldown()) RouteModal.open();
+            } else {
+              showRouteWarn(false);
+            }
+          }catch{ showRouteWarn(false); }
           audioCtx=new (window.AudioContext||window.webkitAudioContext)();
           const src=audioCtx.createMediaStreamSource(stream);
           analyser=audioCtx.createAnalyser(); analyser.fftSize=2048;
@@ -1363,9 +1824,34 @@ JANE: Ready?"></textarea>
             requestAnimationFrame(tick);
           };
           tick();
-        }).catch(()=>{ /* ignore */ });
+        }catch{ logRouteCheck('startMicMonitor:error'); showRouteWarn(false); }
       }
-      function stopMicMonitor(){ try{ micStream?.getTracks().forEach(t=>t.stop()); }catch{}; micStream=null; try{ audioCtx?.close(); }catch{}; audioCtx=null; analyser=null; energy=0; speaking=false; }
+      function stopMicMonitor(){
+        try{ micStream?.getTracks().forEach(t=>t.stop()); }catch{};
+        micStream=null;
+        window.__OB_MIC_STREAM = null;
+        window.__OB_MIC_TRACK = null;
+        showRouteWarn(false);
+        try{ audioCtx?.close(); }catch{};
+        audioCtx=null; analyser=null; energy=0; speaking=false;
+      }
+
+      // devicechange: re-evaluate when route flips
+      try {
+        navigator.mediaDevices.addEventListener("devicechange", async () => {
+          try{
+            const bt = await hasBluetoothInput(true);
+            window.__OB_BT_IN = bt;
+            logRouteCheck('mediaDeviceChange');
+            if (_route?.isiOS && (window.__OB_BT_IN || false) && (looksLikeHfp(window.__OB_MIC_TRACK) || (window.__OB_AP?.last?.() ?? 0) < 0.01)) {
+              _route.warnActive = true;
+              if (!RouteModal.inCooldown()) RouteModal.open();
+            } else {
+              showRouteWarn(false);
+            }
+          }catch{ showRouteWarn(false); }
+        });
+      } catch {}
 
       function minElapsedFor(text){
         const base = expectedMinMsFor(text || "");
@@ -1393,8 +1879,186 @@ JANE: Ready?"></textarea>
         if(!list.length || !me) return false;
         return list.some(ln => ln && ln.speaker === me && endsWithDashy(ln.text || ""));
       }
-      function maybeSetMyLineStart(){ if(onMyLine() && !myLineStartMs) myLineStartMs=performance.now(); }
-      function clearMy(){ myLineStartMs=0; firstEnergyAt=0; advanceLock=false; latestTranscript=""; lastResultAt=0; if(silenceTimer){ clearTimeout(silenceTimer); silenceTimer=null; } }
+      function maybeSetMyLineStart(){
+        if(onMyLine() && !myLineStartMs){
+          myLineStartMs=performance.now();
+          if (speakerFallbackActive()) {
+            (async () => {
+              try { await routeReaderToSpeaker(window.__OB_READER_EL); } catch {}
+            })();
+          }
+        }
+      }
+      function clearMy(){
+        myLineStartMs=0;
+        firstEnergyAt=0;
+        advanceLock=false;
+        latestTranscript="";
+        lastResultAt=0;
+        stopRouteEnergyPolling();
+        if(silenceTimer){
+          clearTimeout(silenceTimer);
+          silenceTimer=null;
+        }
+        if (speakerFallbackActive()) {
+          (async () => {
+            try { await routeReaderToDefault(window.__OB_READER_EL); } catch {}
+          })();
+        }
+      }
+
+  // ------- Reader Recovery Layer (iOS PWA resilience) -------------------------
+      window.__OB_PRECACHE = window.__OB_PRECACHE || new Set();
+
+      function ensurePredecodeAudio(){
+        try{
+          if(window.__OB_PREBUFFER_EL && document.body.contains(window.__OB_PREBUFFER_EL)) return window.__OB_PREBUFFER_EL;
+          const pre = document.createElement('audio');
+          pre.preload = 'auto';
+          pre.setAttribute('playsinline','');
+          pre.style.display = 'none';
+          pre.muted = true;
+          pre.setAttribute('data-reader','prebuffer');
+          document.body.appendChild(pre);
+          window.__OB_PREBUFFER_EL = pre;
+          return pre;
+        }catch{return null;}
+      }
+
+      function showToastOnce(msg) {
+        if (document.getElementById('ob_toast')) return;
+        const el = document.createElement('div');
+        el.id = 'ob_toast';
+        el.textContent = msg;
+        el.style.cssText = 'position:fixed;left:50%;bottom:14px;transform:translateX(-50%);background:#222;color:#fff;padding:10px 14px;border-radius:12px;z-index:9999;font-size:13px;opacity:.96';
+        document.body.appendChild(el);
+        setTimeout(()=>{ try{ el.remove(); }catch{}; }, 2200);
+      }
+
+      async function predecode(unit) {
+        if(!unit) return;
+        try{
+          window.__OB_PRECACHE = window.__OB_PRECACHE || new Set();
+          if(window.__OB_PRECACHE.has(unit)) return;
+          const pre = ensurePredecodeAudio();
+          if(!pre) return;
+          if(pre.dataset.unit === unit) return;
+          pre.dataset.unit = unit;
+          pre.src = unit;
+          try{ pre.load(); }catch{}
+          window.__OB_PRECACHE.add(unit);
+        }catch{}
+      }
+
+      function firstPartnerIndex(from = 0){
+        try{
+          const list = filtered();
+          const me = myName();
+          if(!list.length) return 0;
+          const start = Math.max(0, from || 0);
+          for(let i=start;i<list.length;i++){
+            const ln = list[i];
+            if(ln && ln.speaker !== me) return i;
+          }
+          return start;
+        }catch{ return 0; }
+      }
+
+      async function rehydrateAudioAndRoute({ from } = {}) {
+        try {
+          const ctx = await ensureAudioContext();
+          try { await window.__OB_READER_EL?.setSinkId?.('default'); } catch {}
+          if (_route?.isiOS && (window.__OB_BT_IN || false) && looksLikeHfp?.(window.__OB_MIC_TRACK)) {
+            if (!RouteModal.inCooldown()) RouteModal.open();
+          }
+          if (window.RR?.map) {
+            const startIdx = typeof firstPartnerIndex === 'function' ? firstPartnerIndex(idx || 0) : (idx || 0);
+            const u0 = window.RR.map.get(startIdx);
+            const u1 = window.RR.map.get(startIdx + 1);
+            if (u0) await predecode(u0);
+            if (u1) await predecode(u1);
+            try { highlightCurrent(); } catch {}
+          }
+          if (ctx?.state !== 'running') showToastOnce('Audio paused by iOS — tap Play to continue');
+          console.debug('[recovery] rehydrate done', { from, ctx: ctx?.state, idx });
+        } catch (e) { console.warn('[recovery] rehydrate failed', e); }
+      }
+
+      window.addEventListener('pagehide', () => {
+        // hint: iOS may suspend/close audioCtx after this
+      });
+
+      const SKEY = 'ob.rehearse.state.v1';
+      function saveRehearseState() {
+        try {
+          const st = { sceneId: window.currentSceneId, idx: window.idx || 0, rid: window.RR?.id || null };
+          sessionStorage.setItem(SKEY, JSON.stringify(st));
+        } catch {}
+      }
+      function loadRehearseState() {
+        try { return JSON.parse(sessionStorage.getItem(SKEY) || 'null'); } catch { return null; }
+      }
+
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'hidden') {
+          saveRehearseState();
+          try { window.bufferCache && window.bufferCache.clear && window.bufferCache.clear(); } catch {}
+        }
+      });
+      window.addEventListener('pagehide', saveRehearseState);
+
+      async function rehydrateOnReturn(from) {
+        const ctx = await ensureAudioContext();
+        try { await window.__OB_READER_EL?.setSinkId?.('default'); } catch {}
+
+        const st = loadRehearseState();
+        if (st) {
+          try { window.currentSceneId = st.sceneId; window.idx = st.idx|0; } catch {}
+        }
+        if (window.RR?.map && typeof predecode === 'function') {
+          const start = (typeof firstPartnerIndex === 'function') ? firstPartnerIndex(window.idx||0) : (window.idx||0);
+          try {
+            const u0 = window.RR.map.get(start);
+            const u1 = window.RR.map.get(start+1);
+            if (u0) predecode(u0);
+            if (u1) predecode(u1);
+            if (typeof highlightCurrent === 'function') highlightCurrent();
+          } catch {}
+        }
+        if (ctx?.state !== 'running') console.debug('[rehydrate] ctx=', ctx?.state, 'tap Play to resume');
+      }
+
+      window.addEventListener('pageshow', () => rehydrateOnReturn('pageshow'));
+      window.addEventListener('pageshow', () => {
+        try { if (primeReaderFromCacheIfAvailable()) preloadReaderBuffers(); } catch {}
+      });
+      document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') rehydrateOnReturn('visible'); });
+
+      try {
+        navigator.mediaDevices.addEventListener('devicechange', async () => {
+          await ensureAudioContext();
+          try { await window.__OB_READER_EL?.setSinkId?.('default'); } catch {}
+          if (window.RR?.map && typeof predecode==='function') {
+            const start = (typeof firstPartnerIndex==='function') ? firstPartnerIndex(window.idx||0) : (window.idx||0);
+            const u0 = window.RR.map.get(start), u1 = window.RR.map.get(start+1);
+            if (u0) predecode(u0);
+            if (u1) predecode(u1);
+          }
+          if (typeof RouteModal!=='undefined' && typeof looksLikeHfp==='function' && window.__OB_MIC_TRACK) {
+            if (_route?.isiOS && (window.__OB_BT_IN || false) && looksLikeHfp(window.__OB_MIC_TRACK) && !RouteModal.inCooldown()) {
+              RouteModal.open();
+            }
+          }
+        });
+      } catch {}
+
+      async function hardResumeOnGesture() {
+        const ctx = await ensureAudioContext();
+        if (ctx?.state !== 'running') {
+          try { await ctx.resume(); } catch {}
+        }
+        try { await window.__OB_READER_EL?.setSinkId?.('default'); } catch {}
+      }
 
       function updateMicBadge(){
         const srAvailable = !!sr;
@@ -1408,7 +2072,34 @@ JANE: Ready?"></textarea>
         $("#btnMic").setAttribute("aria-pressed", srToggleOn ? "true" : "false");
       }
 
-      async function requestMicPermissionOnce(){ if(srPermGranted) return true; try{ const s=await navigator.mediaDevices.getUserMedia({audio:true}); s.getTracks().forEach(t=>t.stop()); srPermGranted=true; return true; }catch{ srPermGranted=false; return false; } finally{ updateMicBadge(); } }
+      async function requestMicPermissionOnce(){
+        if(srPermGranted) return true;
+        try{
+          const s = await navigator.mediaDevices.getUserMedia({audio:true});
+          // after getUserMedia:
+          const track = (typeof s?.getAudioTracks === "function") ? s.getAudioTracks()[0] : null;
+          window.__OB_MIC_STREAM = s;
+          window.__OB_MIC_TRACK = track || null;
+          logRouteCheck('requestMicPermissionOnce');
+          try{
+            const bt = window.__OB_BT_IN || await hasBluetoothInput();
+            window.__OB_BT_IN = bt;
+            if (_route?.isiOS && (window.__OB_BT_IN || false) && (looksLikeHfp(window.__OB_MIC_TRACK) || (window.__OB_AP?.last?.() ?? 0) < 0.01)) {
+              _route.warnActive = true;
+              if (!RouteModal.inCooldown()) RouteModal.open();
+            } else {
+              showRouteWarn(false);
+            }
+          }catch{ showRouteWarn(false); }
+          s.getTracks().forEach(t=>t.stop());
+          srPermGranted=true;
+          return true;
+        }catch{
+          logRouteCheck('requestMicPermissionOnce:error');
+          srPermGranted=false;
+          return false;
+        } finally{ updateMicBadge(); }
+      }
 
       function advanceFromMyLine(){
         const now=performance.now();
@@ -1474,9 +2165,26 @@ JANE: Ready?"></textarea>
 
       if(sr){
         sr.continuous=false; sr.interimResults=true; sr.lang="en-US";
-        sr.onstart=()=>{ srActive=true; updateMicBadge(); };
-        sr.onend=()=>{ srActive=false; updateMicBadge(); if(srToggleOn && srPermGranted && onMyLine() && !(E.inlineForm&&E.inlineForm.isConnected)){ try{ sr.start(); }catch{} } };
-        sr.onerror=()=>{ srActive=false; updateMicBadge(); };
+        sr.onstart=()=>{
+          srActive=true;
+          updateMicBadge();
+          if(onMyLine()){
+            startRouteEnergyPolling();
+          }
+        };
+        sr.onend=()=>{
+          srActive=false;
+          stopRouteEnergyPolling();
+          updateMicBadge();
+          if(srToggleOn && srPermGranted && onMyLine() && !(E.inlineForm&&E.inlineForm.isConnected)){
+            try{ sr.start(); }catch{}
+          }
+        };
+        sr.onerror=()=>{
+          srActive=false;
+          stopRouteEnergyPolling();
+          updateMicBadge();
+        };
         sr.onresult=(ev)=>{
           if(!(onMyLine() && srToggleOn && srPermGranted)) return;
           maybeSetMyLineStart();
@@ -1541,7 +2249,7 @@ JANE: Ready?"></textarea>
         const srAvailable = !!sr;
         if(!srAvailable){
           if(!srToggleOn){
-            try{ await navigator.mediaDevices.getUserMedia({audio:true}); startMicMonitor(); srPermGranted = true; srToggleOn = true; }
+            try{ await navigator.mediaDevices.getUserMedia({audio:true}); await startMicMonitor(); srPermGranted = true; srToggleOn = true; }
             catch{ srToggleOn = false; }
           }else{ srToggleOn = false; stopMicMonitor(); }
           updateMicBadge(); return;
@@ -1549,7 +2257,7 @@ JANE: Ready?"></textarea>
         if(!srToggleOn){
           const ok=await requestMicPermissionOnce();
           srToggleOn=ok;
-          if(ok){ startMicMonitor(); await (onMyLine()?maybeSetMyLineStart():Promise.resolve()); }
+          if(ok){ await startMicMonitor(); await (onMyLine()?maybeSetMyLineStart():Promise.resolve()); }
         }else{
           srToggleOn=false;
           try{ sr.stop(); }catch{}
@@ -1613,24 +2321,25 @@ JANE: Ready?"></textarea>
           }
         }
       }
+
       function startDots(){
         stopDots();
+        RR.dotsState = [0,0,0];
         RR.dotsTimer = setInterval(()=>{
           if(RR.dotsState.join("")==="000"){ RR.dotsState=[1,0,0]; }
           else if(RR.dotsState[0]){ RR.dotsState=[0,1,0]; }
           else if(RR.dotsState[1]){ RR.dotsState=[0,0,1]; }
           else { RR.dotsState=[0,0,0]; }
-          setRehearseRenderStatus("Preparing voices…","");
+          setRehearseRenderStatus("Preparing voices…"," ");
         }, 320);
       }
+
       function stopDots(){
         if(RR.dotsTimer){
           clearInterval(RR.dotsTimer);
           RR.dotsTimer=null;
           RR.dotsState=[0,0,0];
         }
-        // keep last message but stop the animated dots
-        setRehearseRenderStatus(document.getElementById("rehearseRenderStatus")?.textContent || "", "");
       }
 
       async function renderRehearseVoices(){
@@ -1841,10 +2550,50 @@ JANE: Ready?"></textarea>
         }
       }
 
-      $("#btnPlay")?.addEventListener("click",()=>{ playing=!playing; $("#btnPlay").textContent=playing?"Pause":"Play"; if(playing){ step(true); } else { window.speechSynthesis?.cancel(); try{ sr?.stop(); }catch{}; clearMy(); }});
+  $("#btnPlay")?.addEventListener("click",async ()=>{
+    await ensureAudioContext();
+    try { await window.__OB_READER_EL?.setSinkId?.('default'); } catch {}
+        try{ hardResumeOnGesture().catch(()=>{}); }catch{};
+        playing=!playing;
+        $("#btnPlay").textContent=playing?"Pause":"Play";
+        if(playing){
+          try{
+            const cur = current();
+            if(cur && cur.speaker === myName()){
+              const list = filtered();
+              for(let i = idx; i < list.length; i++){
+                if(list[i] && list[i].speaker !== myName()){ idx = i; break; }
+              }
+              highlightCurrent();
+            }
+          }catch{}
+          step(true);
+        }
+        else { window.speechSynthesis?.cancel(); try{ sr?.stop(); }catch{}; clearMy(); }
+      });
       $("#btnPrev")?.addEventListener("click",()=>{ const list=filtered(); if(!list.length) return; try{ sr?.stop(); }catch{}; clearMy(); idx=Math.max(0,idx-1); highlightCurrent(); if(playing) step(true); else maybeSetMyLineStart(); });
-      $("#btnNext")?.addEventListener("click",()=>{ const list=filtered(); if(!list.length) return; try{ sr?.stop(); }catch{}; clearMy(); idx=Math.min(list.length-1,idx+1); highlightCurrent(); if(playing) step(true); else maybeSetMyLineStart(); });
+  $("#btnNext")?.addEventListener("click",async ()=>{
+        await ensureAudioContext();
+        try { await window.__OB_READER_EL?.setSinkId?.('default'); } catch {}
+        try{ hardResumeOnGesture().catch(()=>{}); }catch{};
+        const list=filtered();
+        if(!list.length) return;
+        try{ sr?.stop(); }catch{};
+        clearMy();
+        idx=Math.min(list.length-1,idx+1);
+        highlightCurrent();
+        if(playing) step(true);
+        else maybeSetMyLineStart();
+      });
       $("#btnTop")?.addEventListener("click",()=>{ try{ sr?.stop(); }catch{}; clearMy(); idx=0; highlightCurrent(); if(playing) step(true); else maybeSetMyLineStart(); });
+
+      const ROUTE_WARN_ALERT = 'If the reader audio disappears during your line:\n' +
+        '1) Flip the iPhone ringer switch ON (side of the phone).\n' +
+        '2) Settings → Bluetooth → your headphones → prefer media audio.\n' +
+        '3) Try wired earbuds or toggle Mic Off for a pass.';
+
+      document.getElementById('routeWarnMore')?.addEventListener('click', ()=>{ alert(ROUTE_WARN_ALERT); });
+      document.getElementById('routeWarnMoreRecord')?.addEventListener('click', ()=>{ alert(ROUTE_WARN_ALERT); });
 
       $("#btnToggleEditMode")?.addEventListener("click",()=>{ S.editMode=!S.editMode; applyEditModeUI(); });
       function applyEditModeUI(){ $("#btnToggleEditMode")?.setAttribute("aria-pressed",S.editMode?"true":"false"); $("#editModeState").textContent=S.editMode?"On":"Off"; $$(".editbar",$("#lines")).forEach(el=>el.style.display=S.editMode?"flex":"none"); $$(".inline-slot",$("#lines")).forEach(el=>el.style.display=S.editMode?"flex":"none"); if(E.inlineForm && E.inlineForm.isConnected){ try{ E.inlineForm.remove(); }catch{}; E.currentSlotPlace=null; } }
@@ -1865,14 +2614,16 @@ JANE: Ready?"></textarea>
 
       function updateRecordLayout(){
         try{ applyPreviewAspect(isPortrait()); }catch{}
+        try{ syncGridOverlayVisibility(); }catch{}
       }
 
-      window.addEventListener("resize", ()=>updateRecordLayout());
-      window.addEventListener("orientationchange", ()=>updateRecordLayout());
+  window.addEventListener("resize", ()=>{ updateRecordLayout(); try{ syncGridOverlayVisibility(); }catch{} });
+  window.addEventListener("orientationchange", ()=>{ updateRecordLayout(); try{ syncGridOverlayVisibility(); }catch{} });
 
       R = {
         btnRender: $("#btnRender"),
         btnRec: $("#btnRec"),
+        btnGrid: $("#btnGrid"),
         btnCamera: $("#btnCamera"),
         btnCountIn: $("#btnCountIn"),
         btnHeadphones: $("#btnHeadphones"),
@@ -1882,12 +2633,12 @@ JANE: Ready?"></textarea>
         chunks: [],
         rec: null,
         stream: null,
-        render_id: "",
-        download_url: "",
-        cameraOn: false,
-        countInOn: true,
-        headphonesOn: true,
-        recording: false,
+    render_id: "",
+    download_url: "",
+    cameraOn: false,
+    countInOn: false,
+    headphonesOn: true,
+    recording: false,
         prevSrToggle: null,
         facing: "user",               // or "environment"
         mixCtx: null,
@@ -1906,13 +2657,16 @@ JANE: Ready?"></textarea>
         readerRecordGain: null,
         readerActiveSources: new Set(),
         duckHintShown: false,
-        currentAspect: isPortrait() ? "9:16" : "16:9",
-        forcePerLine: false,
+    currentAspect: isPortrait() ? "9:16" : "16:9",
+    forcePerLine: false,
+    gridOn: false,
+    countInSecs: 3,
       };
       if(R.btnRender && !R.btnRender.dataset.defaultLabel){
         R.btnRender.dataset.defaultLabel = R.btnRender.textContent || "Render";
       }
       R.audio?.setAttribute("playsinline","");
+      if(typeof window !== "undefined" && R.audio){ window.__OB_READER_EL = R.audio; }
 
       function setStatusRec(t){
         const btn = R.btnRender;
@@ -1958,6 +2712,8 @@ JANE: Ready?"></textarea>
           if(R.readerCtx?.state === "suspended"){ try{ await R.readerCtx.resume(); }catch{} }
           R.readerGain = R.readerCtx.createGain();
           R.readerGain.gain.value = 1.0;
+          try{ R.readerGain.__obProbeConnected = false; }catch{}
+          tapReaderNode(R.readerGain);
           try{ R.readerGain.connect(R.readerCtx.destination); R.readerDirectConnected = true; }
           catch{}
           R.readerActiveSources = new Set();
@@ -1970,7 +2726,8 @@ JANE: Ready?"></textarea>
       function restoreReaderDirectMonitor(){
         if(R.readerCtx && R.readerGain){
           try{ R.readerGain.disconnect(); }catch{}
-          try{ R.readerGain.connect(R.readerCtx.destination); R.readerDirectConnected = true; }
+          try{ R.readerGain.__obProbeConnected = false; }catch{}
+          try{ tapReaderNode(R.readerGain); R.readerGain.connect(R.readerCtx.destination); R.readerDirectConnected = true; }
           catch{}
         }
         R.readerBridge = null;
@@ -2049,6 +2806,8 @@ JANE: Ready?"></textarea>
           if(R.readerCtx?.state === "suspended"){ try{ await R.readerCtx.resume(); }catch{} }
           R.readerGain = R.readerCtx.createGain();
           R.readerGain.gain.value = 1.0;
+          try{ R.readerGain.__obProbeConnected = false; }catch{}
+          tapReaderNode(R.readerGain);
           try{ R.readerGain.connect(R.readerCtx.destination); R.readerDirectConnected = true; }
           catch{}
           R.readerActiveSources = new Set();
@@ -2061,7 +2820,8 @@ JANE: Ready?"></textarea>
       function restoreReaderDirectMonitor(){
         if(R.readerCtx && R.readerGain){
           try{ R.readerGain.disconnect(); }catch{}
-          try{ R.readerGain.connect(R.readerCtx.destination); R.readerDirectConnected = true; }
+          try{ R.readerGain.__obProbeConnected = false; }catch{}
+          try{ tapReaderNode(R.readerGain); R.readerGain.connect(R.readerCtx.destination); R.readerDirectConnected = true; }
           catch{}
         }
         R.readerBridge = null;
@@ -2108,13 +2868,31 @@ JANE: Ready?"></textarea>
       function setRailStates(){
         R.btnCamera.setAttribute("aria-pressed", R.cameraOn ? "true":"false");
         R.btnCamera.textContent = "Camera: " + (R.cameraOn ? "On" : "Off");
-        R.btnCountIn.setAttribute("aria-pressed", R.countInOn ? "true":"false");
-        R.btnCountIn.textContent = "Count-in: " + (R.countInOn ? "On" : "Off");
+        if(R.btnCountIn){
+          R.btnCountIn.setAttribute("aria-pressed", R.countInOn ? "true":"false");
+          const countLabel = R.countInOn
+            ? `Count-in: On (${Number(R.countInSecs) || 3}s)`
+            : "Count-in: Off";
+          R.btnCountIn.textContent = countLabel;
+        }
         R.btnHeadphones.setAttribute("aria-pressed", R.headphonesOn ? "true":"false");
         R.btnHeadphones.textContent = "Headphones: " + (R.headphonesOn ? "On" : "Off");
+        if(R.btnGrid){
+          R.btnGrid.setAttribute("aria-pressed", R.gridOn ? "true" : "false");
+          R.btnGrid.textContent = "Grid: " + (R.gridOn ? "On" : "Off");
+        }
         if(R.recording){ R.btnRec.classList.add("recording"); R.btnRec.textContent = "STOP"; }
         else { R.btnRec.classList.remove("recording"); R.btnRec.textContent = "REC"; }
       }
+
+      function syncGridOverlayVisibility(){
+        const ov = document.getElementById("gridOverlay");
+        if(!ov) return;
+        const show = !!(hasR() && R.gridOn && !isPortrait());
+        ov.style.display = show ? "block" : "none";
+      }
+
+      syncGridOverlayVisibility();
 
       function pickMime(video){
         const vids = ["video/mp4;codecs=avc1.42E01E,mp4a.40.2","video/mp4","video/webm;codecs=vp8,opus","video/webm"];
@@ -2136,7 +2914,7 @@ JANE: Ready?"></textarea>
         R.prevSrToggle = null;
         if(prev){
           srToggleOn = true;
-          startMicMonitor();
+          startMicMonitor().catch(()=>{});
         }else{
           srToggleOn = false;
           stopMicMonitor();
@@ -2181,9 +2959,11 @@ JANE: Ready?"></textarea>
 
           if(R.readerCtx && R.readerGain){
             try{ R.readerGain.disconnect(); R.readerDirectConnected = false; }catch{}
+            try{ R.readerGain.__obProbeConnected = false; }catch{}
             try{
               R.readerBridge = R.readerCtx.createMediaStreamDestination();
               R.readerGain.connect(R.readerBridge);
+              tapReaderNode(R.readerGain);
               R.readerDirectConnected = false;
               const bridgeSource = R.mixCtx.createMediaStreamSource(R.readerBridge.stream);
               R.readerBridgeSource = bridgeSource;
@@ -2278,28 +3058,41 @@ JANE: Ready?"></textarea>
         }
       }
 
-      /* --- Count-in: visible 3-2-1 with slower beeps --- */
+      /* --- Count-in: configurable visible countdown --- */
       async function doBeepsAndCountdown(){
         if(!R.countInOn) return;
-        const overlay = $("#countdown"), num = $("#countNum");
-        if(overlay){ overlay.style.display="flex"; }
+        const N = Math.min(10, Math.max(3, Number(R.countInSecs) || 3));
 
-        const ctx = new (window.AudioContext||window.webkitAudioContext)();
-        const beep = (freq, dur=0.28)=> new Promise(res=>{
-          const o=ctx.createOscillator(), g=ctx.createGain();
-          o.frequency.value=freq; o.type="sine"; g.gain.value=0.18;
-          o.connect(g); g.connect(ctx.destination); o.start();
-          setTimeout(()=>{ o.stop(); res(); }, dur*1000);
+        await ensureReaderCtx();
+        const ctx = R.readerCtx;
+        if(!ctx){ return; }
+
+        if(ctx.state !== 'running'){ try{ await ctx.resume(); }catch{} }
+
+        const overlay = $("#countdown"), num = $("#countNum");
+        if(overlay){ overlay.style.display = "flex"; }
+
+        const playBeep = (freq, dur = 0.28) => new Promise(res => {
+          try{
+            const o = ctx.createOscillator();
+            const g = ctx.createGain();
+            o.type = 'sine';
+            o.frequency.value = freq;
+            g.gain.value = 0.18;
+            o.connect(g);
+            g.connect(ctx.destination);
+            o.start();
+            setTimeout(()=>{ try{ o.stop(); }catch{}; try{ o.disconnect(); g.disconnect(); }catch{}; res(); }, dur*1000);
+          }catch{ res(); }
         });
 
-        const step = async (n, freq)=>{ if(num){ num.textContent=String(n); } await beep(freq); await new Promise(r=>setTimeout(r,520)); };
+        for(let i = N; i >= 1; i--){
+          if(num) num.textContent = String(i);
+          await playBeep(i === 1 ? 660 : 880, 0.28);
+          await new Promise(r => setTimeout(r, 720));
+        }
 
-        await step(3, 880);
-        await step(2, 880);
-        await step(1, 660);
-
-        try{ await ctx.close(); }catch{}
-        if(overlay){ overlay.style.display="none"; }
+        if(overlay){ overlay.style.display = "none"; }
       }
 
       /* --- Recording flow --- */
@@ -2318,14 +3111,30 @@ JANE: Ready?"></textarea>
               audio: micConstraints(false)
             });
           }
+          // after getUserMedia:
           const at = R.stream?.getAudioTracks?.()[0];
+          window.__OB_MIC_STREAM = R.stream;
+          window.__OB_MIC_TRACK = at || null;
+          logRouteCheck('startPreviewIfNeeded');
           if(at){
             const settings = at.getSettings ? at.getSettings() : {};
             console.log("[offbook] mic settings (preview)", settings);
+            try{
+              const bt = window.__OB_BT_IN || await hasBluetoothInput();
+              if (_route.isiOS && (bt || false) && looksLikeHfp(at)) {
+                _route.warnActive = true;
+                maybeShowRouteModal();
+              } else {
+                showRouteWarn(false);
+              }
+            }catch{ showRouteWarn(false); }
             if(!R.duckHintShown && (settings.echoCancellation === true || settings.noiseSuppression === true)){
               setStatusRec("Note: Your device may still apply echo/ducking. Use wired/Bluetooth headphones for best results.");
               R.duckHintShown = true;
             }
+          }else{
+            logRouteCheck('startPreviewIfNeeded:noTrack');
+            showRouteWarn(false);
           }
           if(R.preview){
             try{ R.preview.muted = true; }catch{}
@@ -2335,7 +3144,7 @@ JANE: Ready?"></textarea>
             }
             try{ updateRecordLayout(); }catch{}
           }
-        }catch(e){ setStatusRec("Camera/mic permission denied: "+e); }
+  }catch(e){ logRouteCheck('startPreviewIfNeeded:error'); setStatusRec("Camera/mic permission denied: "+e); }
       }
 
       let useBackCamera = false;
@@ -2350,6 +3159,12 @@ JANE: Ready?"></textarea>
       }
 
       async function startRecording(){
+        await hardResumeOnGesture();
+        try { await ensureReaderCtx(); } catch {}
+        try { await window.__OB_READER_EL?.setSinkId?.('default'); } catch {}
+        await (window.audioCtx?.resume?.() || Promise.resolve());
+        await _diagAudioCtx('before-beeps');
+        console.debug('[AUDIO] readerEl=', !!window.__OB_READER_EL, 'canPlay=', window.__OB_READER_EL?.readyState);
   primeReaderFromCacheIfAvailable();
   const dashyScene = sceneHasDashyUserLine();
   const hasClipMap = !!(RR.map && RR.map.size > 0);
@@ -2380,14 +3195,30 @@ JANE: Ready?"></textarea>
           });
         }catch(e){ setStatusRec("Permission error: "+e); return; }
         R.stream = userStream;
+        // after getUserMedia:
         const track = R.stream?.getAudioTracks?.()[0];
+        window.__OB_MIC_STREAM = R.stream;
+        window.__OB_MIC_TRACK = track || null;
+        logRouteCheck('startRecording');
         if(track){
           const settings = track.getSettings ? track.getSettings() : {};
           console.log("[offbook] mic settings (record)", settings);
+          try{
+            const bt = window.__OB_BT_IN || await hasBluetoothInput();
+            if (_route.isiOS && (bt || false) && looksLikeHfp(track)) {
+              _route.warnActive = true;
+              maybeShowRouteModal();
+            } else {
+              showRouteWarn(false);
+            }
+          }catch{ showRouteWarn(false); }
           if(!R.duckHintShown && (settings.echoCancellation === true || settings.noiseSuppression === true)){
             setStatusRec("Note: Your device may still apply echo/ducking. Use wired/Bluetooth headphones for best results.");
             R.duckHintShown = true;
           }
+        }else{
+          logRouteCheck('startRecording:noTrack');
+          showRouteWarn(false);
         }
         if(R.cameraOn && R.preview){
           R.preview.srcObject = R.stream;
@@ -2403,7 +3234,7 @@ JANE: Ready?"></textarea>
         try{
           await requestMicPermissionOnce();
           srToggleOn = true;
-          startMicMonitor();
+          await startMicMonitor();
         }catch{}
         updateMicBadge();
 
@@ -2418,6 +3249,10 @@ JANE: Ready?"></textarea>
 
         R.rec.ondataavailable = (e)=>{ if(e.data && e.data.size>0) R.chunks.push(e.data); };
         R.rec.onstop = async ()=>{
+          if(typeof window !== "undefined"){
+            window.isRecording = false;
+            try{ document.dispatchEvent(new CustomEvent('ob:recording:stopped')); }catch{}
+          }
           stopAllAudioHard();
           resetMicAfterRecording();
           try{ R.mixCtx?.close(); }catch{}
@@ -2434,6 +3269,7 @@ JANE: Ready?"></textarea>
         };
 
         R.recording = true;
+        if(typeof window !== "undefined") window.isRecording = true;
         setRailStates();
         // Re-arm SR immediately for your first line in Record
         try{
@@ -2446,6 +3282,10 @@ JANE: Ready?"></textarea>
         try{ R.rec.start(); }
         catch(e){
           R.recording = false;
+          if(typeof window !== "undefined"){
+            window.isRecording = false;
+            try{ document.dispatchEvent(new CustomEvent('ob:recording:stopped')); }catch{}
+          }
           setRailStates();
           setStatusRec("Recorder error: "+e);
           stopAllAudioHard();
@@ -2458,7 +3298,7 @@ JANE: Ready?"></textarea>
           return;
         }
 
-        setStatusRec("Recording…");
+    setStatusRec("Recording…");
 
         await new Promise(r=>setTimeout(r,220));
 
@@ -2785,6 +3625,12 @@ JANE: Ready?"></textarea>
         else { startRecording(); }
       });
 
+      R.btnGrid?.addEventListener("click", ()=>{
+        R.gridOn = !R.gridOn;
+        setRailStates();
+        syncGridOverlayVisibility();
+      });
+
       R.btnCamera?.addEventListener("click", async ()=>{
         R.cameraOn = !R.cameraOn;
         setRailStates();
@@ -2792,12 +3638,204 @@ JANE: Ready?"></textarea>
         try{ updateRecordLayout(); }catch{}
       });
 
-      R.btnCountIn?.addEventListener("click", ()=>{ R.countInOn = !R.countInOn; setRailStates(); });
       R.btnHeadphones?.addEventListener("click", ()=>{
         R.headphonesOn = !R.headphonesOn;
         try{ if(R.mixGainReader) R.mixGainReader.gain.value = R.headphonesOn ? 1.0 : 0.0; }catch{}
         setRailStates();
       });
+
+      // --- Count-in long-press menu (landscape only) ---
+      const countMenu = $("#countinMenu");
+      let countHoldTimer = null;
+      let countMenuOpen = false;
+
+      function positionCountMenu(){
+        if(!countMenu || !R?.btnCountIn) return;
+        const r = R.btnCountIn.getBoundingClientRect();
+        const menuW = Math.max(120, countMenu.offsetWidth || 0);
+        const left = Math.min(Math.max(8, r.right - menuW), window.innerWidth - menuW - 8);
+        const top = Math.min(r.bottom + 6, window.innerHeight - 8);
+        countMenu.style.left = left + "px";
+        countMenu.style.top = top + "px";
+      }
+
+      function showCountMenu(){
+        if(!countMenu || !R?.btnCountIn) return;
+        if(isPortrait()) return;
+        positionCountMenu();
+        countMenu.style.display = "block";
+        countMenu.removeAttribute("hidden");
+        countMenu.setAttribute("aria-hidden", "false");
+        positionCountMenu();
+        countMenuOpen = true;
+      }
+
+      function hideCountMenu(){
+        if(!countMenu || !countMenuOpen) return;
+        clearTimeout(countHoldTimer);
+        countHoldTimer = null;
+        countMenu.setAttribute("hidden", "true");
+        countMenu.setAttribute("aria-hidden", "true");
+        countMenu.style.display = "none";
+        countMenuOpen = false;
+      }
+
+      R.btnCountIn?.addEventListener("click", (ev)=>{
+        if(countMenuOpen){
+          hideCountMenu();
+          ev.stopPropagation();
+          return;
+        }
+        R.countInOn = !R.countInOn;
+        setRailStates();
+      });
+
+      R.btnCountIn?.addEventListener("pointerdown", ()=>{
+        if(isPortrait()) return;
+        if(countMenuOpen) return;
+        clearTimeout(countHoldTimer);
+        countHoldTimer = setTimeout(showCountMenu, 450);
+      });
+      ["pointerup","pointercancel","pointerleave"].forEach(evt=>{
+        R.btnCountIn?.addEventListener(evt, ()=>{ clearTimeout(countHoldTimer); countHoldTimer = null; });
+      });
+
+      countMenu?.addEventListener("click", (e)=>{
+        const b = e.target.closest("button[data-sec]");
+        if(!b) return;
+        const sec = parseInt(b.getAttribute("data-sec"), 10) || 3;
+        R.countInSecs = sec;
+        hideCountMenu();
+        setRailStates();
+      });
+
+      document.addEventListener("click", (e)=>{
+        if(!countMenuOpen) return;
+        if(e.target === R.btnCountIn || (countMenu && countMenu.contains(e.target))) return;
+        hideCountMenu();
+      });
+
+      // --- iOS guard: block text selection & long-press menu on record rail buttons
+      document.addEventListener("selectstart", (e)=>{
+        if(e.target && e.target.closest("#screen-record .control-rail")){
+          e.preventDefault();
+        }
+      }, { passive:false });
+
+      document.addEventListener("contextmenu", (e)=>{
+        if(e.target && e.target.closest("#screen-record .control-rail")){
+          e.preventDefault();
+        }
+      });
+
+      // ---- Route Modal controls ---------------------------------------------------
+      const RouteModal = (() => {
+        const el = document.getElementById('routeModal');
+        const scrim = el?.querySelector('.ob-modal__scrim');
+        const btnClose = el?.querySelector('#routeModalClose');
+        const btnOk = el?.querySelector('#routeModalOk');
+        const FIRST = () => btnOk || btnClose;
+        let lastFocus = null;
+        const KEY = 'ob.routeModal.dismissedAt';
+        const COOLDOWN_MS = 10 * 60 * 1000; // 10 minutes
+
+        function inCooldown() {
+          const t = parseInt(localStorage.getItem(KEY) || '0', 10);
+          return Number.isFinite(t) && Date.now() - t < COOLDOWN_MS;
+        }
+        function markDismissed() { localStorage.setItem(KEY, String(Date.now())); }
+
+        function lockScroll(on) {
+          document.documentElement.style.overflow = on ? 'hidden' : '';
+          document.body.style.overflow = on ? 'hidden' : '';
+        }
+        function trap(e) {
+          if (e.key !== 'Tab') return;
+          const f = el.querySelectorAll('button,[href],input,summary,[tabindex]:not([tabindex="-1"])');
+          if (!f.length) return;
+          const first = f[0], last = f[f.length-1];
+          if (e.shiftKey && document.activeElement === first) { last.focus(); e.preventDefault(); }
+          if (!e.shiftKey && document.activeElement === last) { first.focus(); e.preventDefault(); }
+        }
+        function open() {
+          if (!el) return;
+          if (inCooldown()) return;
+          lastFocus = document.activeElement;
+          el.classList.remove('ob-hidden');
+          el.setAttribute('aria-hidden','false');
+          lockScroll(true);
+          document.addEventListener('keydown', onKey);
+          setTimeout(() => FIRST()?.focus(), 0);
+        }
+        function close() {
+          if (!el) return;
+          el.classList.add('ob-hidden');
+          el.setAttribute('aria-hidden','true');
+          lockScroll(false);
+          document.removeEventListener('keydown', onKey);
+          try { lastFocus && lastFocus.focus(); } catch {}
+        }
+        function onKey(e){ if (e.key === 'Escape') { markDismissed(); close(); } else trap(e); }
+
+        btnClose?.addEventListener('click', () => { markDismissed(); close(); });
+        document.getElementById('routeHow')?.addEventListener('toggle', () => {/* keep open */});
+        scrim?.addEventListener('click', () => { markDismissed(); close(); });
+        btnOk?.addEventListener('click', () => { markDismissed(); close(); });
+
+        return { open, close, inCooldown };
+      })();
+
+      // ---- Speaker fallback (session-scoped) -------------------------------------
+      const SPK_KEY = 'ob.spkFallbackSession'; // '1' for enabled this session
+      function enableSpeakerFallbackSession() { window.__OB_SPK_FALLBACK = true; sessionStorage.setItem(SPK_KEY, '1'); }
+      function disableSpeakerFallbackSession() { window.__OB_SPK_FALLBACK = false; sessionStorage.removeItem(SPK_KEY); }
+      function speakerFallbackActive() { return !!(window.__OB_SPK_FALLBACK || sessionStorage.getItem(SPK_KEY) === '1'); }
+
+      // Attempt routing to a speaker-like output if supported; otherwise no-op.
+      async function routeReaderToSpeaker(audioEl) {
+        try {
+          if (!audioEl || typeof audioEl.setSinkId !== 'function') return false;
+          const outs = await navigator.mediaDevices.enumerateDevices();
+          const speakers = outs.filter(d => d.kind === 'audiooutput' && /speaker|iphone/i.test((d.label||'')));
+          const target = speakers[0] || outs.find(d => d.kind === 'audiooutput');
+          if (target && target.deviceId) { await audioEl.setSinkId(target.deviceId); return true; }
+        } catch (e) { /* ignore */ }
+        return false; // iOS Safari may not support setSinkId; we degrade to guidance only
+      }
+
+      // Restore default output (best effort)
+      async function routeReaderToDefault(audioEl) {
+        try {
+          if (!audioEl || typeof audioEl.setSinkId !== 'function') return false;
+          await audioEl.setSinkId('default');
+          return true;
+        } catch { return false; }
+      }
+
+  // Wire modal "Fix now"
+      document.getElementById('routeModalFixNow')?.addEventListener('click', async () => {
+        enableSpeakerFallbackSession();
+        // if a media element exists, try to move it now (best effort)
+        try { await routeReaderToSpeaker(window.__OB_READER_EL); } catch {}
+        // keep modal open/closed? Close after action:
+        (window.RouteModal?.close || (()=>{}))();
+      });
+      // Persist flag for current tab reloads
+      if (sessionStorage.getItem(SPK_KEY) === '1') window.__OB_SPK_FALLBACK = true;
+      const adv = document.getElementById('advSpeakerFallback');
+      if (adv) {
+        adv.checked = speakerFallbackActive();
+        adv.addEventListener('change', () => {
+          if (adv.checked) enableSpeakerFallbackSession(); else disableSpeakerFallbackSession();
+        });
+      }
+
+      window.addEventListener("orientationchange", ()=>{
+        hideCountMenu();
+        clearTimeout(countHoldTimer);
+        countHoldTimer = null;
+      });
+      window.addEventListener("resize", ()=>{ if(countMenuOpen) positionCountMenu(); });
 
       $("#btnFlipCam")?.addEventListener("click", async ()=>{
         useBackCamera = !useBackCamera;
@@ -2807,17 +3845,20 @@ JANE: Ready?"></textarea>
       /* Warm permissions when user navigates to Record */
       const _origShowScreen = showScreen;
       showScreen = function(name){
+        try{ hideCountMenu(); }catch{}
         _origShowScreen(name);
         if(name==="record"){
           try{ requestMicPermissionOnce(); }catch{}
           try{ startPreviewIfNeeded(); }catch{}
           try{ updateRecordLayout(); }catch{}
+          try{ syncGridOverlayVisibility(); }catch{}
           setRailStates();
         }
       };
 
       window.addEventListener("pagehide", ()=>{
         releaseWakeLock();
+        try{ hideCountMenu(); }catch{}
         resetReaderActiveSources();
         if(hasR()){
           try{ R.readerCtx?.close(); }catch{}
@@ -2827,8 +3868,6 @@ JANE: Ready?"></textarea>
           R.readerBridgeSource = null;
           R.readerRecordGain = null;
           R.readerDirectConnected = false;
-          R.readerBuffers = new Map();
-          R.readerLoading = false;
           R.duckHintShown = false;
         }
         resetGalleryUrls();
@@ -2853,6 +3892,42 @@ JANE: Ready?"></textarea>
       if (eb) { eb.textContent = "Fatal init error: "+e; eb.classList.add("show"); }
     }
   </script>
+
+  <!-- Route / Ringer Guidance Modal -->
+  <div id="routeModal" aria-hidden="true" role="dialog" aria-labelledby="routeModalTitle" aria-modal="true" class="ob-modal ob-hidden">
+    <div class="ob-modal__scrim"></div>
+    <div class="ob-modal__card" role="document">
+      <button id="routeModalClose" class="ob-modal__close" aria-label="Close">✕</button>
+      <div class="ob-modal__content">
+  <h2 id="routeModalTitle" class="ob-modal__title">Heads-up: iPhone may be in "call" mode</h2>
+        <p class="ob-modal__body">
+          If you can’t hear the reader during your line, flip your iPhone’s <b>ringer switch ON</b> (side of the phone) and avoid Bluetooth "call audio" mode.
+        </p>
+        <details id="routeHow" class="ob-modal__details">
+          <summary>Learn how</summary>
+          <ol>
+            <li>Flip the hardware <b>ringer switch ON</b> (on the side of the phone).</li>
+            <li>Settings → Bluetooth → your headphones → prefer media audio (avoid "call mode").</li>
+            <li>If issues persist: try wired earbuds or temporarily turn Mic Off for a pass.</li>
+          </ol>
+        </details>
+        <div class="ob-modal__actions">
+          <button id="routeModalFixNow" class="btn">Fix now</button>
+          <button id="routeModalOk" class="btn btn-primary">Understood</button>
+        </div>
+        <div class="ob-modal__footnote" style="opacity:.7;font-size:12px;margin-top:6px">
+          We'll use your phone speaker during your lines for this session only.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Count-in picker (landscape only) -->
+  <div id="countinMenu" class="countin-menu" hidden aria-hidden="true" role="menu">
+    <button type="button" data-sec="3">3 sec</button>
+    <button type="button" data-sec="5">5 sec</button>
+    <button type="button" data-sec="10">10 sec</button>
+  </div>
 
   <div class="countdown" id="countdown" aria-hidden="true" style="display:none">
     <div class="count-num" id="countNum">3</div>
