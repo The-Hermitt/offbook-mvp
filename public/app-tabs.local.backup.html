@@ -1,0 +1,3936 @@
+﻿<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>OFFBOOK — Rehearsal MVP</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <!-- PWA / iOS standalone niceties -->
+  <link rel="manifest" href="/manifest.webmanifest">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="apple-touch-icon" href="/icons/icon-192.png">
+  <script>
+    (function () {
+      const isPWA = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+      const vp = document.querySelector('meta[name=viewport]');
+      if (!vp) return;
+      if (isPWA) {
+        // Lock zoom in PWA so the app feels native (no pinch/double-tap zoom)
+        vp.setAttribute('content','width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover');
+        // Stop pinch/double-tap zoom (iOS only). Keep this scoped to PWA.
+        let lastTouchEnd = 0;
+        document.addEventListener('touchend', function(e){
+          const now = Date.now();
+          if (now - lastTouchEnd <= 350) e.preventDefault();
+          lastTouchEnd = now;
+        }, { passive:false });
+        document.addEventListener('gesturestart', e => e.preventDefault(), { passive:false });
+      } else {
+        // Keep Safari accessible
+        vp.setAttribute('content','width=device-width, initial-scale=1, viewport-fit=cover');
+      }
+    })();
+  </script>
+    <style>
+    /* Safe-area headroom (iOS Dynamic Island / status bars) */
+    :root {
+      --safe-top: env(safe-area-inset-top, 0px);
+      --bg:#05070d;
+      --panel:rgba(18,21,30,0.78);
+      --panel-2:rgba(12,14,22,0.85);
+      --text:#f2f4ff;
+      --muted:#9aa3bc;
+      --border:rgba(118,130,164,0.2);
+      --focus:#9ab2ff;
+      --accent:#8da2ff;
+      --danger:#ef4444;
+      --ok:#16a34a;
+      --warn:#f4c542;
+      --maxw:760px;
+      --rail-w: clamp(160px, 22vw, 220px);
+      --btn-h: 44px;
+      --btn-fs: 14px;
+      --btn-pad-v: 10px;
+      --btn-pad-h: 12px;
+  --preview-ar: 16/9;
+  --tabsH: 86px;
+  --railW: 200px;
+    }
+    /* Orientation utility classes */
+    @media (orientation: portrait){ .landscape-only{ display:none !important; } }
+    @media (orientation: landscape){ .portrait-only{ display:none !important; } }
+    @media (max-width: 600px){
+      :root{ --tabsH: 102px; }
+    }
+    *{ box-sizing:border-box }
+    html,body{
+      margin:0;
+      padding:0;
+      min-height:100%;
+      background:
+        radial-gradient(circle at 20% 18%, rgba(74,97,162,0.32), transparent 58%),
+        radial-gradient(circle at 78% 4%, rgba(156,104,255,0.22), transparent 52%),
+        radial-gradient(circle at 48% 120%, rgba(76,83,112,0.35), transparent 55%),
+        #05060a;
+      color:var(--text);
+      font-family:"SF Pro Display","SF Pro Text",-apple-system,system-ui,"Segoe UI",Roboto,Arial,sans-serif;
+      -webkit-font-smoothing:antialiased;
+    }
+    /* Give the whole app a small buffer at the very top */
+    body{
+      position:relative;
+      padding-top:max(8px, var(--safe-top));
+    }
+    body::before{
+      content:"";
+      position:fixed;
+      inset:0;
+      pointer-events:none;
+      background:linear-gradient(150deg, rgba(255,255,255,0.05), rgba(0,0,0,0.68) 65%);
+      mix-blend-mode:screen;
+      opacity:0.7;
+      z-index:0;
+    }
+    /* If a header is still present anywhere, respect safe-area */
+    header{
+      padding:calc(28px + var(--safe-top)) 20px 18px;
+      position:relative;
+      z-index:1;
+    }
+    header .brand{
+      max-width:var(--maxw);
+      margin:0 auto;
+      display:flex;
+      align-items:center;
+      gap:16px;
+      position:relative;
+    }
+    .brand-copy{
+      display:flex;
+      flex-direction:column;
+      gap:4px;
+    }
+    .brand-title{
+      font-size:18px;
+      font-weight:700;
+      letter-spacing:.4px;
+    }
+    .brand-subtitle{
+      position:absolute;
+      right:0;
+      top:2px;
+      font-size:13px;
+      color:var(--muted);
+      letter-spacing:2.4px;
+      text-transform:uppercase;
+      white-space:nowrap;
+    }
+    main{
+      /* existing padding stays; add safe-top on top */
+      padding:calc(8px + var(--safe-top)) 20px 120px;
+      max-width:var(--maxw);
+      margin:0 auto;
+      position:relative;
+      z-index:1;
+    }
+    main::before{
+      content:"";
+      position:absolute;
+      inset:0;
+      border-radius:36px;
+      background:linear-gradient(140deg, rgba(255,255,255,0.05), rgba(12,14,21,0.82));
+      box-shadow:0 50px 120px rgba(3,5,12,0.6);
+      z-index:-1;
+      pointer-events:none;
+    }
+  .hidden{ display:none; }
+  #routeWarn,#routeWarnRecord{ display:none !important; }
+  html { -webkit-text-size-adjust: 100%; }
+  button,[role="button"]{ touch-action:manipulation; }
+  /* First card breathing room (covers all tabs) */
+  main > *:first-child{ margin-top:max(8px, calc(var(--safe-top) / 2)); }
+    .card{
+      background:var(--panel);
+      border:1px solid var(--border);
+      border-radius:24px;
+      padding:20px;
+      box-shadow:0 25px 60px rgba(3,6,15,0.45);
+      backdrop-filter:blur(24px);
+      -webkit-backdrop-filter:blur(24px);
+    }
+    h3,h4{
+      margin:4px 0 14px;
+      font-size:20px;
+      font-weight:700;
+      letter-spacing:.3px;
+    }
+    .hint{
+      color:var(--muted);
+      font-size:13px;
+      line-height:1.5;
+      letter-spacing:.2px;
+    }
+    label{
+      display:block;
+      font-size:12px;
+      color:var(--muted);
+      margin:10px 0 6px;
+      letter-spacing:.4px;
+      text-transform:uppercase;
+    }
+    input[type="text"],textarea,select{
+      width:100%;
+      border:1px solid rgba(147,160,195,0.28);
+      background:rgba(9,11,20,0.75);
+      color:var(--text);
+      border-radius:16px;
+      padding:12px 14px;
+      font-size:15px;
+      transition:border-color .2s ease, box-shadow .2s ease, background .2s ease;
+    }
+    input[type="text"]:focus,textarea:focus,select:focus{
+      outline:none;
+      border-color:var(--focus);
+      box-shadow:0 0 0 4px rgba(130,158,255,0.18);
+      background:rgba(12,14,24,0.92);
+    }
+    textarea{ min-height:130px; line-height:1.4; resize:vertical }
+    select{ appearance:none }
+    .btn{
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      background:linear-gradient(135deg, rgba(147,167,255,0.96), rgba(218,223,255,0.96));
+      color:#05070d;
+      border:none;
+      padding:12px 18px;
+      border-radius:16px;
+      font-weight:700;
+      font-size:15px;
+      min-height:46px;
+      cursor:pointer;
+      letter-spacing:.3px;
+      box-shadow:0 18px 36px rgba(85,115,255,0.35);
+      transition:transform .2s ease, box-shadow .2s ease;
+    }
+    .btn:hover{ transform:translateY(-1px); box-shadow:0 20px 40px rgba(85,115,255,0.4) }
+    .btn:active{ transform:translateY(0); box-shadow:0 12px 26px rgba(85,115,255,0.28) }
+    .btn.secondary{
+      background:rgba(15,19,30,0.6);
+      color:var(--text);
+      border:1px solid rgba(150,164,200,0.3);
+      box-shadow:none;
+    }
+    .btn.secondary:hover{ border-color:rgba(154,178,255,0.5) }
+    .btn.ghost{
+      background:rgba(10,12,20,0.45);
+      color:var(--muted);
+      border:1px dashed rgba(150,164,200,0.3);
+      box-shadow:none;
+    }
+    .btn.sm{ padding:8px 12px; font-size:12px; border-radius:12px; min-height:34px }
+    .row{ display:flex; gap:10px } .row>*{ flex:1 }
+    .spacer6{ height:6px } .spacer8{ height:8px } .spacer12{ height:12px } .spacer16{ height:16px }
+    .tabbar{
+      position:fixed;
+      bottom:0;
+      left:0;
+      right:0;
+      background:rgba(10,12,20,0.88);
+      border-top:1px solid rgba(120,132,168,0.2);
+      padding:8px 12px 16px;
+      z-index:40;
+      backdrop-filter:blur(22px);
+      -webkit-backdrop-filter:blur(22px);
+      box-shadow:0 -12px 24px rgba(0,0,0,0.4);
+    }
+    .tabbar-inner{
+      max-width:var(--maxw);
+      margin:0 auto;
+      display:grid;
+      grid-template-columns:repeat(6,1fr);
+      gap:8px;
+    }
+    .tabbar button{
+      appearance:none;
+      border:none;
+      background:transparent;
+      color:var(--muted);
+      padding:12px 4px;
+      font-size:12px;
+      font-weight:600;
+      letter-spacing:.3px;
+      border-radius:14px;
+      transition:color .2s ease, background .2s ease;
+    }
+    .tabbar button.active{
+      color:var(--text);
+      background:linear-gradient(135deg, rgba(147,167,255,0.18), rgba(229,233,255,0.05));
+    }
+    .screen{ display:none; pointer-events:auto } .screen.active{ display:block }
+    .inner-tabs{ display:flex; gap:10px }
+    .inner-tabs button{
+      flex:1;
+      border:1px solid rgba(147,160,195,0.3);
+      background:rgba(9,12,20,0.6);
+      color:var(--text);
+      padding:11px;
+      border-radius:14px;
+      font-weight:700;
+      letter-spacing:.3px;
+      transition:border-color .2s ease, background .2s ease;
+    }
+    .inner-tabs button.active{
+      background:rgba(17,21,34,0.85);
+      border-color:var(--focus);
+      box-shadow:0 10px 24px rgba(85,115,255,0.25);
+    }
+    pre.status{
+      white-space:pre-wrap;
+      word-break:break-word;
+      background:rgba(7,9,16,0.75);
+      border:1px dashed rgba(147,160,195,0.35);
+      border-radius:16px;
+      padding:10px 12px;
+      color:#b5c0d8;
+      min-height:24px;
+    }
+    .pill{
+      display:inline-block;
+      padding:6px 12px;
+      border-radius:999px;
+      border:1px solid rgba(147,160,195,0.32);
+      background:rgba(12,15,24,0.75);
+      font-size:12px;
+      margin-right:6px;
+      letter-spacing:.3px;
+    }
+    .small{ font-size:12px; color:var(--muted); letter-spacing:.2px }
+    
+    /* Rehearse render status — keep visible and readable */
+    #rehearseRenderStatus{
+      display:block;
+      margin-top:6px;
+      padding:8px 10px;
+      background:rgba(9,12,20,0.65);
+      border:1px dashed rgba(147,160,195,0.35);
+      border-radius:12px;
+      line-height:1.35;
+      min-height:22px;              /* keeps the bar from collapsing */
+    }
+    #rehearseRenderStatus .dots{ margin-left:6px }
+    /* Rehearse */
+    .line{
+      padding:12px 14px;
+      border-radius:18px;
+      border:1px solid rgba(120,134,170,0.25);
+      margin-bottom:10px;
+      background:rgba(9,12,20,0.68);
+      position:relative;
+      box-shadow:0 16px 36px rgba(3,6,15,0.35);
+    }
+    .line.me{ border-color:rgba(144,167,255,0.55); background:rgba(17,20,32,0.9); box-shadow:0 22px 40px rgba(90,118,255,0.35) }
+    .line .who{ font-weight:700; margin-bottom:6px; letter-spacing:.25px }
+    .line .text{ line-height:1.5; color:var(--text) }
+    .controls{ display:flex; gap:10px; align-items:center; flex-wrap:wrap }
+    .playing{ outline:2px solid var(--focus); outline-offset:2px }
+    .badge{
+      font-size:11px;
+      padding:5px 10px;
+      border-radius:999px;
+      border:1px solid rgba(147,160,195,0.32);
+      background:rgba(10,12,20,0.7);
+      color:#b5c0d8;
+      letter-spacing:.2px;
+    }
+    .badge.ok{ color:#4ade80 }
+    .badge.warn{ color:#f4c542 }
+    .badge.err{ color:#ff7b7b }
+    .editbar{ position:absolute; top:10px; right:10px; display:flex; gap:8px }
+    .chip{
+      font-size:11px;
+      padding:5px 10px;
+      border-radius:999px;
+      border:1px solid rgba(147,160,195,0.32);
+      background:rgba(12,15,24,0.7);
+      color:#b5c0d8;
+      cursor:pointer;
+      user-select:none;
+      letter-spacing:.2px;
+    }
+    .chip.danger{ border-color:#e96; color:#ff7b7b }
+    .text[contenteditable="true"]{ outline:1px dashed var(--focus); border-radius:10px; padding:6px; background:rgba(7,10,18,0.6) }
+    .inline-slot{ display:none; align-items:center; justify-content:center; margin:12px 0 14px }
+    .inline-slot .ghostline{ width:100%; border:1px dashed rgba(147,160,195,0.3); border-radius:16px; padding:12px }
+    .inline-form{ width:100%; background:rgba(9,12,20,0.72); border:1px solid rgba(147,160,195,0.3); border-radius:18px; padding:14px; margin-top:10px }
+
+    /* Sticky toolbar */
+    .toolbar{
+      position:sticky;
+      top:0;               /* stays pinned, but no overlap */
+      z-index:30;
+      margin:0 -20px 16px; /* remove negative top margin that hid status */
+      padding:16px env(safe-area-inset-right) 16px env(safe-area-inset-left);
+      background:linear-gradient(180deg, rgba(10,12,20,0.92) 0%, rgba(9,11,18,0.88) 100%);
+      border-bottom:1px solid rgba(118,130,164,0.2);
+      border-top-left-radius:24px;
+      border-top-right-radius:24px;
+      backdrop-filter:blur(18px);
+      -webkit-backdrop-filter:blur(18px);
+      box-shadow:0 25px 60px rgba(3,6,15,0.45);
+    }
+    .toolbar .controls{ justify-content:space-between }
+    .toolbar .left, .toolbar .right{ display:flex; gap:10px; align-items:center; flex-wrap:wrap }
+    .btn.icon{ min-width:auto; padding:12px }
+    .btn.icon::before{ content:"⟲"; font-weight:900; font-size:20px; line-height:1; display:block; }
+
+    /* Record */
+    .countdown{
+      position:fixed;
+      inset:0;
+      display:none;
+      align-items:center;
+      justify-content:center;
+      background:rgba(5,7,12,0.78);
+      backdrop-filter:blur(10px);
+      z-index:1000;
+    }
+    .countdown.show{ display:flex }
+    .count-num{
+      font-size:68px;
+      font-weight:800;
+      background:linear-gradient(135deg, rgba(20,22,32,0.95), rgba(7,8,14,0.95));
+      color:#fff;
+      padding:26px 42px;
+      border-radius:22px;
+      border:1px solid rgba(147,160,195,0.3);
+      box-shadow:0 28px 70px rgba(0,0,0,0.55);
+    }
+    .gallery-item{
+      border:1px solid rgba(147,160,195,0.28);
+      border-radius:18px;
+      padding:12px;
+      margin-bottom:10px;
+      background:rgba(9,12,20,0.7);
+      box-shadow:0 18px 40px rgba(3,6,15,0.35);
+    }
+
+    /* === Record: narrow rail alongside preview === */
+    .record-grid{
+      display:grid;
+      grid-template-columns: minmax(0,1fr) var(--rail-w);
+      grid-template-rows: 1fr;
+      grid-template-areas:"preview rail";
+      gap:14px;
+      align-items:stretch;
+      padding:calc(16px + env(safe-area-inset-top,0px)) calc(16px + env(safe-area-inset-right,0px)) calc(24px + env(safe-area-inset-bottom,0px)) calc(16px + env(safe-area-inset-left,0px));
+    }
+
+    .preview-wrap{
+      grid-area:preview;
+      width:100%;
+      background:rgba(9,12,20,0.45);
+      border:1px solid var(--border);
+      border-radius:18px;
+      padding:8px;
+      box-shadow:0 25px 55px rgba(3,6,15,0.45);
+      position:relative;
+    }
+
+    #preview{
+      width:100%;
+      object-fit:cover;
+      border-radius:16px;
+      border:1px solid rgba(118,130,164,0.25);
+      background:#000;
+      display:block;
+      aspect-ratio:var(--preview-ar, 16/9);
+      transition:aspect-ratio .25s ease;
+    }
+
+    .control-rail{
+      grid-area:rail;
+      display:grid;
+      gap:12px;
+      align-content:start;
+      justify-items:stretch;
+      grid-auto-rows:minmax(var(--btn-h), auto);
+      grid-auto-flow:row;
+    }
+
+    .control-rail .btn{
+      width:100%;
+      min-height:var(--btn-h);
+      font-size:var(--btn-fs);
+      padding:var(--btn-pad-v) var(--btn-pad-h);
+      border-radius:18px;
+      box-shadow:0 12px 24px rgba(0,0,0,0.28);
+    }
+
+    /* Button-as-progress */
+    .btn-render.progressing{
+      position:relative;
+      color:#fff;
+    }
+    .btn-render.progressing::after{
+      content:"";
+      position:absolute;
+      inset:0;
+      background:linear-gradient(90deg, rgba(255,255,255,0.15), rgba(255,255,255,0.35));
+      transform:translateX(-100%);
+      animation:renderSweep 1.2s linear infinite;
+      border-radius:inherit;
+    }
+    @keyframes renderSweep{ to{ transform:translateX(100%); } }
+
+    body.record-active{
+      height:100vh;
+      overflow:hidden;
+    }
+    body.record-active main{
+      height:100%;
+      overflow:hidden;
+    }
+    body.record-active #screen-record .record-grid{
+      height:100%;
+      overflow:hidden;
+    }
+    @media (max-width: 860px){
+      .record-grid{
+        grid-template-columns: 1fr;
+        grid-template-rows: auto auto;
+        grid-template-areas:
+          "preview"
+          "rail";
+        gap:12px;
+      }
+      .control-rail{
+        grid-template-columns: repeat(2,1fr);
+        grid-auto-rows: var(--btn-h);
+        align-items:start;
+      }
+      #btnRender, #btnRec{ grid-column: 1 / -1; }
+      #btnHeadphones{ grid-column: 1 / -1; }
+    }
+
+    /* Portrait Record: cap preview so controls always fit without scrolling */
+    body.record-active.is-portrait #screen-record .record-grid{
+      grid-template-areas:
+        "preview"
+        "rail";
+      gap:8px;
+      height:calc(100dvh - env(safe-area-inset-bottom,0px));
+    }
+    body.record-active.is-portrait #screen-record #preview{
+      width:100%;
+      height:100%;
+      aspect-ratio:9/16;
+      object-fit:cover;
+    }
+
+    /* ===== Record (portrait): remove stacked headroom and hug status bar ===== */
+    @media (orientation: portrait){
+      .record-card{ overflow:hidden; }
+      /* kill the global main top padding + first-child margin while recording */
+      body.record-active main{
+        padding-top:calc(env(safe-area-inset-top,0px) + 2px) !important;
+        padding-bottom:calc(env(safe-area-inset-bottom,0px) + var(--tabsH) + 8px) !important;
+      }
+      body.record-active main > *:first-child{ margin-top:0 !important; }
+
+      /* shrink the record card’s own top padding (was adding more headroom) */
+      body.record-active #screen-record .card.record-grid{
+        padding-top:calc(env(safe-area-inset-top,0px) + 2px) !important;
+        gap:8px;
+      }
+
+      /* trim interior padding above the preview so the video can move up */
+      body.record-active #screen-record .preview-wrap{
+        padding-top:4px !important;
+        /* tabs height + two control rows ≈ 150px total */
+        max-height:calc(100dvh - var(--tabsH) - 150px) !important;
+        margin-top:0 !important;
+      }
+
+      /* ensure preview area expands to fill remaining height exactly */
+      body.record-active #screen-record .record-grid{
+        height:calc(100dvh - env(safe-area-inset-bottom,0px) - var(--tabsH)) !important;
+        grid-template-rows:1fr auto !important;
+      }
+      /* compact buttons remain */
+      body.record-active.is-portrait{ --btn-h:40px; --btn-fs:13px; }
+      #screen-record .control-rail{
+        display:grid;
+        grid-template-columns:1fr 1fr;
+        grid-template-areas:
+          "camera headphones"
+          "rec     rec";
+        grid-auto-rows:var(--btn-h);
+        gap:10px;
+        padding-bottom:0;
+        margin-top:-6px;
+      }
+      .record-card .controls-stack{ gap:8px; }
+      body.record-active #screen-record .pos-camera{ grid-area:camera; }
+      body.record-active #screen-record .pos-headphones{ grid-area:headphones; }
+      body.record-active #screen-record .pos-rec{
+        grid-area:rec;
+        width:100%;
+      }
+      body.record-active #screen-record #btnRec{ grid-column:1 / -1; }
+      body.record-active #screen-record #btnRender,
+      body.record-active #screen-record #btnHeadphones{
+        grid-column:auto !important;
+      }
+    }
+
+    /* —— Force REC full-width in portrait ———————————————————————— */
+    @media (orientation: portrait){
+      body.record-active #screen-record .control-rail{
+        display:grid !important;
+        grid-template-columns:1fr 1fr !important;
+        grid-auto-rows:var(--btn-h);
+        gap:10px;
+      }
+      /* camera | headphones on row 1, REC across row 2 */
+      body.record-active #screen-record #btnRec{
+        grid-column:1 / -1 !important;
+        width:100% !important;
+      }
+    }
+
+  #screen-record{ max-height:100dvh; overflow:hidden; }
+
+    @media (orientation: landscape) and (max-width: 1024px){
+      body.record-active main{
+        max-width:none;
+        margin:0;
+        padding:calc(12px + env(safe-area-inset-top,0px)) calc(12px + env(safe-area-inset-right,0px)) calc(96px + env(safe-area-inset-bottom,0px)) calc(12px + env(safe-area-inset-left,0px));
+      }
+      body.record-active main::before{ display:none; }
+      body.record-active #screen-record .record-grid{
+        grid-template-columns:minmax(0, calc(100% - var(--railW) - 12px)) var(--railW);
+        grid-template-areas:"preview rail";
+        grid-template-rows:1fr;
+        gap:12px;
+        align-items:start;
+      }
+      body.record-active #screen-record .preview-wrap{
+        padding:8px;
+        border-radius:18px;
+      }
+      body.record-active #screen-record #preview{
+        border-radius:14px;
+      }
+      body.record-active #screen-record .control-rail{
+        position:sticky;
+        top:calc(env(safe-area-inset-top,0px) + 8px);
+        align-self:start;
+        gap:8px;
+      }
+      body.record-active #screen-record .control-rail .btn{
+        font-size:11px;
+        min-height:30px;
+        padding:6px 8px;
+        border-radius:10px;
+        line-height:1.1;
+      }
+      body.record-active .tabbar{
+        padding:6px 8px calc(env(safe-area-inset-bottom,0px) + 8px);
+      }
+    }
+
+    @media (orientation: landscape) and (max-width: 1024px){
+      body.record-active #screen-record .record-grid{
+        grid-template-areas:"preview rail";
+        grid-template-rows:1fr;
+        align-items:stretch;
+      }
+      body.record-active #screen-record .control-rail{
+        height:100%;
+        align-content:space-between;
+        gap:8px;
+      }
+    }
+
+    /* Landscape Record: fill the viewport, minimize gutters */
+    @media (orientation: landscape) and (max-width: 1024px){
+      body.record-active #screen-record .card.record-grid{
+        padding:8px;
+        border-radius:16px;
+      }
+      body.record-active #screen-record .record-grid{
+        grid-template-areas:"preview rail";
+        grid-template-rows:1fr;
+        gap:8px;
+        height:calc(100vh - calc(env(safe-area-inset-bottom,0px) + 64px));
+      }
+      body.record-active #screen-record .preview-wrap{
+        padding:6px;
+        border-radius:14px;
+        height:100%;
+      }
+      body.record-active #screen-record #preview{
+        height:100%;
+        width:100%;
+        aspect-ratio:auto;
+        object-fit:cover;
+      }
+      body.record-active #screen-record .control-rail{
+        height:100%;
+        align-content:space-between;
+        gap:8px;
+      }
+    }
+
+    @media (orientation: landscape){
+      body.record-active main{
+        /* lift content slightly to free space near the tabbar */
+        padding-bottom:calc(env(safe-area-inset-bottom,0px) + 92px);
+        padding-top:calc(env(safe-area-inset-top,0px) + 2px);
+      }
+      #screen-record .record-grid{ gap:10px; }
+      body.record-active #screen-record .record-grid{
+        align-items:stretch;
+      }
+      body.record-active #screen-record .control-rail{
+        display:flex;
+        flex-direction:column;
+        justify-content:space-between;
+        gap:10px;
+        padding-block:0;
+        padding-top:0;
+        padding-bottom:0;
+        height:100%;
+        margin:0;
+        align-self:stretch;
+        position:sticky;
+        /* tuck the rail a bit higher */
+        top:calc(env(safe-area-inset-top,0px) + 4px);
+      }
+      body.record-active #screen-record .control-rail .btn{
+        margin:0;
+      }
+    }
+
+    /* REC visual states */
+    .btn.rec{
+      background:radial-gradient(120px 120px at 50% 30%, rgba(255,88,88,0.4), rgba(255,0,0,0.15)), linear-gradient(135deg, #ff6666, #ff2d2d);
+      color:#fff; box-shadow:0 18px 36px rgba(255,80,80,0.35);
+    }
+    .btn.rec.recording{
+      background:linear-gradient(135deg, #191b28, #121522);
+      color:#ff6969; border:1px solid rgba(255,120,120,0.4);
+    }
+
+    /* Flip camera translucent overlay */
+    .flipcam{
+      position:absolute;
+      right:12px;
+      bottom:12px;
+      z-index:5;
+      transform:translateZ(0);
+      width:var(--btn-h);
+      height:var(--btn-h);
+      border-radius:999px;
+      border:1px solid rgba(147,160,195,0.35);
+      background:rgba(12,15,24,0.55);
+      color:#cfd7ff;
+      font-weight:700;
+      box-shadow:0 10px 24px rgba(3,6,15,0.35);
+      backdrop-filter:blur(8px);
+      cursor:pointer;
+    }
+    .flipcam:active{ transform:scale(0.98) }
+
+    /* Keep flip camera button pinned inside the preview bottom-right */
+    #screen-record .preview-wrap{ position:relative; }
+    #btnFlipCam{ position:absolute; right:12px; bottom:12px; z-index:5; }
+
+    
+    /* Gallery */
+  .take-card{ position:relative; border:1px solid rgba(147,160,195,0.28); border-radius:18px; padding:12px; margin-bottom:12px; background:rgba(9,12,20,0.7); }
+  .take-thumb{ width:100%; border-radius:14px; display:block; background:#000; object-fit:cover; }
+    .take-row{ display:flex; align-items:center; justify-content:space-between; gap:10px; margin-top:8px; }
+    .take-meta{ font-size:12px; color:var(--muted); }
+    .take-note{ width:100%; margin-top:8px; font-size:13px; border-radius:12px; padding:10px 12px; background:rgba(10,12,20,0.5); border:1px solid rgba(147,160,195,0.3); color:var(--text); }
+    .chip-filter{ display:inline-block; padding:6px 10px; border-radius:999px; border:1px solid rgba(147,160,195,0.32); background:rgba(12,15,24,0.7); margin-right:6px; cursor:pointer; }
+    .chip-filter.active{ border-color:var(--focus); }
+
+    /* L→R dots for loading */
+    .dots { display:inline-flex; gap:6px; align-items:center; vertical-align:middle }
+    .dot { width:6px; height:6px; border-radius:50%; background:#7aa0ff; opacity:.25; }
+    .dot.on { opacity:1 }
+
+    /* Error banner */
+    .errbar{
+      position:sticky;
+      top:0;
+      z-index:50;
+      display:none;
+      padding:10px 16px;
+      background:rgba(43,15,18,0.85);
+      color:#ffb3b3;
+      border-bottom:1px solid rgba(122,42,42,0.5);
+      font-size:12px;
+      letter-spacing:.3px;
+      backdrop-filter:blur(14px);
+      -webkit-backdrop-filter:blur(14px);
+    }
+    .errbar.show{ display:block }
+
+    /* === Record (portrait) — tuck all frames to the very top =============== */
+    @media (orientation: portrait){
+
+      /* 1) Remove the global top padding while recording (main will handle safe area) */
+      body.record-active{
+        padding-top:0 !important;
+      }
+
+      /* 2) Hide the rounded glass/backdrop behind the content in record-portrait
+            so we don't see a "second frame" above the preview */
+      body.record-active main::before{
+        display:none !important;
+      }
+
+      /* 3) Make main hug the status bar (keep safe-area) and reserve bottom for tabs */
+      body.record-active main{
+        padding-top:calc(env(safe-area-inset-top, 0px) + 0px) !important;
+        padding-bottom:calc(env(safe-area-inset-bottom, 0px) + var(--tabsH)) !important;
+      }
+
+      /* 4) Remove any top spacing from the record card and grid */
+      body.record-active #screen-record .card.record-grid{
+        margin-top:0 !important;
+        padding-top:0 !important;
+      }
+      body.record-active #screen-record .record-grid{
+        height:calc(100dvh - var(--tabsH)) !important;
+        grid-template-rows:1fr auto !important; /* preview grows, controls stick */
+      }
+
+      /* 5) Preview wrapper: no top padding/margin; let the video sit flush */
+      body.record-active #screen-record .preview-wrap{
+        margin-top:0 !important;
+        padding-top:0 !important;
+        /* cap so controls never get pushed off-screen */
+        max-height:calc(100dvh - var(--tabsH) - (var(--btn-h) * 2 + 10px) - env(safe-area-inset-bottom,0px)) !important;
+      }
+
+      /* 6) Video keeps portrait aspect and fills the wrapper */
+      body.record-active #screen-record #preview{
+        width:100%;
+        height:100%;
+        aspect-ratio:9 / 16;
+        object-fit:cover;
+      }
+
+      /* 7) Control rail: two rows (camera|headphones, then full-width REC) */
+      body.record-active #screen-record .control-rail{
+        display:grid !important;
+        grid-template-columns:1fr 1fr !important;
+        grid-template-areas:
+          "camera headphones"
+          "rec     rec";
+        grid-auto-rows:var(--btn-h);
+        gap:10px;
+        padding-bottom:0;
+        margin-top:0;
+      }
+      body.record-active #screen-record .pos-camera{ grid-area:camera; }
+      body.record-active #screen-record .pos-headphones{ grid-area:headphones; }
+      body.record-active #screen-record .pos-rec{ grid-area:rec; width:100%; }
+      body.record-active #screen-record #btnRec{
+        grid-column:1 / -1 !important;
+        width:100% !important;
+      }
+    }
+
+    /* Rehearse: center the "Edit mode" pill and prevent flex stretching */
+    #screen-rehearse .row > .badge{
+      flex:0 0 auto !important;
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      text-align:center;
+      white-space:nowrap;
+      line-height:1.2;
+      padding:6px 12px;
+    }
+
+    /* === Record: rule-of-thirds overlay ====================================== */
+    #screen-record .preview-wrap{ position:relative; }
+
+    .grid-overlay{
+      position:absolute;
+      inset:8px;
+      border-radius:inherit;
+      pointer-events:none;
+      display:none;
+      z-index:4;
+    }
+    .grid-overlay .v,
+    .grid-overlay .h{
+      position:absolute;
+      background:rgba(230,240,255,0.38);
+      box-shadow:0 0 0 1px rgba(0,0,0,0.18) inset;
+      transform:translateZ(0);
+    }
+    .grid-overlay .v{ top:0; bottom:0; width:1px; }
+    .grid-overlay .h{ left:0; right:0; height:1px; }
+    .grid-overlay .v1{ left:33.333%; }
+    .grid-overlay .v2{ left:66.666%; }
+    .grid-overlay .h1{ top:33.333%; }
+    .grid-overlay .h2{ top:66.666%; }
+
+    /* Align overlay inset with the tighter padding used on small landscape */
+    @media (orientation: landscape) and (max-width: 1024px){
+      body.record-active #screen-record .grid-overlay{ inset:6px; }
+    }
+
+    /* === Record: Count-in picker ================================================= */
+    .countin-menu{
+      position:fixed;
+      z-index:1100;
+      display:none;
+      background:rgba(12,15,24,0.96);
+      border:1px solid var(--border);
+      border-radius:12px;
+      padding:6px;
+      box-shadow:0 18px 40px rgba(3,6,15,0.45);
+      backdrop-filter:blur(10px);
+    }
+    .countin-menu[hidden]{ display:none; }
+    .countin-menu button{
+      display:block;
+      width:100%;
+      background:transparent;
+      color:var(--text);
+      border:1px solid rgba(147,160,195,0.28);
+      border-radius:10px;
+      padding:8px 10px;
+      margin:4px 0;
+      font-weight:700;
+      letter-spacing:.2px;
+    }
+    .countin-menu button:active{ transform:scale(0.98); }
+
+    /* Hide picker in portrait just in case */
+    @media (orientation: portrait){
+      .countin-menu{ display:none !important; }
+    }
+
+    /* Record (rail buttons): prevent iOS long-press text selection/callout */
+    #screen-record .control-rail .btn,
+    #screen-record .control-rail .btn *{
+      -webkit-user-select:none;
+      user-select:none;
+      -webkit-touch-callout:none;
+    }
+    /* Remove the gray tap flash for nicer feel */
+    #screen-record .control-rail .btn{
+      -webkit-tap-highlight-color:transparent;
+    }
+
+    /* --- Route guidance modal -------------------------------------------------- */
+    .ob-hidden { display: none !important; }
+    .ob-modal { position: fixed; inset: 0; z-index: 9999; }
+    .ob-modal__scrim {
+      position: absolute; inset: 0;
+      background: rgba(0,0,0,0.45);
+      backdrop-filter: blur(2px);
+    }
+    .ob-modal__card {
+      position: absolute; left: 50%; top: 50%;
+      transform: translate(-50%, -50%);
+      width: min(520px, 92vw);
+      max-height: calc(100svh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 32px);
+      background: #1a1a1a; color: #f5f5f5;
+      border-radius: 16px; box-shadow: 0 18px 48px rgba(0,0,0,0.4);
+      padding: 20px; overflow: auto;
+    }
+    .ob-modal__title { margin: 0 0 6px; font-size: 18px; font-weight: 700; }
+    .ob-modal__body { margin: 0 0 10px; font-size: 14px; line-height: 1.4; }
+    .ob-modal__details summary { cursor: pointer; margin-bottom: 6px; }
+    .ob-modal__actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+    .ob-modal__close {
+      position: absolute; top: 8px; right: 8px; width: 32px; height: 32px;
+      border-radius: 8px; border: none; background: rgba(255,255,255,0.06); color: #fff; cursor: pointer;
+    }
+    .btn.btn-primary {
+      appearance: none; border: none; border-radius: 12px; padding: 10px 16px;
+      background: #ff4d4f; color: #fff; font-weight: 600; cursor: pointer;
+    }
+    @supports (padding:max(0px)) {
+      .ob-modal__card { padding-bottom: max(20px, env(safe-area-inset-bottom)); }
+    }
+  </style>
+</head>
+<body>
+  <div id="errbar" class="errbar" role="alert"></div>
+  <main>
+    <!-- IMPORT -->
+    <section id="screen-import" class="screen active">
+      <div class="card">
+        <h3>Import</h3>
+        <p class="hint">Two ways to import. <b>Paste Script Text</b> is most reliable; <b>Upload PDF</b> extracts text with an OCR fallback for scanned PDFs.</p>
+        <div class="inner-tabs" role="tablist">
+          <button id="tab-text" class="active" role="tab" aria-controls="panel-text" aria-selected="true">Paste Script Text</button>
+          <button id="tab-pdf" role="tab" aria-controls="panel-pdf" aria-selected="false">Upload PDF</button>
+        </div>
+        <div class="spacer12"></div>
+
+        <!-- TEXT PANEL -->
+        <div id="panel-text" role="tabpanel" aria-labelledby="tab-text">
+          <label>Title</label>
+          <input id="titleText" type="text" placeholder="My Sides" />
+          <label>Paste script here</label>
+          <textarea id="scriptText" placeholder="JANE: Hi.
+GABE: Hey.
+JANE: Ready?"></textarea>
+          <div class="spacer8"></div>
+          <div class="row">
+            <button id="btnTextUpload" class="btn">Continue → Assign</button>
+            <button id="btnTextClear" class="btn secondary">Clear</button>
+          </div>
+          <div class="spacer12"></div>
+          <label>Status</label>
+          <pre id="status" class="status"></pre>
+        </div>
+
+        <!-- PDF PANEL -->
+        <div id="panel-pdf" role="tabpanel" aria-labelledby="tab-pdf" hidden>
+          <label>Title</label>
+          <input id="titlePdf" type="text" placeholder="My PDF Sides" />
+          <label>PDF File</label>
+          <input id="pdfFile" type="file" accept="application/pdf" />
+          <div class="spacer8"></div>
+          <div class="row">
+            <button id="btnPdfUpload" class="btn">Upload & Continue</button>
+            <button id="btnPdfOcr" class="btn ghost" title="Use OCR if your PDF is scanned images" disabled>Try OCR (slow)</button>
+          </div>
+          <div class="spacer12"></div>
+          <label>Status</label>
+          <pre id="statusPdf" class="status"></pre>
+          <div class="small">Tip: OCR processes the first 3 pages for speed.</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ASSIGN -->
+    <section id="screen-assign" class="screen">
+      <div class="card">
+        <h3>Assign</h3>
+        <div><span class="pill" id="pillScript">script: —</span> <span class="pill" id="pillScenes">scenes: 0</span></div>
+        <div class="spacer8"></div>
+        <label>I am…</label>
+        <select id="selectRole"></select>
+        <div class="spacer8"></div>
+        <div id="voicePickers"></div>
+        <div class="spacer8"></div>
+        <button id="btnSaveAssign" class="btn">Save Voices</button>
+      </div>
+    </section>
+
+    <!-- REHEARSE -->
+    <section id="screen-rehearse" class="screen">
+      <div class="card">
+        <h3>Rehearse</h3>
+  <div id="routeWarn" class="hidden" style="display:none!important;background:#fff4e5;border:1px solid #ffd4a8;color:#8a4b00;padding:10px 12px;border-radius:10px;margin:8px 0;line-height:1.3">
+          <div style="font-weight:600;margin-bottom:4px">Heads-up: iPhone may be in “call” mode</div>
+          <div style="font-size:14px">
+            If you can’t hear the reader during your line, flip your iPhone’s <b>ringer switch ON</b> (side of the phone) and avoid Bluetooth “call audio” mode.
+            <span id="routeWarnMore" data-route-warn-more style="text-decoration:underline;cursor:pointer">Learn how</span>
+          </div>
+        </div>
+
+        <div class="hint" id="rehearseBanner"><b>Review and edit your script first</b> before rendering for rehearsal. When ready, press “Render for rehearsal (OpenAI)” to pre-load partner voices for perfect timing.</div>
+        <div class="spacer8"></div>
+
+        <div class="row">
+          <button id="btnToggleEditMode" class="btn secondary" aria-pressed="false">Edit Script</button>
+          <span class="badge">Edit mode: <span id="editModeState">Off</span></span>
+        </div>
+        <div class="spacer8"></div>
+
+        <div class="row">
+          <button id="btnRehearseRender" class="btn">Render for rehearsal (OpenAI)</button>
+          <button id="btnRehearseClear" class="btn secondary" title="Discard pre-rendered clips">Clear Render</button>
+        </div>
+        <div class="spacer6"></div>
+        <div class="row">
+          <label>Render quality</label>
+          <select id="selTtsModel">
+            <option value="tts-1" selected>Fast</option>
+            <option value="tts-1-hd">Natural (HD)</option>
+          </select>
+        </div>
+        <div class="spacer6"></div>
+        <div class="small" id="rehearseRenderStatus"></div>
+
+        <div class="spacer12"></div>
+
+        <div class="toolbar" aria-label="Playback controls">
+          <div class="controls">
+            <div class="left">
+              <button id="btnPlay" class="btn">Play</button>
+              <button id="btnPrev" class="btn secondary">Prev</button>
+              <button id="btnNext" class="btn secondary">Next</button>
+              <button id="btnTop" class="btn secondary icon" title="From the top"></button>
+              <select id="selPace" title="Partner pacing">
+                <option value="0" selected>No gap</option>
+                <option value="80">+80 ms</option>
+                <option value="160">+160 ms</option>
+                <option value="300">+300 ms</option>
+              </select>
+            </div>
+            <div class="right">
+              <button id="btnMic" class="btn secondary" aria-pressed="false">Mic: Off</button>
+              <span id="micBadge" class="badge warn">off</span>
+            </div>
+          </div>
+        </div>
+
+        <div id="lines"></div>
+      </div>
+    </section>
+
+    <!-- RECORD -->
+    <section id="screen-record" class="screen">
+      <div id="routeWarnRecord" class="hidden" style="background:#fff4e5;border:1px solid #ffd4a8;color:#8a4b00;padding:10px 12px;border-radius:10px;margin:8px 0;line-height:1.3">
+        <div style="font-weight:600;margin-bottom:4px">Heads-up: iPhone may be in “call” mode</div>
+        <div style="font-size:14px">
+          If you can’t hear the reader during your line, flip your iPhone’s <b>ringer switch ON</b> (side of the phone) and avoid Bluetooth “call audio” mode.
+          <span id="routeWarnMoreRecord" data-route-warn-more style="text-decoration:underline;cursor:pointer">Learn how</span>
+        </div>
+      </div>
+      <div class="card record-grid record-card">
+        <!-- Preview -->
+        <div class="preview-wrap">
+          <video id="preview" autoplay muted playsinline></video>
+          <audio id="readerAudio" preload="auto" playsinline></audio>
+          <!-- Rule-of-thirds overlay (hidden by default) -->
+          <div id="gridOverlay" class="grid-overlay" aria-hidden="true">
+            <span class="v v1"></span><span class="v v2"></span>
+            <span class="h h1"></span><span class="h h2"></span>
+          </div>
+          <button id="btnFlipCam" class="flipcam" aria-label="Flip camera" title="Flip camera">⟳</button>
+        </div>
+
+        <!-- Controls -->
+        <div class="control-rail controls-stack">
+          <button id="btnRender" class="btn btn-render rail landscape-only pos-render">Render</button>
+          <button id="btnRec" class="btn rec pos-rec">REC</button>
+          <button id="btnGrid" class="btn secondary rail landscape-only pos-grid" aria-pressed="false">Grid: Off</button>
+          <button id="btnCamera" class="btn secondary rail pos-camera" aria-pressed="false">Camera: Off</button>
+          <button id="btnCountIn" class="btn secondary rail landscape-only pos-countin" aria-pressed="false">Count-in: Off</button>
+          <button id="btnHeadphones" class="btn secondary rail pos-headphones" aria-pressed="true">Headphones: On</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- GALLERY -->
+    <section id="screen-gallery" class="screen">
+      <div class="card">
+        <h3>Gallery</h3>
+        <div id="takes"></div>
+        <div class="hint">Takes are saved on this device for 14 days (max 10). Use “Download” to save/share.</div>
+      </div>
+    </section>
+
+    <!-- INFO -->
+    <section id="screen-info" class="screen">
+      <div class="card">
+        <h3>Info & How to Use</h3>
+        <p class="hint">Quick start guide. Headphones recommended for clean timing.</p>
+
+        <ol style="margin:0; padding-left:18px; line-height:1.55">
+          <li><b>Import</b>
+            <div class="small">
+              • <b>Paste Script Text</b> (most reliable) — give it a title and press <i>Continue → Assign</i>.<br>
+              • <b>Upload PDF</b> — text PDFs auto-extract; scanned PDFs show <i>Try OCR</i> for the first 3 pages.
+            </div>
+          </li>
+          <div class="spacer8"></div>
+          <li><b>Assign</b>
+            <div class="small">
+              • Choose <b>I am…</b> (your role).<br>
+              • Pick partner <b>voices</b>. Save.
+            </div>
+          </li>
+          <div class="spacer8"></div>
+          <li><b>Rehearse</b>
+            <div class="small">
+              • Toggle <b>Edit Script</b> to tweak or delete lines; add with the inline “+ Add here”.<br>
+              • Press <b>Render for rehearsal (OpenAI)</b> to pre-load partner clips. Choose Fast/HD.<br>
+              • Use <b>Play / Prev / Next</b>. Turn <b>Mic: On</b> to enable listen/respond.<br>
+              • <b>Interruption rule:</b> if your line ends with an em dash “—”, the partner comes in fast.<br>
+              • Pacing select adjusts small gaps after partner lines.
+            </div>
+          </li>
+          <div class="spacer8"></div>
+          <li><b>Record</b>
+            <div class="small">
+              • <b>Render</b> reuses cached rehearsal clips when available (best timing).<br>
+              • Toggle <b>Camera / Count-in / Headphones</b>. Tap <b>REC</b> to start/stop.
+            </div>
+          </li>
+          <div class="spacer8"></div>
+          <li><b>Gallery</b>
+            <div class="small">
+              • Plays inline. <b>Download</b> or <b>Share</b>. Auto-prunes after 14 days (max 10).<br>
+              • Filter by aspect (16:9 / 9:16). Add a note per take.
+            </div>
+          </li>
+        </ol>
+
+        <div class="spacer12"></div>
+        <div class="small">
+          <b>Tips:</b> Use wired/Bluetooth headphones to avoid echo/ducking. If TTS shows a 429 quota message, top up credits and press Render again. “Clear Render” removes cached clips.
+        </div>
+        <details id="advTroubleshoot" style="margin:12px 0">
+          <summary>Advanced · Troubleshooting</summary>
+          <label style="display:flex;align-items:center;gap:8px;margin-top:8px">
+            <input id="advSpeakerFallback" type="checkbox">
+            <span>Always use phone speaker while I’m speaking (session only)</span>
+          </label>
+          <div style="opacity:.7;font-size:12px;margin-top:4px">
+            Use only if your Bluetooth headphones enter "call mode" and hide the reader audio.
+          </div>
+        </details>
+      </div>
+    </section>
+  </main>
+
+  <!-- Bottom bar -->
+  <nav class="tabbar" role="tablist" aria-label="App sections">
+    <div class="tabbar-inner">
+      <button data-tab="import" class="active" role="tab" aria-selected="true">Import</button>
+      <button data-tab="assign" role="tab" aria-selected="false">Assign</button>
+      <button data-tab="rehearse" role="tab" aria-selected="false">Rehearse</button>
+      <button data-tab="record" role="tab" aria-selected="false">Record</button>
+      <button data-tab="gallery" role="tab" aria-selected="false">Gallery</button>
+      <button data-tab="info" role="tab" aria-selected="false">Info</button>
+    </div>
+  </nav>
+
+  <!-- Vendor -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.6.82/pdf.min.mjs" type="module"></script>
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+
+  <!-- App -->
+  <script type="module">
+    import { expectedMinMsFor, AFTER_ADV_COOLDOWN_MS, isSpeaking, endsWithDashy, readyForAdvance } from "./js/speech-timing.js";
+    const boot = () => {
+      const qs = new URLSearchParams(location.search);
+      const secret = qs.get("secret") || "1976";
+      const JSON_HDRS = { "Content-Type":"application/json", ...(secret?{"X-Shared-Secret":secret}:{}) };
+    const $ = (s,r=document)=>r.querySelector(s);
+    const $$ = (s,r=document)=>Array.from(r.querySelectorAll(s));
+    // --- TDZ fix: declare R early so Safari doesn't throw before it's assigned ---
+    let R = null;
+      if(typeof window !== "undefined"){
+        if(typeof window.__OB_BT_IN === "undefined") window.__OB_BT_IN = false;
+        if(typeof window.__OB_MIC_STREAM === "undefined") window.__OB_MIC_STREAM = null;
+        if(typeof window.__OB_MIC_TRACK === "undefined") window.__OB_MIC_TRACK = null;
+        if(typeof window.__OB_AP === "undefined") window.__OB_AP = null;
+        if(typeof window.isRecording === "undefined") window.isRecording = false;
+      }
+      // Reader element singleton (idempotent)
+      window.__OB_READER_EL = window.__OB_READER_EL
+        || document.querySelector('audio[data-reader]')
+        || document.getElementById('readerAudio')
+        || (function(){
+             const a = document.createElement('audio');
+             a.setAttribute('data-reader','1');
+             a.preload = 'auto';
+             a.crossOrigin = 'anonymous';
+             a.style.display = 'none';
+             document.body.appendChild(a);
+             return a;
+           })();
+
+      async function ensureAudioContext() {
+        try {
+          if (!window.audioCtx || window.audioCtx.state === 'closed') {
+            window.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+          }
+          if (window.audioCtx.state === 'suspended') await window.audioCtx.resume();
+        } catch {}
+        return window.audioCtx;
+      }
+
+      // TEMP DIAG: log AudioContext state right before countdown
+      async function _diagAudioCtx(tag) {
+        const st = window.audioCtx?.state;
+        console.debug('[AUDIO]', tag, 'ctx=', st);
+      }
+
+      async function playTestBeep(ms=200) {
+        try {
+          const ctx = window.audioCtx || (window.audioCtx = new (window.AudioContext||window.webkitAudioContext)());
+          if (ctx.state !== 'running') await ctx.resume();
+          const o = ctx.createOscillator();
+          const g = ctx.createGain();
+          o.type = 'sine';
+          o.frequency.value = 880;
+          g.gain.setValueAtTime(0.0001, ctx.currentTime);
+          g.gain.exponentialRampToValueAtTime(0.2, ctx.currentTime + 0.01);
+          g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + ms/1000);
+          o.connect(g).connect(ctx.destination);
+          o.start();
+          o.stop(ctx.currentTime + ms/1000);
+        } catch (err) {
+          console.debug('[AUDIO] playTestBeep error', err);
+        }
+      }
+      // --- Belt & suspenders guard (safe checks for the Record state object) ---
+      const hasR = () => !!(typeof R !== "undefined" && R && typeof R === "object");
+      // Tight mode when recording
+      const tightMode = () => (typeof R !== "undefined" && R && R.recording === true);
+      const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform==='MacIntel' && navigator.maxTouchPoints>1);
+
+      const mqlPortrait = window.matchMedia('(orientation: portrait)');
+      const isPortrait = () => mqlPortrait.matches;
+      const applyOrientationClasses = (event)=>{
+        const portrait = event ? event.matches : isPortrait();
+        document.body.classList.toggle('is-portrait', portrait);
+        document.body.classList.toggle('is-landscape', !portrait);
+        updateRecordLayout();
+        try{ syncGridOverlayVisibility(); }catch{}
+      };
+      applyOrientationClasses();
+      if(typeof mqlPortrait.addEventListener === 'function'){
+        mqlPortrait.addEventListener('change', applyOrientationClasses);
+      } else if(typeof mqlPortrait.addListener === 'function') {
+        mqlPortrait.addListener(applyOrientationClasses);
+      }
+
+      const errbar=$("#errbar");
+      function showErr(msg){ errbar.textContent=msg; errbar.classList.add("show"); }
+
+      // --- Screen Wake Lock to prevent auto-sleep during rehearse/record ---
+      let wakeLock = null;
+      async function acquireWakeLock(){
+        try{
+          if("wakeLock" in navigator && document.visibilityState === "visible"){
+            wakeLock = await navigator.wakeLock.request("screen");
+            wakeLock?.addEventListener?.("release", ()=>{ wakeLock=null; });
+          }
+        }catch{ /* ignore */ }
+      }
+      function releaseWakeLock(){ try{ wakeLock?.release(); }catch{} wakeLock=null; }
+      document.addEventListener("visibilitychange", ()=>{
+        const onActiveTab = document.querySelector(".tabbar button.active")?.dataset.tab;
+        if(document.visibilityState === "visible" && (onActiveTab==="rehearse" || onActiveTab==="record")){
+          acquireWakeLock();
+        }else{
+          releaseWakeLock();
+        }
+      });
+
+      function showScreen(name){
+  $$(".countdown").forEach(x=>x.classList.remove("show"));
+  stopAllAudioHard();
+        try{
+          if(name==="rehearse" || name==="record") acquireWakeLock();
+          else releaseWakeLock();
+        }catch{}
+        if(name!=="record"){
+          try{ if(R?.recording){ stopRecording(); } }catch{}
+          try{ cleanupStream(); }catch{}
+        }
+        document.body.classList.toggle("record-active", name==="record");
+        $$(".screen").forEach(s=>s.classList.remove("active"));
+        $("#screen-"+name).classList.add("active");
+        $$(".tabbar button").forEach(b=>b.classList.remove("active"));
+        const btn=document.querySelector(`.tabbar button[data-tab="${name}"]`);
+        if(btn) btn.classList.add("active");
+        if(name==="rehearse"){
+          // Route inference on tab enter
+          (async () => {
+            try{
+              const bt = await hasBluetoothInput();
+              window.__OB_BT_IN = bt;
+              logRouteCheck('tab:rehearse');
+              if (window.__OB_MIC_TRACK && _route.isiOS && bt && looksLikeHfp(window.__OB_MIC_TRACK)) {
+                _route.warnActive = true;
+                maybeShowRouteModal();
+              } else {
+                showRouteWarn(false);
+              }
+            }catch{ showRouteWarn(false); }
+          })();
+          try{ primeReaderFromCacheIfAvailable(); }catch{}
+        }else if(name==="record"){
+          try{ updateRecordLayout(); }catch{}
+          try{ syncGridOverlayVisibility(); }catch{}
+          try{ primeReaderFromCacheIfAvailable(); }catch{}
+          try{ requestMicPermissionOnce(); }catch{}
+          try{ startPreviewIfNeeded(); }catch{}
+          try{ setRailStates(); }catch{}
+        }else if(name==="gallery"){
+          renderGallery().catch(()=>{});
+        }
+      }
+      $$(".tabbar button").forEach(b=>b.addEventListener("click",()=>showScreen(b.dataset.tab)));
+
+      // inner tabs
+      const tabText=$("#tab-text"), tabPdf=$("#tab-pdf"), panelText=$("#panel-text"), panelPdf=$("#panel-pdf");
+      tabText?.addEventListener("click",()=>{ tabText.classList.add("active"); tabPdf.classList.remove("active"); panelText.hidden=false; panelPdf.hidden=true; });
+      tabPdf?.addEventListener("click",()=>{ tabPdf.classList.add("active"); tabText.classList.remove("active"); panelPdf.hidden=false; panelText.hidden=true; });
+
+      // state
+      const S={ script_id:"", scenes:[], role:"", voice_map:{}, editMode:false, supportedVoices:["alloy"] };
+  if(typeof window !== "undefined") window.currentSceneId = S.script_id || null;
+
+      // helpers
+      const setStatus = msg => $("#status").textContent = msg || "";
+      const setStatusPdf = msg => $("#statusPdf").textContent = msg || "";
+
+      // --- Route/Ringer Inference (iOS + BT + HFP narrowband) ---------------------
+      const _route = {
+        isiOS: /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream,
+        hasBluetooth: false,
+        checkedBluetooth: false,
+        warnActive: false,
+        lastWarn: null
+      };
+
+      async function hasBluetoothInput(force = false) {
+        if (!force && _route.checkedBluetooth) return !!_route.hasBluetooth;
+        try {
+          const devs = await navigator.mediaDevices.enumerateDevices();
+          const found = devs.some(d => {
+            if (d.kind !== "audioinput") return false;
+            const label = (d.label || "").toLowerCase();
+            return /(bluetooth|airpod|pods|beats|earbud|headset|hands[- ]?free|bose|sony)/.test(label);
+          });
+          _route.hasBluetooth = found;
+          _route.checkedBluetooth = true;
+          if(typeof window !== "undefined") window.__OB_BT_IN = found;
+          return found;
+        } catch {
+          const fallback = force ? false : !!_route.hasBluetooth;
+          if(typeof window !== "undefined") window.__OB_BT_IN = fallback;
+          return fallback;
+        }
+      }
+
+      function looksLikeHfp(track) {
+        try {
+          const st = track?.getSettings?.() || {};
+          const label = (track?.label || "").toLowerCase();
+          const sr = Number(st.sampleRate) || 0;
+          const ch = Number(st.channelCount) || 0;
+          if (sr && sr <= 16000) return true;
+          if (sr && sr <= 24000 && /(bluetooth|airpod|beats|headset|hands[- ]?free|earbud|bose|sony|pods)/.test(label)) return true;
+          if (!sr && /(sco|hfp|hands[- ]?free|headset)/.test(label)) return true;
+          return false;
+        } catch { return false; }
+      }
+
+      // Passive playback-energy probe to detect "audio routed but inaudible" during SR
+      function makeEnergyProbe(audioCtx) {
+        const analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 512;
+        const data = new Uint8Array(analyser.frequencyBinCount);
+        let lastRms = 0;
+        function rms() {
+          analyser.getByteTimeDomainData(data);
+          let sum = 0;
+          for (let i = 0; i < data.length; i++) { const v = (data[i] - 128) / 128; sum += v * v; }
+          return Math.sqrt(sum / data.length);
+        }
+        return { analyser, sample: () => (lastRms = rms()), last: () => lastRms };
+      }
+
+      function showRouteWarn(on) {
+        logRouteCheck(on ? "show:on" : "show:off");
+        ["routeWarn", "routeWarnRecord"].forEach(id => {
+          const el = document.getElementById(id);
+          if (!el) return;
+          el.classList.toggle("hidden", !on);
+        });
+        _route.warnActive = !!on;
+      }
+
+      function logRouteCheck(src){
+        try{
+          const track = typeof window !== "undefined" ? window.__OB_MIC_TRACK : null;
+          const settings = track?.getSettings?.() || {};
+          const payload = {
+            isiOS: _route.isiOS,
+            bt: typeof window !== "undefined" ? window.__OB_BT_IN : undefined,
+            hfp: track ? looksLikeHfp(track) : false,
+            sampleRate: settings.sampleRate,
+            ch: settings.channelCount
+          };
+          if(src) payload.src = src;
+          console.debug('[RouteCheck]', payload);
+        }catch{}
+      }
+
+      function maybeShowRouteModal(){
+        if(typeof RouteModal === "undefined" || !RouteModal) return;
+        if(typeof window !== "undefined" && window.isRecording){
+          document.addEventListener('ob:recording:stopped', () => {
+            if (!RouteModal.inCooldown()) RouteModal.open();
+          }, { once: true });
+        }else{
+          if (!RouteModal.inCooldown()) RouteModal.open();
+        }
+      }
+
+      function getRouteProbe(audioCtx){
+        if(typeof window === "undefined") return null;
+        const existing = window.__OB_AP;
+        if(existing && existing.analyser && existing.analyser.context === audioCtx) return existing;
+        const probe = makeEnergyProbe(audioCtx);
+        window.__OB_AP = probe;
+        return probe;
+      }
+
+      function tapReaderNode(node){
+        if(!node || typeof node.connect !== "function") return;
+        if(node.__obProbeConnected) return;
+        try{
+          const ctx = node.context;
+          if(!ctx) return;
+          const probe = getRouteProbe(ctx);
+          if(probe && probe.analyser){
+            try{ node.connect(probe.analyser); node.__obProbeConnected = true; }catch{}
+          }
+        }catch{}
+      }
+
+      let srEnergyTimer = null;
+
+      function stopRouteEnergyPolling(){ if(srEnergyTimer){ clearInterval(srEnergyTimer); srEnergyTimer = null; } }
+
+      function startRouteEnergyPolling(){
+        if(typeof window === "undefined") return;
+        try{ tapReaderNode(R?.readerGain); }catch{}
+        const probe = window.__OB_AP;
+        if(!probe || typeof probe.sample !== "function") return;
+        let ticks = 0;
+        stopRouteEnergyPolling();
+        srEnergyTimer = setInterval(()=>{
+          ticks++;
+          try{
+            const e = probe.sample();
+            logRouteCheck(`energyPoll:${ticks}`);
+            // very low RMS while "playing" suggests wrong route
+            if (_route?.isiOS && (window.__OB_BT_IN || false) && (looksLikeHfp(window.__OB_MIC_TRACK) || (window.__OB_AP?.last?.() ?? 0) < 0.01)) {
+              _route.warnActive = true;
+              if (!RouteModal.inCooldown()) RouteModal.open();
+            }
+          }catch{}
+          if(ticks >= 3) stopRouteEnergyPolling();
+        }, 300);
+      }
+
+      async function inferRouteWarning({ track, phase } = {}) {
+        if (!_route.isiOS) {
+          if (_route.warnActive) showRouteWarn(false);
+          return false;
+        }
+
+        if (!_route.checkedBluetooth) {
+          try {
+            const hasBt = await hasBluetoothInput();
+            if (hasBt) _route.hasBluetooth = true;
+          } catch {}
+        }
+
+        if (!track) {
+          if (!_route.warnActive) showRouteWarn(false);
+          return _route.warnActive;
+        }
+
+        const settings = track.getSettings ? track.getSettings() : {};
+        const sampleRate = Number(settings.sampleRate) || 0;
+        const channelCount = Number(settings.channelCount) || 0;
+        const label = (track.label || "").toLowerCase();
+        if (label && /(bluetooth|airpod|pods|beats|earbud|headset|hands[- ]?free|bose|sony)/.test(label)) {
+          _route.hasBluetooth = true;
+          _route.checkedBluetooth = true;
+        }
+
+        const probableHfp = looksLikeHfp(track);
+        logRouteCheck('inferRouteWarning');
+        if (probableHfp) {
+          _route.lastWarn = { phase: phase || "", sampleRate, channelCount, label };
+          _route.warnActive = true;
+          maybeShowRouteModal();
+          return true;
+        }
+
+        if (sampleRate && sampleRate >= 22050) {
+          _route.lastWarn = null;
+          showRouteWarn(false);
+          return false;
+        }
+
+        if (!_route.warnActive) showRouteWarn(false);
+        return false;
+      }
+
+      // --- Global audio stop (kills any lingering playback/SR) ---
+      function resetReaderActiveSources(){
+        try{
+          if(R && R.readerActiveSources instanceof Set){
+            R.readerActiveSources.forEach(src=>{ try{ if(src && typeof src.stop === "function") src.stop(0); }catch{} });
+            R.readerActiveSources.clear();
+          }
+          if(R && !(R.readerActiveSources instanceof Set)) R.readerActiveSources = new Set();
+        }catch{}
+      }
+
+      function stopAllAudioHard() {
+        try { window.speechSynthesis?.cancel(); } catch {}
+        try { E?.rehearseAudio?.pause(); E.rehearseAudio.currentTime = 0; } catch {}
+        try { R?.audio?.pause(); R.audio.currentTime = 0; } catch {}
+        resetReaderActiveSources();
+        try { sr?.stop(); } catch {}
+        try { clearMy?.(); } catch {}
+        try { playing = false; } catch {}
+        stopRouteEnergyPolling();
+      }
+
+      // Persist cached reader clips across tabs (and reloads)
+      const ReaderCache = {
+        get() {
+          try {
+            const raw = sessionStorage.getItem("rr_map_v1");
+            if (!raw) return new Map();
+            const arr = JSON.parse(raw);
+            return new Map(arr);
+          } catch { return new Map(); }
+        },
+        set(map) {
+          try {
+            const arr = Array.from(map.entries());
+            sessionStorage.setItem("rr_map_v1", JSON.stringify(arr));
+          } catch {}
+        }
+      };
+
+      async function safeJson(r){ const t=await r.text(); try{return JSON.parse(t)}catch{return {raw:t}} }
+
+      async function loadSupportedVoices(){
+        try{
+          const r = await fetch("/debug/voices_probe", { headers: JSON_HDRS });
+          const j = await safeJson(r);
+          if(r.ok && Array.isArray(j.voices) && j.voices.length){ S.supportedVoices=j.voices; }
+        }catch(e){ /* keep default */ }
+      }
+
+      async function loadScenes(){
+        try{
+          const r=await fetch("/debug/scenes?script_id="+encodeURIComponent(S.script_id),{headers:JSON_HDRS});
+          const j=await safeJson(r); if(!r.ok) return;
+          S.scenes=j.scenes||[];
+          if(typeof window !== "undefined") window.currentSceneId = S.script_id || null;
+          await loadSupportedVoices();
+          hydrateAssign(); hydrateRehearse(); applyEditModeUI();
+        }catch(e){ showErr("Init warning: couldn’t load scenes. You can still re-import."); }
+      }
+
+      function sanitizeScriptText(raw){
+        const lines = String(raw||"").split(/\r?\n/);
+        const drop=[/sides\s+by\s+breakdown\s+services/i,/actors\s+access/i,/do\s+not\s+share/i,/copyright/i,/^page\s+\d+(\s*of\s*\d+)?$/i,/^https?:\/\/\S+/i,/^\s*(INT\.|EXT\.|SCENE)\b/i,/^[A-Z0-9 .,'&/()-]{6,}\s*$/];
+        const kept=[]; for(const ln of lines){ const t=ln.trim(); if(!t){ kept.push(""); continue; } if(drop.some(rx=>rx.test(t))) continue; if(/^\(.*\)$/.test(t)) continue; kept.push(ln); } return kept.join("\n");
+      }
+
+      // Import: text
+      $("#btnTextUpload")?.addEventListener("click", async ()=>{
+        const title=$("#titleText").value||"Sides";
+        const text=sanitizeScriptText($("#scriptText").value||"");
+        setStatus("Uploading text…");
+        try{
+          const r=await fetch("/debug/upload_script_text",{method:"POST",headers:JSON_HDRS,body:JSON.stringify({title,text})});
+          const j=await safeJson(r);
+          if(!r.ok){ setStatus("Error "+r.status+": "+JSON.stringify(j)); return; }
+          setStatus(`OK scenes=${j.scene_count} speakers=${(j.speakers||[]).join(", ")}`);
+          S.script_id=j.script_id; await loadScenes(); showScreen("assign");
+        }catch(e){ setStatus("Network error: "+e); }
+      });
+      $("#btnTextClear")?.addEventListener("click",()=>{ $("#titleText").value=""; $("#scriptText").value=""; setStatus(""); });
+
+      // Import: PDF
+      $("#btnPdfUpload")?.addEventListener("click", async ()=>{
+        const title=$("#titlePdf").value||"PDF Sides";
+        const pdfInput=$("#pdfFile");
+        const f=pdfInput?.files?.[0];
+        if(!f){ setStatusPdf("No file selected"); return; }
+        const fd=new FormData();
+        fd.append("title",title);
+        fd.append("pdf",f,f.name); // enforce field name
+        const hdrs={}; if(secret) hdrs["X-Shared-Secret"]=secret;
+        const url=secret?`/debug/upload_script_upload?secret=${encodeURIComponent(secret)}`:"/debug/upload_script_upload";
+        setStatusPdf("Uploading PDF…");
+        try{
+          const r=await fetch(url,{method:"POST",headers:hdrs,body:fd});
+          const j=await safeJson(r);
+          if(!r.ok){ setStatusPdf("Error "+r.status+": "+JSON.stringify(j)); return; }
+          const sp=(j.speakers||[]).join(", "); const note=j.note?(" note="+j.note):"";
+          setStatusPdf(`OK scenes=${j.scene_count} speakers=${sp||"(none)"} textLen=${j.textLen||0}${note}`);
+          if(j.note==="image-only"||j.note==="parse-error"){ $("#btnPdfOcr").disabled=false; $("#btnPdfOcr").focus(); return; }
+          S.script_id=j.script_id; await loadScenes(); showScreen("assign");
+        }catch(e){ setStatusPdf("Network error: "+e); }
+      });
+
+      // Assign
+      function uniqueRoles(){ const names=new Set(); for(const sc of (S.scenes||[])) for(const ln of (sc.lines||[])) names.add(ln.speaker); return Array.from(names).filter(n=>n&&n!=="SYSTEM"&&n!=="NARRATOR"); }
+      function hydrateAssign(){
+        $("#pillScript").textContent="script: "+(S.script_id||"—");
+        $("#pillScenes").textContent="scenes: "+(S.scenes?.length||0);
+        const roles=uniqueRoles(); const sel=$("#selectRole");
+        sel.innerHTML=roles.map(r=>`<option value="${r}">${r}</option>`).join("");
+        if(!S.role&&roles.length) S.role=roles[0];
+        sel.value=S.role||"";
+        sel.onchange=()=>{ S.role=sel.value; buildVoicePickers(); hydrateRehearse(); applyEditModeUI(); };
+        buildVoicePickers();
+      }
+      function buildVoicePickers(){
+        const box=$("#voicePickers"); box.innerHTML="";
+        const partners=uniqueRoles().filter(n=>n!==S.role);
+        partners.forEach(name=>{
+          const wrap=document.createElement("div");
+          wrap.className="card"; wrap.style.marginTop="8px";
+          wrap.innerHTML=`<div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+            <strong>${name}</strong>
+            <select data-name="${name}">
+              ${S.supportedVoices.map(v=>`<option value="${v}" ${((S.voice_map[name]||S.supportedVoices[0])===v)?"selected":""}>${v}</option>`).join("")}
+            </select>
+          </div>`;
+          box.appendChild(wrap);
+        });
+        box.querySelectorAll("select").forEach(el=>el.addEventListener("change",(e)=>{
+          const sel = e.target; S.voice_map[sel.getAttribute("data-name")] = sel.value;
+        }));
+      }
+      $("#btnSaveAssign")?.addEventListener("click", async ()=>{
+        if(!S.script_id) return;
+        const roles=uniqueRoles().filter(r=>r!==S.role);
+        for(const r of roles) if(!S.voice_map[r]) S.voice_map[r]=S.supportedVoices[0] || "alloy";
+        try{ await fetch("/debug/set_voice",{method:"POST",headers:JSON_HDRS,body:JSON.stringify({script_id:S.script_id,voice_map:S.voice_map})}); }catch{}
+        showScreen("rehearse");
+      });
+
+      /* ------- rehearse listening/respond flow (UNCHANGED) ------- */
+      const E={
+        linesWrap:$("#lines"), btnPlay:$("#btnPlay"), btnPrev:$("#btnPrev"), btnNext:$("#btnNext"), btnTop:$("#btnTop"),
+        selPace:"#selPace", btnMic:$("#btnMic"), micBadge:$("#micBadge"),
+        btnToggleEditMode:$("#btnToggleEditMode"), editModeState:$("#editModeState"),
+        inlineForm:null, currentSlotPlace:null,
+        rehearseAudio:(()=>{
+          const a=document.createElement("audio");
+          a.preload="auto";
+          a.setAttribute("playsinline","");
+          a.style.display="none";
+          document.body.appendChild(a);
+          if(typeof window !== "undefined" && !window.__OB_READER_EL){ window.__OB_READER_EL = a; }
+          return a;
+        })()
+      };
+      let idx=0, playing=false;
+
+      const isParenOnly=t=>/^\(.*\)$/.test((t||"").trim());
+      const isBoilerplate=t=>{ const s=(t||"").trim().toLowerCase(); if(!s) return true; if(/^[-–—]+$/.test(s)) return true; if(/^\d{1,4}$/.test(s)) return true; if(/^page\s*\d+(\s*of\s*\d+)?$/i.test(s)) return true; if((/^cont'?d\.?$/i.test(s)||/^continued$/i.test(s))&&s.length<=10) return true; if(/^https?:\/\/\S+/i.test(s)) return true; return (s.includes("sides by breakdown services")||s.includes("actors access")||s.includes("do not share")||s.includes("copyright")) && s.length<=80; };
+
+      function buildFiltered(scene){ const out=[]; for(let i=0;i<(scene?.lines?.length||0);i++){ const ln=scene.lines[i]; if(!ln) continue; if(ln.speaker==="NARRATOR") continue; if(isParenOnly(ln.text)) continue; if(isBoilerplate(ln.text)) continue; out.push({orig:i,speaker:ln.speaker,text:ln.text}); } return out; }
+      function getScene(){ return S.scenes[0]; }
+      function myName(){ return S.role||uniqueRoles()[0]||""; }
+
+      function inlineSlot(place){ return `<div class="inline-slot" data-place="${place}"><div class="ghostline"><button class="btn ghost sm" data-add-button>+ Add here</button></div></div>`; }
+
+      function hydrateRehearse(){
+        const scene=getScene(); const list=buildFiltered(scene);
+        if(!list.length){ $("#lines").innerHTML="<p class='hint'>Import a script first.</p>"; return; }
+        let html=inlineSlot(0);
+        list.forEach((ln,i)=>{ const me=ln.speaker===myName(); html+=`<div class="line ${me?"me":""}" data-i="${i}" data-orig="${ln.orig}"><div class="editbar" style="display:${S.editMode?'flex':'none'}"><span class="chip" data-act="edit" data-i="${i}">Edit</span><span class="chip danger" data-act="del" data-i="${i}">Delete</span></div><div class="who">${ln.speaker}</div><div class="text" data-i="${i}" contenteditable="false">${ln.text}</div></div>`; html+=inlineSlot(ln.orig+1); });
+        $("#lines").innerHTML=html; idx=Math.max(0,Math.min(idx,list.length-1)); wireEditTools(); wireSlots(); highlightCurrent(); applyEditModeUI();
+      }
+      function wireEditTools(){ $$(".chip",$("#lines")).forEach(ch=>ch.onclick=(ev)=>{ ev.stopPropagation(); const act=ch.getAttribute("data-act"); const iF=+ch.getAttribute("data-i"); const sc=getScene(); if(!sc) return; const node=document.querySelector(`.line[data-i="${iF}"]`); const orig=+node.getAttribute("data-orig"); if(Number.isNaN(orig)) return; if(act==="edit"){ if(!S.editMode) return; const t=document.querySelector(`.text[data-i="${iF}"]`); const editing=t.getAttribute("contenteditable")==="true"; if(editing){ t.setAttribute("contenteditable","false"); sc.lines[orig].text=t.innerText.trim(); hydrateRehearse(); } else { t.setAttribute("contenteditable","true"); t.focus(); const r=document.createRange(); r.selectNodeContents(t); r.collapse(false); const s=window.getSelection(); s.removeAllRanges(); s.addRange(r); } } else if(act==="del"){ if(!S.editMode) return; sc.lines.splice(orig,1); hydrateRehearse(); } }); }
+      function wireSlots(){ $$('[data-add-button]',$("#lines")).forEach(btn=>btn.onclick=(ev)=>{ if(!S.editMode) return; ev.stopPropagation(); const slot=btn.closest('.inline-slot'); openInlineForm(slot, Number(slot.getAttribute("data-place"))); }); }
+      function highlightCurrent(){ $$(".line",$("#lines")).forEach(el=>el.classList.remove("playing")); const cur=document.querySelector(`.line[data-i="${idx}"]`); if(cur){ cur.classList.add("playing"); cur.scrollIntoView({block:"center",behavior:(!S.editMode?"smooth":"auto")}); } }
+
+      // simple native TTS (watchdog)
+      function synthSpeak(text){
+        if(!window.speechSynthesis) return Promise.resolve();
+        window.speechSynthesis.cancel();
+        const u=new SpeechSynthesisUtterance(text);
+        const v=(window.speechSynthesis.getVoices()||[]).find(v=>/en(-|_)?/.test(v.lang));
+        if(v) u.voice=v;
+        u.rate=1.0; u.pitch=1.0;
+        const p=new Promise(res=>{ u.onend=()=>res(); u.onerror=()=>res(); });
+        window.speechSynthesis.speak(u);
+        const maxMs = Math.min(9000, Math.max(1200, text.trim().length*70));
+        return Promise.race([p, new Promise(res=>setTimeout(res,maxMs))]);
+      }
+
+      /* Speech Rec (unchanged timings) */
+      const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+      const sr=SR?new SR():null;
+      let srToggleOn=false, srPermGranted=false, srActive=false;
+  let myLineStartMs=0, firstEnergyAt=0, advanceLock=false;
+  let lastAdvanceAt=0;
+      let latestTranscript="", silenceTimer=null, lastResultAt=0;
+
+      // energy monitor
+      let micStream=null, audioCtx=null, analyser=null, energy=0, speaking=false, lastEnergyAt=0;
+  const ENERGY_SILENCE_THRESH=0.020;
+
+      function rms(buf){ let sum=0; for(let i=0;i<buf.length;i++){ const v=buf[i]/128-1; sum+=v*v; } return Math.sqrt(sum/buf.length); }
+      async function startMicMonitor(){
+        if(micStream) return;
+        try{
+          const stream = await navigator.mediaDevices.getUserMedia({audio:true});
+          // after getUserMedia:
+          micStream=stream;
+          window.__OB_MIC_STREAM = stream;
+          const track = (typeof stream?.getAudioTracks === "function") ? stream.getAudioTracks()[0] : null;
+          window.__OB_MIC_TRACK = track || null;
+          logRouteCheck('startMicMonitor');
+          try{
+            const bt = window.__OB_BT_IN || await hasBluetoothInput();
+            window.__OB_BT_IN = bt;
+            if (_route?.isiOS && (window.__OB_BT_IN || false) && (looksLikeHfp(window.__OB_MIC_TRACK) || (window.__OB_AP?.last?.() ?? 0) < 0.01)) {
+              _route.warnActive = true;
+              if (!RouteModal.inCooldown()) RouteModal.open();
+            } else {
+              showRouteWarn(false);
+            }
+          }catch{ showRouteWarn(false); }
+          audioCtx=new (window.AudioContext||window.webkitAudioContext)();
+          const src=audioCtx.createMediaStreamSource(stream);
+          analyser=audioCtx.createAnalyser(); analyser.fftSize=2048;
+          src.connect(analyser);
+          const data=new Uint8Array(analyser.fftSize);
+          const energyWindow=[];
+          const tick=()=>{
+            if(!analyser) return;
+            analyser.getByteTimeDomainData(data);
+            const v=rms(data);
+            energy = energy*0.85 + v*0.15;
+            const now=performance.now();
+            energyWindow.push(energy);
+            if(energyWindow.length>12) energyWindow.shift();
+            const talking = isSpeaking(energyWindow);
+            if(talking){ if(!speaking){ firstEnergyAt=now; } speaking=true; lastEnergyAt=now; }
+            else if(energy<ENERGY_SILENCE_THRESH){ if(now-(lastEnergyAt||now)>140){ speaking=false; } }
+            requestAnimationFrame(tick);
+          };
+          tick();
+        }catch{ logRouteCheck('startMicMonitor:error'); showRouteWarn(false); }
+      }
+      function stopMicMonitor(){
+        try{ micStream?.getTracks().forEach(t=>t.stop()); }catch{};
+        micStream=null;
+        window.__OB_MIC_STREAM = null;
+        window.__OB_MIC_TRACK = null;
+        showRouteWarn(false);
+        try{ audioCtx?.close(); }catch{};
+        audioCtx=null; analyser=null; energy=0; speaking=false;
+      }
+
+      // devicechange: re-evaluate when route flips
+      try {
+        navigator.mediaDevices.addEventListener("devicechange", async () => {
+          try{
+            const bt = await hasBluetoothInput(true);
+            window.__OB_BT_IN = bt;
+            logRouteCheck('mediaDeviceChange');
+            if (_route?.isiOS && (window.__OB_BT_IN || false) && (looksLikeHfp(window.__OB_MIC_TRACK) || (window.__OB_AP?.last?.() ?? 0) < 0.01)) {
+              _route.warnActive = true;
+              if (!RouteModal.inCooldown()) RouteModal.open();
+            } else {
+              showRouteWarn(false);
+            }
+          }catch{ showRouteWarn(false); }
+        });
+      } catch {}
+
+      function minElapsedFor(text){
+        const base = expectedMinMsFor(text || "");
+        // Slightly tighter so we can advance as soon as you finish
+        return tightMode()
+          ? Math.max(160, Math.round(base * 0.62))
+          : Math.round(base * 0.98);
+      }
+      function silenceDebounceFor(text){
+        const base = expectedMinMsFor(text || "");
+        // Aim for ~0.45–0.55s typical "after last energy" window
+        const scaled = tightMode()
+          ? Math.round(base * 0.48)
+          : Math.round(base * 0.58);
+        return Math.min(Math.max(140, scaled), 900);
+      }
+
+
+      function filtered(){ return buildFiltered(getScene()); }
+      function current(){ return filtered()[idx]; }
+      function onMyLine(){ const ln=current(); return !!ln && ln.speaker===myName(); }
+      function sceneHasDashyUserLine(){
+        const list = filtered();
+        const me = myName();
+        if(!list.length || !me) return false;
+        return list.some(ln => ln && ln.speaker === me && endsWithDashy(ln.text || ""));
+      }
+      function maybeSetMyLineStart(){
+        if(onMyLine() && !myLineStartMs){
+          myLineStartMs=performance.now();
+          if (speakerFallbackActive()) {
+            (async () => {
+              try { await routeReaderToSpeaker(window.__OB_READER_EL); } catch {}
+            })();
+          }
+        }
+      }
+      function clearMy(){
+        myLineStartMs=0;
+        firstEnergyAt=0;
+        advanceLock=false;
+        latestTranscript="";
+        lastResultAt=0;
+        stopRouteEnergyPolling();
+        if(silenceTimer){
+          clearTimeout(silenceTimer);
+          silenceTimer=null;
+        }
+        if (speakerFallbackActive()) {
+          (async () => {
+            try { await routeReaderToDefault(window.__OB_READER_EL); } catch {}
+          })();
+        }
+      }
+
+  // ------- Reader Recovery Layer (iOS PWA resilience) -------------------------
+      window.__OB_PRECACHE = window.__OB_PRECACHE || new Set();
+
+      function ensurePredecodeAudio(){
+        try{
+          if(window.__OB_PREBUFFER_EL && document.body.contains(window.__OB_PREBUFFER_EL)) return window.__OB_PREBUFFER_EL;
+          const pre = document.createElement('audio');
+          pre.preload = 'auto';
+          pre.setAttribute('playsinline','');
+          pre.style.display = 'none';
+          pre.muted = true;
+          pre.setAttribute('data-reader','prebuffer');
+          document.body.appendChild(pre);
+          window.__OB_PREBUFFER_EL = pre;
+          return pre;
+        }catch{return null;}
+      }
+
+      function showToastOnce(msg) {
+        if (document.getElementById('ob_toast')) return;
+        const el = document.createElement('div');
+        el.id = 'ob_toast';
+        el.textContent = msg;
+        el.style.cssText = 'position:fixed;left:50%;bottom:14px;transform:translateX(-50%);background:#222;color:#fff;padding:10px 14px;border-radius:12px;z-index:9999;font-size:13px;opacity:.96';
+        document.body.appendChild(el);
+        setTimeout(()=>{ try{ el.remove(); }catch{}; }, 2200);
+      }
+
+      async function predecode(unit) {
+        if(!unit) return;
+        try{
+          window.__OB_PRECACHE = window.__OB_PRECACHE || new Set();
+          if(window.__OB_PRECACHE.has(unit)) return;
+          const pre = ensurePredecodeAudio();
+          if(!pre) return;
+          if(pre.dataset.unit === unit) return;
+          pre.dataset.unit = unit;
+          pre.src = unit;
+          try{ pre.load(); }catch{}
+          window.__OB_PRECACHE.add(unit);
+        }catch{}
+      }
+
+      function firstPartnerIndex(from = 0){
+        try{
+          const list = filtered();
+          const me = myName();
+          if(!list.length) return 0;
+          const start = Math.max(0, from || 0);
+          for(let i=start;i<list.length;i++){
+            const ln = list[i];
+            if(ln && ln.speaker !== me) return i;
+          }
+          return start;
+        }catch{ return 0; }
+      }
+
+      async function rehydrateAudioAndRoute({ from } = {}) {
+        try {
+          const ctx = await ensureAudioContext();
+          try { await window.__OB_READER_EL?.setSinkId?.('default'); } catch {}
+          if (_route?.isiOS && (window.__OB_BT_IN || false) && looksLikeHfp?.(window.__OB_MIC_TRACK)) {
+            if (!RouteModal.inCooldown()) RouteModal.open();
+          }
+          if (window.RR?.map) {
+            const startIdx = typeof firstPartnerIndex === 'function' ? firstPartnerIndex(idx || 0) : (idx || 0);
+            const u0 = window.RR.map.get(startIdx);
+            const u1 = window.RR.map.get(startIdx + 1);
+            if (u0) await predecode(u0);
+            if (u1) await predecode(u1);
+            try { highlightCurrent(); } catch {}
+          }
+          if (ctx?.state !== 'running') showToastOnce('Audio paused by iOS — tap Play to continue');
+          console.debug('[recovery] rehydrate done', { from, ctx: ctx?.state, idx });
+        } catch (e) { console.warn('[recovery] rehydrate failed', e); }
+      }
+
+      window.addEventListener('pagehide', () => {
+        // hint: iOS may suspend/close audioCtx after this
+      });
+
+      const SKEY = 'ob.rehearse.state.v1';
+      function saveRehearseState() {
+        try {
+          const st = { sceneId: window.currentSceneId, idx: window.idx || 0, rid: window.RR?.id || null };
+          sessionStorage.setItem(SKEY, JSON.stringify(st));
+        } catch {}
+      }
+      function loadRehearseState() {
+        try { return JSON.parse(sessionStorage.getItem(SKEY) || 'null'); } catch { return null; }
+      }
+
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'hidden') {
+          saveRehearseState();
+          try { window.bufferCache && window.bufferCache.clear && window.bufferCache.clear(); } catch {}
+        }
+      });
+      window.addEventListener('pagehide', saveRehearseState);
+
+      async function rehydrateOnReturn(from) {
+        const ctx = await ensureAudioContext();
+        try { await window.__OB_READER_EL?.setSinkId?.('default'); } catch {}
+
+        const st = loadRehearseState();
+        if (st) {
+          try { window.currentSceneId = st.sceneId; window.idx = st.idx|0; } catch {}
+        }
+        if (window.RR?.map && typeof predecode === 'function') {
+          const start = (typeof firstPartnerIndex === 'function') ? firstPartnerIndex(window.idx||0) : (window.idx||0);
+          try {
+            const u0 = window.RR.map.get(start);
+            const u1 = window.RR.map.get(start+1);
+            if (u0) predecode(u0);
+            if (u1) predecode(u1);
+            if (typeof highlightCurrent === 'function') highlightCurrent();
+          } catch {}
+        }
+        if (ctx?.state !== 'running') console.debug('[rehydrate] ctx=', ctx?.state, 'tap Play to resume');
+      }
+
+      window.addEventListener('pageshow', () => rehydrateOnReturn('pageshow'));
+      window.addEventListener('pageshow', () => {
+        try { if (primeReaderFromCacheIfAvailable()) preloadReaderBuffers(); } catch {}
+      });
+      document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') rehydrateOnReturn('visible'); });
+
+      try {
+        navigator.mediaDevices.addEventListener('devicechange', async () => {
+          await ensureAudioContext();
+          try { await window.__OB_READER_EL?.setSinkId?.('default'); } catch {}
+          if (window.RR?.map && typeof predecode==='function') {
+            const start = (typeof firstPartnerIndex==='function') ? firstPartnerIndex(window.idx||0) : (window.idx||0);
+            const u0 = window.RR.map.get(start), u1 = window.RR.map.get(start+1);
+            if (u0) predecode(u0);
+            if (u1) predecode(u1);
+          }
+          if (typeof RouteModal!=='undefined' && typeof looksLikeHfp==='function' && window.__OB_MIC_TRACK) {
+            if (_route?.isiOS && (window.__OB_BT_IN || false) && looksLikeHfp(window.__OB_MIC_TRACK) && !RouteModal.inCooldown()) {
+              RouteModal.open();
+            }
+          }
+        });
+      } catch {}
+
+      async function hardResumeOnGesture() {
+        const ctx = await ensureAudioContext();
+        if (ctx?.state !== 'running') {
+          try { await ctx.resume(); } catch {}
+        }
+        try { await window.__OB_READER_EL?.setSinkId?.('default'); } catch {}
+      }
+
+      function updateMicBadge(){
+        const srAvailable = !!sr;
+        let label, cls;
+        if(!srAvailable){ label = srToggleOn ? "energy only" : "off"; cls = srToggleOn ? "ok" : "warn"; }
+        else{ label = !srToggleOn ? "off" : (srActive ? "listening…" : (srPermGranted ? "ready" : "needs permission"));
+              cls = !srToggleOn ? "warn" : (srActive ? "ok" : (srPermGranted ? "warn" : "err")); }
+        $("#micBadge").textContent = label;
+        $("#micBadge").className = "badge " + cls;
+        $("#btnMic").textContent = srToggleOn ? "Mic: On" : "Mic: Off";
+        $("#btnMic").setAttribute("aria-pressed", srToggleOn ? "true" : "false");
+      }
+
+      async function requestMicPermissionOnce(){
+        if(srPermGranted) return true;
+        try{
+          const s = await navigator.mediaDevices.getUserMedia({audio:true});
+          // after getUserMedia:
+          const track = (typeof s?.getAudioTracks === "function") ? s.getAudioTracks()[0] : null;
+          window.__OB_MIC_STREAM = s;
+          window.__OB_MIC_TRACK = track || null;
+          logRouteCheck('requestMicPermissionOnce');
+          try{
+            const bt = window.__OB_BT_IN || await hasBluetoothInput();
+            window.__OB_BT_IN = bt;
+            if (_route?.isiOS && (window.__OB_BT_IN || false) && (looksLikeHfp(window.__OB_MIC_TRACK) || (window.__OB_AP?.last?.() ?? 0) < 0.01)) {
+              _route.warnActive = true;
+              if (!RouteModal.inCooldown()) RouteModal.open();
+            } else {
+              showRouteWarn(false);
+            }
+          }catch{ showRouteWarn(false); }
+          s.getTracks().forEach(t=>t.stop());
+          srPermGranted=true;
+          return true;
+        }catch{
+          logRouteCheck('requestMicPermissionOnce:error');
+          srPermGranted=false;
+          return false;
+        } finally{ updateMicBadge(); }
+      }
+
+      function advanceFromMyLine(){
+        const now=performance.now();
+        // DO NOT TUNE in Record; Rehearse is the source of truth.
+        const cooldown = tightMode() ? Math.max(80, Math.round(AFTER_ADV_COOLDOWN_MS * 0.35)) : AFTER_ADV_COOLDOWN_MS;
+        if(advanceLock || (now - lastAdvanceAt) < cooldown) return;
+        if(!onMyLine()) return;
+        const ln = current();
+        if(!ln) return;
+        const elapsed=now-(myLineStartMs||now);
+        if(elapsed < minElapsedFor(ln.text||"")) return;
+
+        advanceLock=true;
+        const list=filtered(); if(!list.length){ advanceLock=false; return; }
+        idx=Math.min(idx+1,list.length-1);
+        highlightCurrent();
+        clearMy();
+        lastAdvanceAt = now;
+        try{ sr?.stop(); }catch{}
+        if(R?.rec && typeof R.rec.state === "string" && R.rec.state === "inactive"){
+          try{ R.rec.start(); R.recording = true; setRailStates(); }
+          catch{}
+        }
+        const next=current();
+        if(next && next.speaker===myName()){
+          if(srToggleOn && srPermGranted){ setTimeout(()=>{ if(sr && !srActive) try{ sr.start(); }catch{}; },80); }
+        }else if(next){
+          playing = true;
+          Promise.resolve(step(true, { immediate: true })).catch(()=>{});
+        }
+        advanceLock=false;
+      }
+
+      function armSilenceDebounce(){
+        if(silenceTimer) clearTimeout(silenceTimer);
+        const ln = current();
+        if(!ln) return;
+        const need = silenceDebounceFor(ln.text||"");
+        silenceTimer = setTimeout(()=>{
+          if(!onMyLine()) return;
+          const now = performance.now();
+          const elapsed = now - (myLineStartMs||now);
+          if(!firstEnergyAt || elapsed < 60) return;
+          const shouldAdvance = readyForAdvance({
+            text: ln.text,
+            interim: latestTranscript,
+            isSilentNow: !speaking,
+            elapsedMs: elapsed,
+            lastAdvanceAt,
+            dashyMode: endsWithDashy(ln.text)
+          });
+          const timeSinceEnergy = now - (lastEnergyAt || now);
+          const enoughSilence = timeSinceEnergy >= Math.min(900, Math.max(140, silenceDebounceFor(ln.text)));
+          const enoughElapsed = elapsed >= minElapsedFor(ln.text);
+          const dashy = endsWithDashy(ln.text);
+          if( (dashy && shouldAdvance && enoughElapsed) ||
+              (!dashy && shouldAdvance && enoughSilence && enoughElapsed) ){
+            silenceTimer = null;
+            advanceFromMyLine();
+          }
+        }, need);
+      }
+
+      if(sr){
+        sr.continuous=false; sr.interimResults=true; sr.lang="en-US";
+        sr.onstart=()=>{
+          srActive=true;
+          updateMicBadge();
+          if(onMyLine()){
+            startRouteEnergyPolling();
+          }
+        };
+        sr.onend=()=>{
+          srActive=false;
+          stopRouteEnergyPolling();
+          updateMicBadge();
+          if(srToggleOn && srPermGranted && onMyLine() && !(E.inlineForm&&E.inlineForm.isConnected)){
+            try{ sr.start(); }catch{}
+          }
+        };
+        sr.onerror=()=>{
+          srActive=false;
+          stopRouteEnergyPolling();
+          updateMicBadge();
+        };
+        sr.onresult=(ev)=>{
+          if(!(onMyLine() && srToggleOn && srPermGranted)) return;
+          maybeSetMyLineStart();
+          const now=performance.now();
+          const ln=current(); if(!ln) return;
+
+          const last=ev.results?.[ev.results.length-1];
+          const alt=last?.[0];
+          const isFinal=!!last?.isFinal;
+          latestTranscript=(alt?.transcript||"").trim();
+          lastResultAt=now;
+
+          const elapsed=now-(myLineStartMs||now);
+
+          const dashy = endsWithDashy(ln.text); // only end-dash matters
+          const shouldAdvance = readyForAdvance({
+            text: ln.text,
+            interim: latestTranscript,
+            isSilentNow: !speaking,
+            elapsedMs: elapsed,
+            lastAdvanceAt,
+            dashyMode: dashy
+          });
+          const enoughElapsed = elapsed >= minElapsedFor(ln.text);
+          const timeSinceEnergy = now - (lastEnergyAt || now);
+          const enoughSilence = timeSinceEnergy >= Math.min(1100, Math.max(180, silenceDebounceFor(ln.text)));
+
+          // Dash at end = allow fast cut-in once minima met
+          if(dashy){
+            if((shouldAdvance && enoughElapsed) || (isFinal && enoughElapsed)){
+              return advanceFromMyLine();
+            }
+          }else{
+            // Normal lines: require final result OR adequate silence, plus minima
+            if((isFinal && enoughElapsed) || (shouldAdvance && enoughSilence && enoughElapsed)){
+              return advanceFromMyLine();
+            }
+          }
+
+          // For non-dashy user lines we wait slightly longer before auto-advance.
+          // Dashy end ("—" at end) still advances fast via readyForAdvance().
+          armSilenceDebounce();
+        };
+      }
+
+      setInterval(()=>{
+        if(!(sr && srToggleOn && srPermGranted)) return;
+        if(!(onMyLine()) || (E.inlineForm&&E.inlineForm.isConnected)) return;
+        if(!srActive){ try{ sr.start(); }catch{} }
+      }, 300);
+
+      // Re-start SR if it ever drops while on your line (Record only)
+      setInterval(()=>{
+        if(!tightMode()) return;
+        if(!(onMyLine()) || (E.inlineForm&&E.inlineForm.isConnected)) return;
+        if(sr && srToggleOn && srPermGranted && !srActive){
+          try{ sr.start(); }catch{}
+        }
+      }, 250);
+
+      $("#btnMic")?.addEventListener("click", async ()=>{
+        const srAvailable = !!sr;
+        if(!srAvailable){
+          if(!srToggleOn){
+            try{ await navigator.mediaDevices.getUserMedia({audio:true}); await startMicMonitor(); srPermGranted = true; srToggleOn = true; }
+            catch{ srToggleOn = false; }
+          }else{ srToggleOn = false; stopMicMonitor(); }
+          updateMicBadge(); return;
+        }
+        if(!srToggleOn){
+          const ok=await requestMicPermissionOnce();
+          srToggleOn=ok;
+          if(ok){ await startMicMonitor(); await (onMyLine()?maybeSetMyLineStart():Promise.resolve()); }
+        }else{
+          srToggleOn=false;
+          try{ sr.stop(); }catch{}
+          clearMy(); stopMicMonitor();
+        }
+        updateMicBadge();
+      });
+
+      // OpenAI pre-render (status shows actual error text)
+      const RR = { map: new Map(), failures: 0, rendering: false, dotsTimer: null, dotsState: [0,0,0] };
+
+      function primeReaderFromCacheIfAvailable(){
+        try{
+          if(RR.map && RR.map.size){
+            if(hasR()){
+              try{ preloadReaderBuffers(); }catch{}
+            }
+            return true;
+          }
+          const cached = ReaderCache.get();
+          if(cached && typeof cached.size === "number" && cached.size){
+            if(hasR()){
+              R.readerBuffers = new Map();
+              R.readerLoading = false;
+            }
+            resetReaderActiveSources();
+            RR.map = new Map(cached);
+            if(hasR()){
+              try{ preloadReaderBuffers(); }catch{}
+            }
+            return true;
+          }
+        }catch{}
+        return false;
+      }
+
+      primeReaderFromCacheIfAvailable();
+      function setRehearseRenderStatus(msg, cls){
+        const el = $("#rehearseRenderStatus");
+        el.innerHTML = "";
+        if(!msg){ el.textContent = " "; }
+        else{
+          const span = document.createElement("span");
+          if(cls) span.style.color = (cls==="ok"? "var(--ok)" : cls==="err" ? "var(--danger)" : cls==="warn" ? "var(--warn)" : "var(--muted)");
+          span.textContent = msg + " ";
+          el.appendChild(span);
+        }
+
+        if(hasR() && R.btnRender){
+          const btn = R.btnRender;
+          const base = btn.dataset.defaultLabel || "Render";
+          if(!btn.dataset.defaultLabel) btn.dataset.defaultLabel = base;
+          if(RR.rendering){
+            btn.disabled = true;
+            btn.classList.add("progressing");
+            btn.textContent = "Rendering…";
+          } else {
+            btn.disabled = false;
+            btn.classList.remove("progressing");
+            btn.textContent = base;
+          }
+        }
+      }
+
+      function startDots(){
+        stopDots();
+        RR.dotsState = [0,0,0];
+        RR.dotsTimer = setInterval(()=>{
+          if(RR.dotsState.join("")==="000"){ RR.dotsState=[1,0,0]; }
+          else if(RR.dotsState[0]){ RR.dotsState=[0,1,0]; }
+          else if(RR.dotsState[1]){ RR.dotsState=[0,0,1]; }
+          else { RR.dotsState=[0,0,0]; }
+          setRehearseRenderStatus("Preparing voices…"," ");
+        }, 320);
+      }
+
+      function stopDots(){
+        if(RR.dotsTimer){
+          clearInterval(RR.dotsTimer);
+          RR.dotsTimer=null;
+          RR.dotsState=[0,0,0];
+        }
+      }
+
+      async function renderRehearseVoices(){
+        if(RR.rendering) return;
+        const scene = getScene();
+        const list  = buildFiltered(scene);
+        if(!list.length){ setRehearseRenderStatus("No lines to render.","err"); return; }
+
+  RR.rendering = true; RR.failures = 0; RR.map.clear();
+        if(hasR()){ R.readerBuffers = new Map(); R.readerLoading = false; }
+        resetReaderActiveSources();
+        startDots();
+        setRehearseRenderStatus("Preparing voices…"," ");
+
+        const voiceFor = (name)=> (S.voice_map[name] || S.supportedVoices[0] || "alloy");
+        const model    = ($("#selTtsModel")).value || "tts-1";
+
+        const CONCURRENCY = 2;       // keep bursts gentle across all devices
+        const MAX_ATTEMPTS = 3;
+        const TIMEOUT_MS   = 45000;  // occasional cold starts or queueing
+
+        let i = 0, done = 0, firstErr = null;
+        const run = async () => {
+          for(;;){
+            const myIndex = i++;
+            if (myIndex >= list.length) return;
+
+            const ln = list[myIndex];
+            if (ln.speaker === myName()){ done++; setRehearseRenderStatus(`Preparing voices… ${done}/${list.length}`," "); continue; }
+
+            let countedByAttempt = false;
+            const attempt = async (n) => {
+              const ctrl = new AbortController();
+              const to   = setTimeout(()=>ctrl.abort(), TIMEOUT_MS);
+              try {
+                // allow either header or query param auth (some proxies drop custom headers)
+                const ttsUrl = secret
+                  ? `/debug/tts_line?secret=${encodeURIComponent(secret)}`
+                  : "/debug/tts_line";
+
+                // normalize & guard input
+                const cleanText = (ln.text || "").replace(/\s+/g, " ").trim();
+                if (!cleanText) {
+                  countedByAttempt = true;
+                  done++;
+                  setRehearseRenderStatus(`Preparing voices… ${done}/${list.length}`, "");
+                  return;
+                }
+
+                const r = await fetch(ttsUrl, {
+                  method: "POST",
+                  headers: { ...JSON_HDRS, "Accept": "application/json" },
+                  body: JSON.stringify({ voice: voiceFor(ln.speaker), model, text: cleanText }),
+                  signal: ctrl.signal
+                });
+                const txt = await r.text();
+                let j = {};
+                try { j = JSON.parse(txt); } catch { /* non-JSON body */ }
+
+                if (r.ok && j && j.url) return j.url;
+
+                // If OpenAI says quota exceeded (HTTP 429), don't retry — surface a clear error.
+                if (r.status === 429) {
+                  const msg = (j?.error?.message || j?.message || txt || "quota exceeded").toString().slice(0, 240);
+                  const err = new Error("quota-exceeded: " + msg);
+                  err.code = 429;
+                  err.retry = false;
+                  throw err;
+                }
+
+                // Map common upstream failures to a retryable bucket
+                if ([408, 409, 425, 500, 502, 503, 504].includes(r.status)) {
+                  const err = new Error("retryable " + r.status + (j?.error ? ` ${j.error}` : ""));
+                  err.code = r.status;
+                  err.retry = true;
+                  throw err;
+                }
+
+                // surface a shorter, cleaner message
+                const snippet = (txt || "").toString().slice(0, 120).replace(/\s+/g, " ");
+                throw new Error(`bad ${r.status} ${snippet}`);
+              } catch (e) {
+                if (e?.code === 429) throw e; // do not retry quota errors
+                if (n < MAX_ATTEMPTS) {
+                  const backoff = 400 * Math.pow(2, n) + Math.random()*150;
+                  await new Promise(res => setTimeout(res, backoff));
+                  return attempt(n+1);
+                }
+                throw e;
+              } finally { clearTimeout(to); }
+            };
+
+            let url;
+            try {
+              url = await attempt(0);
+              if (url) RR.map.set(myIndex, url);
+            } catch(e) {
+              RR.failures++; if(!firstErr) firstErr = String(e||"error");
+            } finally {
+              if (!countedByAttempt) {
+                done++;
+                if (done % 2 === 0) setRehearseRenderStatus(`Preparing voices… ${done}/${list.length}`, "");
+              }
+            }
+          }
+        };
+
+        await Promise.all(Array.from({length:CONCURRENCY}, run));
+
+        RR.rendering = false; stopDots();
+        ReaderCache.set(RR.map);
+
+        const okCount = RR.map.size;
+        const errText = String(firstErr || "");
+        if (!okCount && /quota-exceeded|exceeded your current quota|HTTP 429/i.test(errText)) {
+          setRehearseRenderStatus(
+            "OpenAI quota exceeded — add credits or raise your limit, then try again.",
+            "err"
+          );
+        } else {
+          setRehearseRenderStatus(
+            okCount
+              ? `Voices ready: ${okCount} lines${RR.failures ? ` (fallback on ${RR.failures})`:""}`
+              : `No OpenAI clips prepared${firstErr ? ` — error: ${errText.slice(0,160)}` : ""}`,
+            okCount ? (RR.failures ? "warn":"ok") : "err"
+          );
+        }
+        try{ preloadReaderBuffers(); }catch{}
+      }
+  function clearRehearseRender(){ RR.map.clear(); RR.failures=0; stopDots(); R.readerBuffers = new Map(); resetReaderActiveSources(); R.readerLoading=false; setRehearseRenderStatus("Cleared pre-render.","warn"); }
+      $("#btnRehearseRender")?.addEventListener("click", renderRehearseVoices);
+      $("#btnRehearseClear")?.addEventListener("click", clearRehearseRender);
+
+      async function playOpenAiIfCached(i){
+        const buf = R.readerBuffers.get(i);
+        if(buf){
+          await ensureReaderCtx();
+          if(!R.readerCtx || !R.readerGain) return false;
+          const ctx = R.readerCtx;
+          const lookahead = 0.05;
+          const startAt = Math.max((ctx.currentTime||0) + lookahead, 0);
+          const src = ctx.createBufferSource();
+          src.buffer = buf;
+          const g = ctx.createGain();
+          const fadeInEnd = startAt + 0.03;
+          const fadeOutStart = Math.max(startAt, startAt + buf.duration - 0.02);
+          g.gain.setValueAtTime(0.0001, startAt);
+          g.gain.linearRampToValueAtTime(1.0, fadeInEnd);
+          g.gain.setValueAtTime(1.0, fadeOutStart);
+          g.gain.linearRampToValueAtTime(0.0001, startAt + buf.duration);
+          src.connect(g);
+          g.connect(R.readerGain);
+          if(R.readerActiveSources) R.readerActiveSources.add(src);
+          const done = new Promise(res=>{ src.onended=()=>res(null); src.onerror=()=>res(null); });
+          src.start(startAt);
+          try{
+            await done;
+          } finally {
+            try{ R.readerActiveSources?.delete(src); }catch{}
+            try{ src.disconnect(); g.disconnect(); }catch{}
+          }
+          return true;
+        }
+
+        const url = RR.map.get(i);
+        if(!url) return false;
+        try{
+          E.rehearseAudio.src = url + (url.includes("?") ? "&" : "?") + "t=" + Date.now();
+          await E.rehearseAudio.play();
+          await new Promise(res=>{ E.rehearseAudio.onended=()=>res(null); E.rehearseAudio.onerror=()=>res(null); });
+          return true;
+        }catch{}
+        finally{
+          E.rehearseAudio.onended = null;
+          E.rehearseAudio.onerror = null;
+        }
+        return false;
+      }
+
+      async function playPartnerLine(index, { immediate = false } = {}){
+        const list = filtered();
+        if(!list.length) return false;
+        const ln = list[index];
+        if(!ln || ln.speaker === myName()) return false;
+        const paceSelect = document.getElementById("selPace");
+        let pace = Number((paceSelect && paceSelect.value) || 0);
+        if(tightMode() || immediate) pace = 0;
+        const usedOpenAi = await playOpenAiIfCached(index);
+        if(!usedOpenAi){ await synthSpeak(ln.text); }
+        if(pace > 0){ await new Promise(r=>setTimeout(r, pace)); }
+        return true;
+      }
+
+      async function step(playMode, opts = {}){
+        const list=filtered(); if(!list.length) return;
+        const immediate = !!opts.immediate;
+        const ln=current(); if(!ln){ playing=false; $("#btnPlay").textContent="Play"; return; }
+        // keep bubble synced even if audio fails
+        highlightCurrent();
+
+        if(ln.speaker===myName()){
+          if(sr && srToggleOn && srPermGranted){ advanceLock=false; maybeSetMyLineStart(); return; }
+          if(playMode){ playing=false; $("#btnPlay").textContent="Play"; }
+        }else{
+          const i = idx;
+          await playPartnerLine(i, { immediate });
+          if(playing){ idx=Math.min(idx+1,list.length-1); step(true); }
+        }
+      }
+
+  $("#btnPlay")?.addEventListener("click",async ()=>{
+    await ensureAudioContext();
+    try { await window.__OB_READER_EL?.setSinkId?.('default'); } catch {}
+        try{ hardResumeOnGesture().catch(()=>{}); }catch{};
+        playing=!playing;
+        $("#btnPlay").textContent=playing?"Pause":"Play";
+        if(playing){
+          try{
+            const cur = current();
+            if(cur && cur.speaker === myName()){
+              const list = filtered();
+              for(let i = idx; i < list.length; i++){
+                if(list[i] && list[i].speaker !== myName()){ idx = i; break; }
+              }
+              highlightCurrent();
+            }
+          }catch{}
+          step(true);
+        }
+        else { window.speechSynthesis?.cancel(); try{ sr?.stop(); }catch{}; clearMy(); }
+      });
+      $("#btnPrev")?.addEventListener("click",()=>{ const list=filtered(); if(!list.length) return; try{ sr?.stop(); }catch{}; clearMy(); idx=Math.max(0,idx-1); highlightCurrent(); if(playing) step(true); else maybeSetMyLineStart(); });
+  $("#btnNext")?.addEventListener("click",async ()=>{
+        await ensureAudioContext();
+        try { await window.__OB_READER_EL?.setSinkId?.('default'); } catch {}
+        try{ hardResumeOnGesture().catch(()=>{}); }catch{};
+        const list=filtered();
+        if(!list.length) return;
+        try{ sr?.stop(); }catch{};
+        clearMy();
+        idx=Math.min(list.length-1,idx+1);
+        highlightCurrent();
+        if(playing) step(true);
+        else maybeSetMyLineStart();
+      });
+      $("#btnTop")?.addEventListener("click",()=>{ try{ sr?.stop(); }catch{}; clearMy(); idx=0; highlightCurrent(); if(playing) step(true); else maybeSetMyLineStart(); });
+
+      const ROUTE_WARN_ALERT = 'If the reader audio disappears during your line:\n' +
+        '1) Flip the iPhone ringer switch ON (side of the phone).\n' +
+        '2) Settings → Bluetooth → your headphones → prefer media audio.\n' +
+        '3) Try wired earbuds or toggle Mic Off for a pass.';
+
+      document.getElementById('routeWarnMore')?.addEventListener('click', ()=>{ alert(ROUTE_WARN_ALERT); });
+      document.getElementById('routeWarnMoreRecord')?.addEventListener('click', ()=>{ alert(ROUTE_WARN_ALERT); });
+
+      $("#btnToggleEditMode")?.addEventListener("click",()=>{ S.editMode=!S.editMode; applyEditModeUI(); });
+      function applyEditModeUI(){ $("#btnToggleEditMode")?.setAttribute("aria-pressed",S.editMode?"true":"false"); $("#editModeState").textContent=S.editMode?"On":"Off"; $$(".editbar",$("#lines")).forEach(el=>el.style.display=S.editMode?"flex":"none"); $$(".inline-slot",$("#lines")).forEach(el=>el.style.display=S.editMode?"flex":"none"); if(E.inlineForm && E.inlineForm.isConnected){ try{ E.inlineForm.remove(); }catch{}; E.currentSlotPlace=null; } }
+
+      /* ----------------- RECORD TAB (updated for 16x9 + right rail) ----------------- */
+
+      /* --- Orientation-aware preview aspect --- */
+      function applyPreviewAspect(portrait = isPortrait()){
+        const aspectRatio = portrait ? "9/16" : "16/9";
+        const logicalAspect = portrait ? "9:16" : "16:9";
+        const previewEl = (typeof R !== "undefined" && hasR() && R?.preview) || document.getElementById("preview");
+        if(previewEl){
+          previewEl.style.aspectRatio = aspectRatio;
+        }
+        try{ document.documentElement?.style.setProperty("--preview-ar", aspectRatio); }catch{}
+        if(hasR()){ R.currentAspect = logicalAspect; }
+      }
+
+      function updateRecordLayout(){
+        try{ applyPreviewAspect(isPortrait()); }catch{}
+        try{ syncGridOverlayVisibility(); }catch{}
+      }
+
+  window.addEventListener("resize", ()=>{ updateRecordLayout(); try{ syncGridOverlayVisibility(); }catch{} });
+  window.addEventListener("orientationchange", ()=>{ updateRecordLayout(); try{ syncGridOverlayVisibility(); }catch{} });
+
+      R = {
+        btnRender: $("#btnRender"),
+        btnRec: $("#btnRec"),
+        btnGrid: $("#btnGrid"),
+        btnCamera: $("#btnCamera"),
+        btnCountIn: $("#btnCountIn"),
+        btnHeadphones: $("#btnHeadphones"),
+        audio: $("#readerAudio"),
+        preview: $("#preview"),
+        countdown: null,
+        chunks: [],
+        rec: null,
+        stream: null,
+    render_id: "",
+    download_url: "",
+    cameraOn: false,
+    countInOn: false,
+    headphonesOn: true,
+    recording: false,
+        prevSrToggle: null,
+        facing: "user",               // or "environment"
+        mixCtx: null,
+        mixDest: null,
+        mixGainReader: null,
+        mixGainMic: null,
+        micHPF: null,
+        micCompressor: null,
+        readerCtx: null,
+        readerGain: null,
+        readerBuffers: new Map(),
+        readerLoading: false,
+        readerDirectConnected: false,
+        readerBridge: null,
+        readerBridgeSource: null,
+        readerRecordGain: null,
+        readerActiveSources: new Set(),
+        duckHintShown: false,
+    currentAspect: isPortrait() ? "9:16" : "16:9",
+    forcePerLine: false,
+    gridOn: false,
+    countInSecs: 3,
+      };
+      if(R.btnRender && !R.btnRender.dataset.defaultLabel){
+        R.btnRender.dataset.defaultLabel = R.btnRender.textContent || "Render";
+      }
+      R.audio?.setAttribute("playsinline","");
+      if(typeof window !== "undefined" && R.audio){ window.__OB_READER_EL = R.audio; }
+
+      function setStatusRec(t){
+        const btn = R.btnRender;
+        if(!btn) return;
+  const base = btn.dataset.defaultLabel || "Render";
+  if(!btn.dataset.defaultLabel) btn.dataset.defaultLabel = base;
+        const text = (t && String(t).trim()) ? t : base;
+        btn.classList.remove("progressing");
+        btn.textContent = text;
+      }
+
+      function micConstraints(recordingPhase){
+        if(recordingPhase){
+          return {
+            echoCancellation: false,
+            noiseSuppression: false,
+            autoGainControl: false,
+            channelCount: 1,
+            sampleRate: 48000,
+            sampleSize: 16,
+            advanced: [
+              { echoCancellation:false },
+              { noiseSuppression:false },
+              { autoGainControl:false },
+              { googEchoCancellation:false },
+              { googAutoGainControl:false },
+              { googNoiseSuppression:false }
+            ]
+          };
+        }
+        return {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: false,
+          channelCount: 1
+        };
+      }
+
+      async function ensureReaderCtx(){
+        if(R.readerCtx && R.readerCtx.state === "closed"){ R.readerCtx = null; R.readerGain = null; R.readerDirectConnected = false; }
+        if(!R.readerCtx){
+          R.readerCtx = new (window.AudioContext||window.webkitAudioContext)();
+          if(R.readerCtx?.state === "suspended"){ try{ await R.readerCtx.resume(); }catch{} }
+          R.readerGain = R.readerCtx.createGain();
+          R.readerGain.gain.value = 1.0;
+          try{ R.readerGain.__obProbeConnected = false; }catch{}
+          tapReaderNode(R.readerGain);
+          try{ R.readerGain.connect(R.readerCtx.destination); R.readerDirectConnected = true; }
+          catch{}
+          R.readerActiveSources = new Set();
+        }else if(R.readerCtx?.state === "suspended"){
+          try{ await R.readerCtx.resume(); }catch{}
+        }
+        return R.readerCtx;
+      }
+
+      function restoreReaderDirectMonitor(){
+        if(R.readerCtx && R.readerGain){
+          try{ R.readerGain.disconnect(); }catch{}
+          try{ R.readerGain.__obProbeConnected = false; }catch{}
+          try{ tapReaderNode(R.readerGain); R.readerGain.connect(R.readerCtx.destination); R.readerDirectConnected = true; }
+          catch{}
+        }
+        R.readerBridge = null;
+        R.readerBridgeSource = null;
+        R.readerRecordGain = null;
+      }
+
+      async function preloadReaderBuffers(){
+        if(!RR.map || !RR.map.size || (hasR() && R.readerLoading)) return;
+        if(!hasR()) return;
+        R.readerLoading = true;
+        try{
+          await ensureReaderCtx();
+          const entries = Array.from(RR.map.entries());
+          let idx = 0;
+          const workers = Math.min(3, entries.length);
+          async function worker(){
+            for(;;){
+              const current = idx++;
+              if(current >= entries.length) break;
+              const [i, url] = entries[current];
+              if(R.readerBuffers.has(i)) continue;
+              try{
+                const suffix = url.includes("?") ? "&" : "?";
+                const resp = await fetch(url + suffix + "t=" + Date.now());
+                if(!resp.ok) continue;
+                const buf = await resp.arrayBuffer();
+                const ctx = R.readerCtx;
+                if(!ctx) continue;
+                const audio = await new Promise((resolve,reject)=>{
+                  try{
+                    const maybe = ctx.decodeAudioData(buf, resolve, reject);
+                    if(maybe && typeof maybe.then === "function") maybe.then(resolve).catch(reject);
+                  }catch(e){ reject(e); }
+                });
+                if(audio) R.readerBuffers.set(i, audio);
+              }catch{}
+            }
+          }
+          await Promise.all(Array.from({length:workers}, ()=>worker()));
+        }catch{}
+        finally{ if(hasR()) R.readerLoading = false; }
+      }
+
+      function micConstraints(recordingPhase){
+        if(recordingPhase){
+          return {
+            echoCancellation: false,
+            noiseSuppression: false,
+            autoGainControl: false,
+            channelCount: 1,
+            sampleRate: 48000,
+            sampleSize: 16,
+            advanced: [
+              { echoCancellation:false },
+              { noiseSuppression:false },
+              { autoGainControl:false },
+              { googEchoCancellation:false },
+              { googAutoGainControl:false },
+              { googNoiseSuppression:false }
+            ]
+          };
+        }
+        return {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: false,
+          channelCount: 1
+        };
+      }
+
+      async function ensureReaderCtx(){
+        if(R.readerCtx && R.readerCtx.state === "closed"){ R.readerCtx = null; R.readerGain = null; R.readerDirectConnected = false; }
+        if(!R.readerCtx){
+          R.readerCtx = new (window.AudioContext||window.webkitAudioContext)();
+          if(R.readerCtx?.state === "suspended"){ try{ await R.readerCtx.resume(); }catch{} }
+          R.readerGain = R.readerCtx.createGain();
+          R.readerGain.gain.value = 1.0;
+          try{ R.readerGain.__obProbeConnected = false; }catch{}
+          tapReaderNode(R.readerGain);
+          try{ R.readerGain.connect(R.readerCtx.destination); R.readerDirectConnected = true; }
+          catch{}
+          R.readerActiveSources = new Set();
+        }else if(R.readerCtx?.state === "suspended"){
+          try{ await R.readerCtx.resume(); }catch{}
+        }
+        return R.readerCtx;
+      }
+
+      function restoreReaderDirectMonitor(){
+        if(R.readerCtx && R.readerGain){
+          try{ R.readerGain.disconnect(); }catch{}
+          try{ R.readerGain.__obProbeConnected = false; }catch{}
+          try{ tapReaderNode(R.readerGain); R.readerGain.connect(R.readerCtx.destination); R.readerDirectConnected = true; }
+          catch{}
+        }
+        R.readerBridge = null;
+        R.readerBridgeSource = null;
+        R.readerRecordGain = null;
+      }
+
+      async function preloadReaderBuffers(){
+        if(!RR.map || !RR.map.size || R.readerLoading) return;
+        R.readerLoading = true;
+        try{
+          await ensureReaderCtx();
+          const entries = Array.from(RR.map.entries());
+          let idx = 0;
+          const workers = Math.min(3, entries.length);
+          async function worker(){
+            for(;;){
+              const current = idx++;
+              if(current >= entries.length) break;
+              const [i, url] = entries[current];
+              if(R.readerBuffers.has(i)) continue;
+              try{
+                const suffix = url.includes("?") ? "&" : "?";
+                const resp = await fetch(url + suffix + "t=" + Date.now());
+                if(!resp.ok) continue;
+                const buf = await resp.arrayBuffer();
+                const ctx = R.readerCtx;
+                if(!ctx) continue;
+                const audio = await new Promise((resolve,reject)=>{
+                  try{
+                    const maybe = ctx.decodeAudioData(buf, resolve, reject);
+                    if(maybe && typeof maybe.then === "function") maybe.then(resolve).catch(reject);
+                  }catch(e){ reject(e); }
+                });
+                if(audio) R.readerBuffers.set(i, audio);
+              }catch{}
+            }
+          }
+          await Promise.all(Array.from({length:workers}, ()=>worker()));
+        }catch{}
+        finally{ R.readerLoading = false; }
+      }
+
+      function setRailStates(){
+        R.btnCamera.setAttribute("aria-pressed", R.cameraOn ? "true":"false");
+        R.btnCamera.textContent = "Camera: " + (R.cameraOn ? "On" : "Off");
+        if(R.btnCountIn){
+          R.btnCountIn.setAttribute("aria-pressed", R.countInOn ? "true":"false");
+          const countLabel = R.countInOn
+            ? `Count-in: On (${Number(R.countInSecs) || 3}s)`
+            : "Count-in: Off";
+          R.btnCountIn.textContent = countLabel;
+        }
+        R.btnHeadphones.setAttribute("aria-pressed", R.headphonesOn ? "true":"false");
+        R.btnHeadphones.textContent = "Headphones: " + (R.headphonesOn ? "On" : "Off");
+        if(R.btnGrid){
+          R.btnGrid.setAttribute("aria-pressed", R.gridOn ? "true" : "false");
+          R.btnGrid.textContent = "Grid: " + (R.gridOn ? "On" : "Off");
+        }
+        if(R.recording){ R.btnRec.classList.add("recording"); R.btnRec.textContent = "STOP"; }
+        else { R.btnRec.classList.remove("recording"); R.btnRec.textContent = "REC"; }
+      }
+
+      function syncGridOverlayVisibility(){
+        const ov = document.getElementById("gridOverlay");
+        if(!ov) return;
+        const show = !!(hasR() && R.gridOn && !isPortrait());
+        ov.style.display = show ? "block" : "none";
+      }
+
+      syncGridOverlayVisibility();
+
+      function pickMime(video){
+        const vids = ["video/mp4;codecs=avc1.42E01E,mp4a.40.2","video/mp4","video/webm;codecs=vp8,opus","video/webm"];
+        const auds = ["audio/mp4","audio/webm;codecs=opus","audio/webm"];
+        const list = video ? vids : auds;
+        for(const m of list){ if(window.MediaRecorder && MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(m)) return m; }
+        return "";
+      }
+
+      function cleanupStream(){
+        try{ R.stream?.getTracks().forEach(t=>t.stop()); }catch{}
+        R.stream = null;
+        if(R.preview) R.preview.srcObject = null;
+      }
+
+      function resetMicAfterRecording(){
+        if(R.prevSrToggle === null){ updateMicBadge(); return; }
+        const prev = R.prevSrToggle;
+        R.prevSrToggle = null;
+        if(prev){
+          srToggleOn = true;
+          startMicMonitor().catch(()=>{});
+        }else{
+          srToggleOn = false;
+          stopMicMonitor();
+        }
+        updateMicBadge();
+      }
+
+      async function buildMixedStreamIfPossible(rawStream){
+        if(!rawStream) return rawStream;
+        try{
+          R.mixCtx = new (window.AudioContext||window.webkitAudioContext)();
+          if(R.mixCtx?.state === "suspended"){ try{ await R.mixCtx.resume(); }catch{} }
+          const speakers = R.mixCtx.destination;
+          R.mixDest = R.mixCtx.createMediaStreamDestination();
+
+          const micNode = R.mixCtx.createMediaStreamSource(rawStream);
+
+          R.micHPF = R.mixCtx.createBiquadFilter();
+          R.micHPF.type = "highpass";
+          R.micHPF.frequency.value = 120;
+          R.micHPF.Q.value = 0.707;
+
+          R.micCompressor = R.mixCtx.createDynamicsCompressor();
+          R.micCompressor.threshold.value = -28;
+          R.micCompressor.knee.value = 24;
+          R.micCompressor.ratio.value = 3;
+          R.micCompressor.attack.value = 0.005;
+          R.micCompressor.release.value = 0.12;
+
+          R.mixGainMic = R.mixCtx.createGain();
+          R.mixGainMic.gain.value = 1.0;
+
+          micNode.connect(R.micHPF);
+          R.micHPF.connect(R.micCompressor);
+          R.micCompressor.connect(R.mixGainMic);
+          R.mixGainMic.connect(R.mixDest);
+
+          R.mixGainReader = R.mixCtx.createGain();
+          R.mixGainReader.gain.value = R.headphonesOn ? 1.0 : 0.0;
+          const readerRecordGain = R.mixCtx.createGain();
+          readerRecordGain.gain.value = 1.0;
+
+          if(R.readerCtx && R.readerGain){
+            try{ R.readerGain.disconnect(); R.readerDirectConnected = false; }catch{}
+            try{ R.readerGain.__obProbeConnected = false; }catch{}
+            try{
+              R.readerBridge = R.readerCtx.createMediaStreamDestination();
+              R.readerGain.connect(R.readerBridge);
+              tapReaderNode(R.readerGain);
+              R.readerDirectConnected = false;
+              const bridgeSource = R.mixCtx.createMediaStreamSource(R.readerBridge.stream);
+              R.readerBridgeSource = bridgeSource;
+              bridgeSource.connect(R.mixGainReader);
+              bridgeSource.connect(readerRecordGain);
+            }catch{}
+          }
+
+          const readerEl = (RR.map && RR.map.size>0)
+            ? E?.rehearseAudio
+            : (R.forcePerLine ? null : R.audio);
+          if(readerEl){
+            try{
+              const src = R.mixCtx.createMediaElementSource(readerEl);
+              src.connect(R.mixGainReader);
+              src.connect(readerRecordGain);
+            }catch(e){
+              if(typeof readerEl.captureStream === "function"){
+                try{
+                  const rs = readerEl.captureStream();
+                  const s2 = R.mixCtx.createMediaStreamSource(rs);
+                  s2.connect(R.mixGainReader);
+                  s2.connect(readerRecordGain);
+                }catch{}
+              }
+            }
+          }
+
+          R.mixGainReader.connect(speakers);
+          readerRecordGain.connect(R.mixDest);
+          R.readerRecordGain = readerRecordGain;
+
+          const tracks = [];
+          if(R.cameraOn){
+            try{ rawStream.getVideoTracks().forEach(t=>tracks.push(t)); }catch{}
+          }
+          try{ R.mixDest.stream.getAudioTracks().forEach(t=>tracks.push(t)); }catch{}
+          if(tracks.length) return new MediaStream(tracks);
+        }catch(e){
+          try{ R.mixCtx?.close(); }catch{}
+          restoreReaderDirectMonitor();
+        }
+        R.mixCtx = null;
+        R.mixDest = null;
+        R.mixGainReader = null;
+        R.mixGainMic = null;
+        R.micHPF = null;
+        R.micCompressor = null;
+        R.readerRecordGain = null;
+        R.readerBridge = null;
+        R.readerBridgeSource = null;
+        return rawStream;
+      }
+
+      /* --- Render reader (animated dots in status) --- */
+      async function prepareReader(){
+        if(!S.script_id){ setStatusRec("Import & Assign first."); return; }
+        let dots = 0;
+        let dotsTimer = setInterval(()=>{
+          dots = (dots+1)%4;
+          setStatusRec("Preparing reader track" + ".".repeat(dots));
+          R.btnRender?.classList.add("progressing");
+        }, 320);
+        setStatusRec("Preparing reader track.");
+        if(R.btnRender){
+          R.btnRender.disabled = true;
+          R.btnRender.classList.add("progressing");
+        }
+        try{
+          const r = await fetch("/debug/render", { method:"POST", headers:JSON_HDRS, body:JSON.stringify({ script_id:S.script_id, my_role:(S.role||"").toUpperCase(), pace_ms:0 }) });
+          const j = await safeJson(r);
+          if(!r.ok){ clearInterval(dotsTimer); setStatusRec("Render error "+r.status+": "+JSON.stringify(j)); R.btnRender.disabled=false; return; }
+          R.render_id = j.render_id;
+          const poll = async ()=>{
+            const s = await fetch(`/debug/render_status?render_id=${encodeURIComponent(R.render_id)}`, { headers:JSON_HDRS });
+            const js = await safeJson(s);
+            if(js.status==="complete" && js.download_url){
+              R.download_url = js.download_url + "?t=" + Date.now();
+              R.audio.src = R.download_url; R.audio.load();
+              clearInterval(dotsTimer);
+              setStatusRec("Reader ready.");
+              R.btnRender.disabled = false;
+            }else if(js.status==="error"){
+              clearInterval(dotsTimer);
+              setStatusRec("Render failed: "+(js.error||"unknown")); R.btnRender.disabled=false;
+            }else{ setTimeout(poll, 500); }
+          };
+          setTimeout(poll, 500);
+        }catch(e){
+          clearInterval(dotsTimer);
+          setStatusRec("Network error: "+e); R.btnRender.disabled=false;
+        }
+      }
+
+      /* --- Count-in: configurable visible countdown --- */
+      async function doBeepsAndCountdown(){
+        if(!R.countInOn) return;
+        const N = Math.min(10, Math.max(3, Number(R.countInSecs) || 3));
+
+        await ensureReaderCtx();
+        const ctx = R.readerCtx;
+        if(!ctx){ return; }
+
+        if(ctx.state !== 'running'){ try{ await ctx.resume(); }catch{} }
+
+        const overlay = $("#countdown"), num = $("#countNum");
+        if(overlay){ overlay.style.display = "flex"; }
+
+        const playBeep = (freq, dur = 0.28) => new Promise(res => {
+          try{
+            const o = ctx.createOscillator();
+            const g = ctx.createGain();
+            o.type = 'sine';
+            o.frequency.value = freq;
+            g.gain.value = 0.18;
+            o.connect(g);
+            g.connect(ctx.destination);
+            o.start();
+            setTimeout(()=>{ try{ o.stop(); }catch{}; try{ o.disconnect(); g.disconnect(); }catch{}; res(); }, dur*1000);
+          }catch{ res(); }
+        });
+
+        for(let i = N; i >= 1; i--){
+          if(num) num.textContent = String(i);
+          await playBeep(i === 1 ? 660 : 880, 0.28);
+          await new Promise(r => setTimeout(r, 720));
+        }
+
+        if(overlay){ overlay.style.display = "none"; }
+      }
+
+      /* --- Recording flow --- */
+      async function startPreviewIfNeeded(forceRestart=false){
+        if(!R.cameraOn){
+          try{ cleanupStream(); }catch{}
+          if(R.preview) R.preview.srcObject=null;
+          try{ updateRecordLayout(); }catch{}
+          return;
+        }
+        try{
+          if(forceRestart && R.stream){ cleanupStream(); }
+          if(!R.stream){
+            R.stream = await navigator.mediaDevices.getUserMedia({
+              video: { facingMode: R.facing },
+              audio: micConstraints(false)
+            });
+          }
+          // after getUserMedia:
+          const at = R.stream?.getAudioTracks?.()[0];
+          window.__OB_MIC_STREAM = R.stream;
+          window.__OB_MIC_TRACK = at || null;
+          logRouteCheck('startPreviewIfNeeded');
+          if(at){
+            const settings = at.getSettings ? at.getSettings() : {};
+            console.log("[offbook] mic settings (preview)", settings);
+            try{
+              const bt = window.__OB_BT_IN || await hasBluetoothInput();
+              if (_route.isiOS && (bt || false) && looksLikeHfp(at)) {
+                _route.warnActive = true;
+                maybeShowRouteModal();
+              } else {
+                showRouteWarn(false);
+              }
+            }catch{ showRouteWarn(false); }
+            if(!R.duckHintShown && (settings.echoCancellation === true || settings.noiseSuppression === true)){
+              setStatusRec("Note: Your device may still apply echo/ducking. Use wired/Bluetooth headphones for best results.");
+              R.duckHintShown = true;
+            }
+          }else{
+            logRouteCheck('startPreviewIfNeeded:noTrack');
+            showRouteWarn(false);
+          }
+          if(R.preview){
+            try{ R.preview.muted = true; }catch{}
+            R.preview.srcObject = R.stream;
+            if(typeof R.preview.play === "function"){
+              R.preview.play().catch(()=>{});
+            }
+            try{ updateRecordLayout(); }catch{}
+          }
+  }catch(e){ logRouteCheck('startPreviewIfNeeded:error'); setStatusRec("Camera/mic permission denied: "+e); }
+      }
+
+      let useBackCamera = false;
+      async function applyCameraFacing(){
+        R.facing = useBackCamera ? "environment" : "user";
+        if(!R.cameraOn) return;
+        try{
+          await startPreviewIfNeeded(true);
+          updateRecordLayout();
+        }
+        catch(e){ setStatusRec("Camera switch error: "+e); }
+      }
+
+      async function startRecording(){
+        await hardResumeOnGesture();
+        try { await ensureReaderCtx(); } catch {}
+        try { await window.__OB_READER_EL?.setSinkId?.('default'); } catch {}
+        await (window.audioCtx?.resume?.() || Promise.resolve());
+        await _diagAudioCtx('before-beeps');
+        console.debug('[AUDIO] readerEl=', !!window.__OB_READER_EL, 'canPlay=', window.__OB_READER_EL?.readyState);
+  primeReaderFromCacheIfAvailable();
+  const dashyScene = sceneHasDashyUserLine();
+  const hasClipMap = !!(RR.map && RR.map.size > 0);
+  const hasSingleTrack = !!R.download_url;
+  const usePerLinePlayback = dashyScene || hasClipMap;
+  const useSingleTrackPlayback = !usePerLinePlayback && hasSingleTrack;
+  const prepped = usePerLinePlayback || hasSingleTrack;
+  if(!prepped){ setStatusRec("Render first."); return; }
+
+  R.forcePerLine = dashyScene;
+
+  const useCachedReader = usePerLinePlayback;
+
+        stopAllAudioHard();
+        try{ sr?.stop(); }catch{}
+        try{ clearMy(); }catch{}
+
+        cleanupStream();
+  try{ R.mixCtx?.close(); }catch{}
+  R.mixCtx = null; R.mixDest = null; R.mixGainReader = null; R.mixGainMic = null; R.micHPF = null; R.micCompressor = null;
+
+        let userStream;
+        try{
+          const needVideo = !!R.cameraOn;
+          userStream = await navigator.mediaDevices.getUserMedia({
+            audio: micConstraints(true),
+            video: needVideo ? { facingMode: R.facing } : false
+          });
+        }catch(e){ setStatusRec("Permission error: "+e); return; }
+        R.stream = userStream;
+        // after getUserMedia:
+        const track = R.stream?.getAudioTracks?.()[0];
+        window.__OB_MIC_STREAM = R.stream;
+        window.__OB_MIC_TRACK = track || null;
+        logRouteCheck('startRecording');
+        if(track){
+          const settings = track.getSettings ? track.getSettings() : {};
+          console.log("[offbook] mic settings (record)", settings);
+          try{
+            const bt = window.__OB_BT_IN || await hasBluetoothInput();
+            if (_route.isiOS && (bt || false) && looksLikeHfp(track)) {
+              _route.warnActive = true;
+              maybeShowRouteModal();
+            } else {
+              showRouteWarn(false);
+            }
+          }catch{ showRouteWarn(false); }
+          if(!R.duckHintShown && (settings.echoCancellation === true || settings.noiseSuppression === true)){
+            setStatusRec("Note: Your device may still apply echo/ducking. Use wired/Bluetooth headphones for best results.");
+            R.duckHintShown = true;
+          }
+        }else{
+          logRouteCheck('startRecording:noTrack');
+          showRouteWarn(false);
+        }
+        if(R.cameraOn && R.preview){
+          R.preview.srcObject = R.stream;
+          if(typeof R.preview.play === "function"){ R.preview.play().catch(()=>{}); }
+        }
+
+        await doBeepsAndCountdown();
+
+        if(useCachedReader){ try{ await ensureReaderCtx(); }catch{} }
+        const finalStream = await buildMixedStreamIfPossible(R.stream);
+
+        R.prevSrToggle = srToggleOn;
+        try{
+          await requestMicPermissionOnce();
+          srToggleOn = true;
+          await startMicMonitor();
+        }catch{}
+        updateMicBadge();
+
+        try{ idx = 0; }catch{}
+        try{ highlightCurrent?.(); }catch{}
+        try{ clearMy(); }catch{}
+
+        R.chunks = [];
+        const mime = pickMime(!!R.cameraOn);
+        try{ R.rec = mime ? new MediaRecorder(finalStream, { mimeType: mime }) : new MediaRecorder(finalStream); }
+        catch{ R.rec = new MediaRecorder(finalStream); }
+
+        R.rec.ondataavailable = (e)=>{ if(e.data && e.data.size>0) R.chunks.push(e.data); };
+        R.rec.onstop = async ()=>{
+          if(typeof window !== "undefined"){
+            window.isRecording = false;
+            try{ document.dispatchEvent(new CustomEvent('ob:recording:stopped')); }catch{}
+          }
+          stopAllAudioHard();
+          resetMicAfterRecording();
+          try{ R.mixCtx?.close(); }catch{}
+          R.mixCtx = null; R.mixDest = null; R.mixGainReader = null; R.mixGainMic = null; R.micHPF = null; R.micCompressor = null;
+          R.readerRecordGain = null; R.readerBridge = null; R.readerBridgeSource = null;
+          restoreReaderDirectMonitor();
+          try{ await finalizeTake(); }
+          catch(e){ console.error("[offbook] finalizeTake error", e); setStatusRec("Save failed. Download immediately to keep the take."); }
+          cleanupStream();
+          if(R.cameraOn){ try{ startPreviewIfNeeded(); }catch{} }
+          R.recording=false;
+          R.forcePerLine = false;
+          setRailStates();
+        };
+
+        R.recording = true;
+        if(typeof window !== "undefined") window.isRecording = true;
+        setRailStates();
+        // Re-arm SR immediately for your first line in Record
+        try{
+          if(sr && srToggleOn && srPermGranted && onMyLine()){
+            try{ sr.stop(); }catch{}
+            setTimeout(()=>{ try{ sr.start(); }catch{} }, 50);
+          }
+        }catch{}
+
+        try{ R.rec.start(); }
+        catch(e){
+          R.recording = false;
+          if(typeof window !== "undefined"){
+            window.isRecording = false;
+            try{ document.dispatchEvent(new CustomEvent('ob:recording:stopped')); }catch{}
+          }
+          setRailStates();
+          setStatusRec("Recorder error: "+e);
+          stopAllAudioHard();
+          resetMicAfterRecording();
+          try{ R.mixCtx?.close(); }catch{}
+          R.mixCtx = null; R.mixDest = null; R.mixGainReader = null; R.mixGainMic = null; R.micHPF = null; R.micCompressor = null; R.readerRecordGain = null; R.readerBridge = null; R.readerBridgeSource = null;
+          restoreReaderDirectMonitor();
+          cleanupStream();
+          if(R.cameraOn){ try{ startPreviewIfNeeded(); }catch{} }
+          return;
+        }
+
+    setStatusRec("Recording…");
+
+        await new Promise(r=>setTimeout(r,220));
+
+        if(useCachedReader){
+          try{
+            playing = true;
+            Promise.resolve(step(true, { immediate: dashyScene })).catch(()=>{});
+            const endWatch = setInterval(()=>{
+              if(!R.recording) return clearInterval(endWatch);
+              if(!playing){
+                try{ R.rec?.stop(); }catch{}
+                clearInterval(endWatch);
+              }
+            }, 300);
+          }catch{}
+        }
+
+        if(R.audio){
+          if(useSingleTrackPlayback){
+            try{ R.audio.currentTime = 0; await R.audio.play(); }catch{}
+            R.audio.onended = ()=>{ setTimeout(()=>{ try{ R.rec?.stop(); }catch{} }, 120); };
+          }else{
+            try{ R.audio.pause(); R.audio.currentTime = 0; }catch{}
+            R.audio.onended = null;
+          }
+        }
+      }
+
+      function stopRecording(){
+        if(!R.recording){
+          stopAllAudioHard();
+          cleanupStream();
+          restoreReaderDirectMonitor();
+          return;
+        }
+        try{ R.rec?.stop(); }catch{}
+        R.recording = false;
+        R.forcePerLine = false;
+        setRailStates();
+        setStatusRec("Stopping…");
+      }
+
+      async function finalizeTake(){
+        const isVid = !!R.cameraOn;
+        const blob = new Blob(R.chunks, { type: (R.rec && R.rec.mimeType) ? R.rec.mimeType : (isVid ? "video/mp4" : "audio/mp4") });
+        if(!blob || !blob.size){ setStatusRec("No data captured."); return; }
+        const aspect = R.currentAspect || (isPortrait() ? "9:16" : "16:9");
+        try{
+          await saveTakeToDB({ blob, isVid, aspect });
+          setStatusRec("Saved to Gallery.");
+        }catch(err){
+          console.error("[offbook] take save error", err);
+          setStatusRec("Saved (temp), DB error");
+        }finally{
+          try{ await renderGallery(); }catch{}
+        }
+      }
+
+      /* -------- IndexedDB small wrapper -------- */
+      const GalleryDB = (() => {
+        const DB_NAME = "gallery-db-v1";
+        const STORE = "takes";
+        let db = null;
+        function open(){
+          if(!("indexedDB" in window)) return Promise.reject(new Error("indexeddb-unavailable"));
+          return new Promise((res, rej)=>{
+            const req = indexedDB.open(DB_NAME, 1);
+            req.onupgradeneeded = () => {
+              const d = req.result;
+              if(!d.objectStoreNames.contains(STORE)){
+                const os = d.createObjectStore(STORE, { keyPath:"id" });
+                os.createIndex("created", "created");
+              }
+            };
+            req.onsuccess = () => { db = req.result; res(db); };
+            req.onerror = () => rej(req.error);
+          });
+        }
+        async function ready(){ return db || open(); }
+        async function put(rec){
+          await ready();
+          return new Promise((res, rej)=>{
+            const tx = db.transaction(STORE, "readwrite");
+            tx.objectStore(STORE).put(rec);
+            tx.oncomplete = () => res();
+            tx.onerror = () => rej(tx.error);
+          });
+        }
+        async function getAll(){
+          await ready();
+          return new Promise((res, rej)=>{
+            const tx = db.transaction(STORE, "readonly");
+            const req = tx.objectStore(STORE).getAll();
+            req.onsuccess = () => res(req.result || []);
+            req.onerror = () => rej(req.error);
+          });
+        }
+        async function del(id){
+          await ready();
+          return new Promise((res, rej)=>{
+            const tx = db.transaction(STORE, "readwrite");
+            tx.objectStore(STORE).delete(id);
+            tx.oncomplete = () => res();
+            tx.onerror = () => rej(tx.error);
+          });
+        }
+        return { put, getAll, del };
+      })();
+
+      /* ---- Helpers for short labels + pruning ---- */
+      const G = { filter:"all", urls:new Map() };
+
+      function shortLabel(n){
+        const num = Math.max(1, n);
+        return "TK" + String(num).padStart(2, "0");
+      }
+
+      async function pruneTakes(){
+        const MAX_ITEMS = 10;
+        const MAX_AGE_MS = 14*24*3600*1000;
+        const list = (await GalleryDB.getAll()).sort((a,b)=>b.created-a.created);
+        const now = Date.now();
+        const recent = [];
+        for(const t of list){
+          if(now - t.created > MAX_AGE_MS){ await GalleryDB.del(t.id); continue; }
+          recent.push(t);
+        }
+        if(recent.length > MAX_ITEMS){
+          for(const t of recent.slice(MAX_ITEMS)){ await GalleryDB.del(t.id); }
+        }
+      }
+
+      async function saveTakeToDB({ blob, isVid, aspect }){
+        if(!("indexedDB" in window)) throw new Error("indexeddb-unavailable");
+        const id = (crypto && typeof crypto.randomUUID === "function") ? crypto.randomUUID() : `take-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+        const created = Date.now();
+        const type = blob.type || (isVid ? "video/mp4" : "audio/mp4");
+        const size = blob.size || 0;
+        const existing = (await GalleryDB.getAll()).length;
+        const short = shortLabel(existing + 1);
+    const ext = type.includes("webm") ? "webm" : (isVid ? "mp4" : "m4a");
+    const stamp = new Date(created).toISOString().replace(/[:.]/g,"-");
+    const name = `${isVid?"take-video":"take-audio"}-${stamp}.${ext}`;
+    const safeAspect = typeof aspect === "string" ? aspect : "16:9";
+    await GalleryDB.put({ id, created, name, short, type, size, aspect: safeAspect, blob, note:"" });
+        await pruneTakes();
+      }
+
+      /* ---- Gallery rendering with filters + actions ---- */
+      async function loadTakes(){
+        const all = await GalleryDB.getAll();
+        return all.sort((a,b)=>b.created-a.created);
+      }
+
+      function fmtMB(n){
+        if(!n || !isFinite(n)) return "0 MB";
+        return Math.max(1, Math.round(n / 1048576)) + " MB";
+      }
+
+      function kindFrom(type=""){
+        if(type.startsWith("video/")) return "MP4";
+        if(type.includes("webm")) return "WEBM";
+        return "M4A";
+      }
+
+      const escapeHtml = (value)=>String(value ?? "").replace(/[&<>"']/g, ch=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[ch]||ch));
+
+      function resetGalleryUrls(){
+        G.urls.forEach(url=>{ try{ URL.revokeObjectURL(url); }catch{} });
+        G.urls.clear();
+      }
+
+      async function renderGallery(){
+        const wrap = $("#takes");
+        if(!wrap) return;
+        resetGalleryUrls();
+        try{ await pruneTakes(); }catch{}
+        let all;
+        try{
+          all = await loadTakes();
+        }catch(err){
+          console.warn("[offbook] gallery load error", err);
+          wrap.innerHTML = `<p class="hint">Gallery storage unavailable on this device.</p>`;
+          return;
+    }
+    const list = all.filter(t => G.filter === "all" ? true : (t.aspect === G.filter));
+
+        const filters = `
+          <div style="margin-bottom:8px">
+            <span class="chip-filter ${G.filter==='all'?'active':''}" data-filt="all">All</span>
+            <span class="chip-filter ${G.filter==='16:9'?'active':''}" data-filt="16:9">16:9</span>
+            <span class="chip-filter ${G.filter==='9:16'?'active':''}" data-filt="9:16">9:16</span>
+          </div>`;
+
+        if(!list.length){
+          wrap.innerHTML = filters + `<p class="hint">No takes yet.</p>`;
+          bindGalleryFilters(wrap);
+          return;
+        }
+
+        const cardMap = new Map();
+        const cardsHtml = list.map(t=>{
+          const src = URL.createObjectURL(t.blob);
+          G.urls.set(t.id, src);
+          cardMap.set(t.id, { ...t, url: src });
+          const meta = `${escapeHtml(t.aspect || '—')} • ${escapeHtml(fmtMB(t.size))} • ${escapeHtml(kindFrom(t.type))}`;
+          const shortName = escapeHtml(t.short || t.name || "Take");
+          const noteSafe = escapeHtml(t.note || "");
+          return `
+            <div class="take-card" data-id="${escapeHtml(t.id)}">
+              <video class="take-thumb" src="${escapeHtml(src)}" playsinline preload="metadata"></video>
+              <div class="take-row" style="justify-content:space-between;align-items:center;">
+                <div>
+                  <div style="font-weight:700">${shortName}</div>
+                  <div class="take-meta">${meta}</div>
+                </div>
+                <div class="row" style="flex:0 0 auto; gap:8px; align-items:center;">
+                  <button class="btn sm secondary" data-act="play">Play</button>
+                  <button class="btn sm" data-act="dl">Download</button>
+                  <button class="btn sm secondary" data-act="del">Delete</button>
+                </div>
+              </div>
+              <textarea class="take-note" placeholder="Add a note…">${noteSafe}</textarea>
+            </div>`;
+        }).join("");
+
+        wrap.innerHTML = filters + cardsHtml;
+        bindGalleryFilters(wrap);
+        bindGalleryCards(wrap, cardMap);
+      }
+
+      function bindGalleryFilters(root){
+        $$(".chip-filter", root).forEach(el=>{
+          el.onclick = ()=>{
+            const sel = el.getAttribute("data-filt") || "all";
+            if(G.filter !== sel){ G.filter = sel; renderGallery().catch(()=>{}); }
+          };
+        });
+      }
+
+      function bindGalleryCards(root, map){
+        $$(".take-card", root).forEach(card=>{
+          const id = card.getAttribute("data-id");
+          const rec = id ? map.get(id) : null;
+          if(!rec) return;
+          const video = card.querySelector("video");
+          const btnPlay = card.querySelector('[data-act="play"]');
+          const btnDl = card.querySelector('[data-act="dl"]');
+          const btnDel = card.querySelector('[data-act="del"]');
+          const noteEl = card.querySelector('.take-note');
+
+          btnPlay?.addEventListener("click", ()=>{
+            if(!video) return;
+            if(video.paused){
+              try{ video.currentTime = 0; video.play(); }catch{}
+              if(btnPlay) btnPlay.textContent = "Pause";
+            }else{
+              video.pause();
+              if(btnPlay) btnPlay.textContent = "Play";
+            }
+          });
+          video?.addEventListener("ended", ()=>{ if(btnPlay) btnPlay.textContent = "Play"; });
+          video?.addEventListener("pause", ()=>{ if(btnPlay && !video.error) btnPlay.textContent = "Play"; });
+
+          btnDl?.addEventListener("click", async ()=>{
+            try{
+              const file = new File([rec.blob], rec.name, { type: rec.type });
+              if(navigator.canShare && navigator.canShare({ files:[file] })){
+                try{ await navigator.share({ files:[file], title: rec.short || rec.name }); }
+                catch{}
+              }else{
+                const url = URL.createObjectURL(rec.blob);
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = rec.name;
+                document.body.appendChild(a);
+                a.click();
+                setTimeout(()=>{ URL.revokeObjectURL(url); a.remove(); }, 1200);
+              }
+            }catch(err){
+              console.error("[offbook] download/share error", err);
+              alert("Unable to share this take.");
+            }
+          });
+
+          btnDel?.addEventListener("click", async ()=>{
+            if(rec.url){ try{ URL.revokeObjectURL(rec.url); }catch{} }
+            try{ await GalleryDB.del(rec.id); }catch{}
+            renderGallery().catch(()=>{});
+          });
+
+          noteEl?.addEventListener("blur", async ()=>{
+            try{
+              const { url, ...rest } = rec;
+              const updated = { ...rest, note: noteEl.value };
+              await GalleryDB.put(updated);
+              rec.note = updated.note;
+            }catch(err){ console.warn("[offbook] note save failed", err); }
+          });
+        });
+      }
+
+
+      /* --- Button wiring --- */
+      R.btnRender?.addEventListener("click", async ()=>{
+        // If we already have pre-rendered clips in RR.map from Rehearse, reuse them.
+        const hasCached = primeReaderFromCacheIfAvailable() || (RR.map && RR.map.size);
+        if(hasCached && RR.map && RR.map.size){
+          setStatusRec(`Voices ready: ${RR.map.size} lines (cached).`);
+          try{ preloadReaderBuffers(); }catch{}
+          return;
+        }
+        setStatusRec("Preparing voices…");
+        try{
+          await renderRehearseVoices(); // fills RR.map
+          if(RR.map.size){ setStatusRec("Reader ready."); try{ preloadReaderBuffers(); }catch{}; return; }
+        }catch(e){ /* fall through to server render */ }
+        // Fallback: server-side combined reader track
+        await prepareReader();
+      });
+
+      R.btnRec?.addEventListener("click", ()=>{
+        if(R.recording) { stopRecording(); }
+        else { startRecording(); }
+      });
+
+      R.btnGrid?.addEventListener("click", ()=>{
+        R.gridOn = !R.gridOn;
+        setRailStates();
+        syncGridOverlayVisibility();
+      });
+
+      R.btnCamera?.addEventListener("click", async ()=>{
+        R.cameraOn = !R.cameraOn;
+        setRailStates();
+        await startPreviewIfNeeded();
+        try{ updateRecordLayout(); }catch{}
+      });
+
+      R.btnHeadphones?.addEventListener("click", ()=>{
+        R.headphonesOn = !R.headphonesOn;
+        try{ if(R.mixGainReader) R.mixGainReader.gain.value = R.headphonesOn ? 1.0 : 0.0; }catch{}
+        setRailStates();
+      });
+
+      // --- Count-in long-press menu (landscape only) ---
+      const countMenu = $("#countinMenu");
+      let countHoldTimer = null;
+      let countMenuOpen = false;
+
+      function positionCountMenu(){
+        if(!countMenu || !R?.btnCountIn) return;
+        const r = R.btnCountIn.getBoundingClientRect();
+        const menuW = Math.max(120, countMenu.offsetWidth || 0);
+        const left = Math.min(Math.max(8, r.right - menuW), window.innerWidth - menuW - 8);
+        const top = Math.min(r.bottom + 6, window.innerHeight - 8);
+        countMenu.style.left = left + "px";
+        countMenu.style.top = top + "px";
+      }
+
+      function showCountMenu(){
+        if(!countMenu || !R?.btnCountIn) return;
+        if(isPortrait()) return;
+        positionCountMenu();
+        countMenu.style.display = "block";
+        countMenu.removeAttribute("hidden");
+        countMenu.setAttribute("aria-hidden", "false");
+        positionCountMenu();
+        countMenuOpen = true;
+      }
+
+      function hideCountMenu(){
+        if(!countMenu || !countMenuOpen) return;
+        clearTimeout(countHoldTimer);
+        countHoldTimer = null;
+        countMenu.setAttribute("hidden", "true");
+        countMenu.setAttribute("aria-hidden", "true");
+        countMenu.style.display = "none";
+        countMenuOpen = false;
+      }
+
+      R.btnCountIn?.addEventListener("click", (ev)=>{
+        if(countMenuOpen){
+          hideCountMenu();
+          ev.stopPropagation();
+          return;
+        }
+        R.countInOn = !R.countInOn;
+        setRailStates();
+      });
+
+      R.btnCountIn?.addEventListener("pointerdown", ()=>{
+        if(isPortrait()) return;
+        if(countMenuOpen) return;
+        clearTimeout(countHoldTimer);
+        countHoldTimer = setTimeout(showCountMenu, 450);
+      });
+      ["pointerup","pointercancel","pointerleave"].forEach(evt=>{
+        R.btnCountIn?.addEventListener(evt, ()=>{ clearTimeout(countHoldTimer); countHoldTimer = null; });
+      });
+
+      countMenu?.addEventListener("click", (e)=>{
+        const b = e.target.closest("button[data-sec]");
+        if(!b) return;
+        const sec = parseInt(b.getAttribute("data-sec"), 10) || 3;
+        R.countInSecs = sec;
+        hideCountMenu();
+        setRailStates();
+      });
+
+      document.addEventListener("click", (e)=>{
+        if(!countMenuOpen) return;
+        if(e.target === R.btnCountIn || (countMenu && countMenu.contains(e.target))) return;
+        hideCountMenu();
+      });
+
+      // --- iOS guard: block text selection & long-press menu on record rail buttons
+      document.addEventListener("selectstart", (e)=>{
+        if(e.target && e.target.closest("#screen-record .control-rail")){
+          e.preventDefault();
+        }
+      }, { passive:false });
+
+      document.addEventListener("contextmenu", (e)=>{
+        if(e.target && e.target.closest("#screen-record .control-rail")){
+          e.preventDefault();
+        }
+      });
+
+      // ---- Route Modal controls ---------------------------------------------------
+      const RouteModal = (() => {
+        const el = document.getElementById('routeModal');
+        const scrim = el?.querySelector('.ob-modal__scrim');
+        const btnClose = el?.querySelector('#routeModalClose');
+        const btnOk = el?.querySelector('#routeModalOk');
+        const FIRST = () => btnOk || btnClose;
+        let lastFocus = null;
+        const KEY = 'ob.routeModal.dismissedAt';
+        const COOLDOWN_MS = 10 * 60 * 1000; // 10 minutes
+
+        function inCooldown() {
+          const t = parseInt(localStorage.getItem(KEY) || '0', 10);
+          return Number.isFinite(t) && Date.now() - t < COOLDOWN_MS;
+        }
+        function markDismissed() { localStorage.setItem(KEY, String(Date.now())); }
+
+        function lockScroll(on) {
+          document.documentElement.style.overflow = on ? 'hidden' : '';
+          document.body.style.overflow = on ? 'hidden' : '';
+        }
+        function trap(e) {
+          if (e.key !== 'Tab') return;
+          const f = el.querySelectorAll('button,[href],input,summary,[tabindex]:not([tabindex="-1"])');
+          if (!f.length) return;
+          const first = f[0], last = f[f.length-1];
+          if (e.shiftKey && document.activeElement === first) { last.focus(); e.preventDefault(); }
+          if (!e.shiftKey && document.activeElement === last) { first.focus(); e.preventDefault(); }
+        }
+        function open() {
+          if (!el) return;
+          if (inCooldown()) return;
+          lastFocus = document.activeElement;
+          el.classList.remove('ob-hidden');
+          el.setAttribute('aria-hidden','false');
+          lockScroll(true);
+          document.addEventListener('keydown', onKey);
+          setTimeout(() => FIRST()?.focus(), 0);
+        }
+        function close() {
+          if (!el) return;
+          el.classList.add('ob-hidden');
+          el.setAttribute('aria-hidden','true');
+          lockScroll(false);
+          document.removeEventListener('keydown', onKey);
+          try { lastFocus && lastFocus.focus(); } catch {}
+        }
+        function onKey(e){ if (e.key === 'Escape') { markDismissed(); close(); } else trap(e); }
+
+        btnClose?.addEventListener('click', () => { markDismissed(); close(); });
+        document.getElementById('routeHow')?.addEventListener('toggle', () => {/* keep open */});
+        scrim?.addEventListener('click', () => { markDismissed(); close(); });
+        btnOk?.addEventListener('click', () => { markDismissed(); close(); });
+
+        return { open, close, inCooldown };
+      })();
+
+      // ---- Speaker fallback (session-scoped) -------------------------------------
+      const SPK_KEY = 'ob.spkFallbackSession'; // '1' for enabled this session
+      function enableSpeakerFallbackSession() { window.__OB_SPK_FALLBACK = true; sessionStorage.setItem(SPK_KEY, '1'); }
+      function disableSpeakerFallbackSession() { window.__OB_SPK_FALLBACK = false; sessionStorage.removeItem(SPK_KEY); }
+      function speakerFallbackActive() { return !!(window.__OB_SPK_FALLBACK || sessionStorage.getItem(SPK_KEY) === '1'); }
+
+      // Attempt routing to a speaker-like output if supported; otherwise no-op.
+      async function routeReaderToSpeaker(audioEl) {
+        try {
+          if (!audioEl || typeof audioEl.setSinkId !== 'function') return false;
+          const outs = await navigator.mediaDevices.enumerateDevices();
+          const speakers = outs.filter(d => d.kind === 'audiooutput' && /speaker|iphone/i.test((d.label||'')));
+          const target = speakers[0] || outs.find(d => d.kind === 'audiooutput');
+          if (target && target.deviceId) { await audioEl.setSinkId(target.deviceId); return true; }
+        } catch (e) { /* ignore */ }
+        return false; // iOS Safari may not support setSinkId; we degrade to guidance only
+      }
+
+      // Restore default output (best effort)
+      async function routeReaderToDefault(audioEl) {
+        try {
+          if (!audioEl || typeof audioEl.setSinkId !== 'function') return false;
+          await audioEl.setSinkId('default');
+          return true;
+        } catch { return false; }
+      }
+
+  // Wire modal "Fix now"
+      document.getElementById('routeModalFixNow')?.addEventListener('click', async () => {
+        enableSpeakerFallbackSession();
+        // if a media element exists, try to move it now (best effort)
+        try { await routeReaderToSpeaker(window.__OB_READER_EL); } catch {}
+        // keep modal open/closed? Close after action:
+        (window.RouteModal?.close || (()=>{}))();
+      });
+      // Persist flag for current tab reloads
+      if (sessionStorage.getItem(SPK_KEY) === '1') window.__OB_SPK_FALLBACK = true;
+      const adv = document.getElementById('advSpeakerFallback');
+      if (adv) {
+        adv.checked = speakerFallbackActive();
+        adv.addEventListener('change', () => {
+          if (adv.checked) enableSpeakerFallbackSession(); else disableSpeakerFallbackSession();
+        });
+      }
+
+      window.addEventListener("orientationchange", ()=>{
+        hideCountMenu();
+        clearTimeout(countHoldTimer);
+        countHoldTimer = null;
+      });
+      window.addEventListener("resize", ()=>{ if(countMenuOpen) positionCountMenu(); });
+
+      $("#btnFlipCam")?.addEventListener("click", async ()=>{
+        useBackCamera = !useBackCamera;
+        await applyCameraFacing();
+      });
+
+      /* Warm permissions when user navigates to Record */
+      const _origShowScreen = showScreen;
+      showScreen = function(name){
+        try{ hideCountMenu(); }catch{}
+        _origShowScreen(name);
+        if(name==="record"){
+          try{ requestMicPermissionOnce(); }catch{}
+          try{ startPreviewIfNeeded(); }catch{}
+          try{ updateRecordLayout(); }catch{}
+          try{ syncGridOverlayVisibility(); }catch{}
+          setRailStates();
+        }
+      };
+
+      window.addEventListener("pagehide", ()=>{
+        releaseWakeLock();
+        try{ hideCountMenu(); }catch{}
+        resetReaderActiveSources();
+        if(hasR()){
+          try{ R.readerCtx?.close(); }catch{}
+          R.readerCtx = null;
+          R.readerGain = null;
+          R.readerBridge = null;
+          R.readerBridgeSource = null;
+          R.readerRecordGain = null;
+          R.readerDirectConnected = false;
+          R.duckHintShown = false;
+        }
+        resetGalleryUrls();
+      });
+
+      // initial safe boot
+      try{
+  hydrateRehearse(); applyEditModeUI(); (function initAssign(){ $("#pillScript").textContent="script: "+(S.script_id||"—"); })();
+  renderGallery().catch(()=>{});
+      }catch(e){ showErr("UI init error: "+e); }
+    };
+
+    // Safe boot: never leave page inert
+    try {
+      if (document.readyState === "loading") {
+        document.addEventListener("DOMContentLoaded", boot, { once:true });
+      } else {
+        boot();
+      }
+    } catch (e) {
+      const eb = document.getElementById("errbar");
+      if (eb) { eb.textContent = "Fatal init error: "+e; eb.classList.add("show"); }
+    }
+  </script>
+
+  <!-- Route / Ringer Guidance Modal -->
+  <div id="routeModal" aria-hidden="true" role="dialog" aria-labelledby="routeModalTitle" aria-modal="true" class="ob-modal ob-hidden">
+    <div class="ob-modal__scrim"></div>
+    <div class="ob-modal__card" role="document">
+      <button id="routeModalClose" class="ob-modal__close" aria-label="Close">✕</button>
+      <div class="ob-modal__content">
+  <h2 id="routeModalTitle" class="ob-modal__title">Heads-up: iPhone may be in "call" mode</h2>
+        <p class="ob-modal__body">
+          If you can’t hear the reader during your line, flip your iPhone’s <b>ringer switch ON</b> (side of the phone) and avoid Bluetooth "call audio" mode.
+        </p>
+        <details id="routeHow" class="ob-modal__details">
+          <summary>Learn how</summary>
+          <ol>
+            <li>Flip the hardware <b>ringer switch ON</b> (on the side of the phone).</li>
+            <li>Settings → Bluetooth → your headphones → prefer media audio (avoid "call mode").</li>
+            <li>If issues persist: try wired earbuds or temporarily turn Mic Off for a pass.</li>
+          </ol>
+        </details>
+        <div class="ob-modal__actions">
+          <button id="routeModalFixNow" class="btn">Fix now</button>
+          <button id="routeModalOk" class="btn btn-primary">Understood</button>
+        </div>
+        <div class="ob-modal__footnote" style="opacity:.7;font-size:12px;margin-top:6px">
+          We'll use your phone speaker during your lines for this session only.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Count-in picker (landscape only) -->
+  <div id="countinMenu" class="countin-menu" hidden aria-hidden="true" role="menu">
+    <button type="button" data-sec="3">3 sec</button>
+    <button type="button" data-sec="5">5 sec</button>
+    <button type="button" data-sec="10">10 sec</button>
+  </div>
+
+  <div class="countdown" id="countdown" aria-hidden="true" style="display:none">
+    <div class="count-num" id="countNum">3</div>
+  </div>
+</body>
+</html>
