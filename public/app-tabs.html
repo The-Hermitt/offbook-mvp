@@ -367,9 +367,9 @@
     /* Sticky toolbar */
     .toolbar{
       position:sticky;
-      top:0;               /* stays pinned, but no overlap */
-      z-index:30;
-      margin:0 -20px 16px; /* remove negative top margin that hid status */
+      top:calc(var(--safe-top) + 2px); /* stop just below iOS status/Dynamic Island */
+      z-index:40;
+      margin:0 -20px 16px;
       padding:16px env(safe-area-inset-right) 16px env(safe-area-inset-left);
       background:linear-gradient(180deg, rgba(10,12,20,0.92) 0%, rgba(9,11,18,0.88) 100%);
       border-bottom:1px solid rgba(118,130,164,0.2);
@@ -1067,6 +1067,8 @@ JANE: Ready?"></textarea>
         </div>
         <div class="spacer6"></div>
         <div class="small" id="rehearseRenderStatus"></div>
+  <!-- Audio route unlock (appears only if iOS blocks playback after backgrounding) -->
+  <button id="btnEnableAudio" class="btn secondary" style="display:none;margin-top:8px">Enable Audio</button>
 
         <div class="spacer12"></div>
 
@@ -1254,8 +1256,18 @@ JANE: Ready?"></textarea>
         try {
           if (!window.audioCtx || window.audioCtx.state === 'closed') {
             window.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            try {
+              window.audioCtx.addEventListener('statechange', () => {
+                // If we’re suspended/interrupted after a background, require a user tap.
+                if (window.audioCtx && (window.audioCtx.state === 'suspended' || window.audioCtx.state === 'interrupted')) {
+                  window.__OB_NEEDS_UNLOCK = true;
+                }
+              });
+            } catch {}
           }
-          if (window.audioCtx.state === 'suspended') await window.audioCtx.resume();
+          if (window.audioCtx.state === 'suspended') {
+            try { await window.audioCtx.resume(); } catch { window.__OB_NEEDS_UNLOCK = true; }
+          }
         } catch {}
         return window.audioCtx;
       }
@@ -1284,6 +1296,247 @@ JANE: Ready?"></textarea>
           console.debug('[AUDIO] playTestBeep error', err);
         }
       }
+
+      // === UI NOTE ENGINE (retro-but-soothing) =====================================
+      // Uses the global window.audioCtx so it never rides the Record mix
+      const UINotes = (() => {
+        if (window.__OB_UI_NOTES) return window.__OB_UI_NOTES;
+
+        const STATE = {
+          master: null,         // GainNode
+          lastAt: 0,
+          voices: new Set(),
+          maxVoices: 4,
+        };
+
+        // Natural notes A–G (A4..G5 span, gentle)
+        const NOTE_FREQS = [440.00, 493.88, 523.25, 587.33, 659.25, 698.46, 783.99]; // A4,B4,C5,D5,E5,F5,G5
+
+        function hashToIndex(s) {
+          s = String(s || "");
+          let h = 0;
+          for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+          return h % NOTE_FREQS.length;
+        }
+
+        async function ctx() {
+          const c = await (window.audioCtx ? Promise.resolve(window.audioCtx) : ensureAudioContext());
+          if (c.state === "suspended") { try { await c.resume(); } catch {} }
+          if (!STATE.master) {
+            const g = c.createGain();
+            g.gain.value = 0.08; // soft
+            try { g.connect(c.destination); } catch {}
+            STATE.master = g;
+          } else {
+            // If the destination changed (new context/destination), re-connect.
+            try {
+              // A no-op disconnect throws if already disconnected; guard.
+              STATE.master.disconnect();
+            } catch {}
+            try { STATE.master.connect(c.destination); } catch {}
+          }
+          return window.audioCtx;
+        }
+
+        function playOnce(freq, durMs = 120) {
+          if (STATE.voices.size >= STATE.maxVoices) return; // avoid pileup
+          const c = window.audioCtx; if (!c || (c.state !== 'running' && c.state !== 'interactive')) return;
+          const start = c.currentTime + 0.001;
+          const dur = Math.max(0.06, Math.min(0.25, durMs / 1000));
+          const stopAt = start + dur;
+
+          const osc = c.createOscillator();
+          // "Atari but soothing": blend square/triangle via waveshaper-lite
+          osc.type = 'square';
+          // slight, random detune for "never the same"
+          const cents = (Math.random() * 8 - 4); // ±4 cents
+          try { osc.detune.value = cents * 100; } catch {}
+          osc.frequency.setValueAtTime(freq, start);
+
+          const g = c.createGain();
+          // gentle envelope
+          g.gain.setValueAtTime(0.0001, start);
+          g.gain.exponentialRampToValueAtTime(0.18, start + 0.012);
+          // creamy lowpass to tame harshness
+          const lp = c.createBiquadFilter();
+          lp.type = 'lowpass';
+          lp.frequency.setValueAtTime(Math.min(3200, freq * 3), start);
+
+          g.gain.setValueAtTime(0.18, stopAt - 0.03);
+          g.gain.exponentialRampToValueAtTime(0.0001, stopAt);
+
+          osc.connect(lp);
+          lp.connect(g);
+          g.connect(STATE.master);
+
+          osc.start(start);
+          osc.stop(stopAt);
+
+          const voice = { osc, g, lp };
+          STATE.voices.add(voice);
+          osc.onended = () => {
+            try { osc.disconnect(); lp.disconnect(); g.disconnect(); } catch {}
+            STATE.voices.delete(voice);
+          };
+        }
+
+        async function pingFor(el, evtName = "click") {
+          // Do not emit while actively recording; keeps takes clean
+          try { if (typeof R !== "undefined" && R && R.recording) return; } catch {}
+          const now = performance.now();
+          if ((now - (STATE.lastAt || 0)) < 30) return;
+          STATE.lastAt = now;
+          // Heuristic: stable ID → stable note; otherwise use text/role
+          const key =
+            el?.id ||
+            el?.getAttribute?.("data-act") ||
+            el?.getAttribute?.("aria-controls") ||
+            el?.textContent?.trim() ||
+            evtName ||
+            "btn";
+          const idx = hashToIndex(key);
+          const base = NOTE_FREQS[idx];
+          await ctx();
+          // slight random duration gives "never exactly the same"
+          const durMs = 90 + Math.round(Math.random() * 50);
+          playOnce(base, durMs);
+        }
+
+        window.__OB_UI_NOTES = { pingFor };
+        return window.__OB_UI_NOTES;
+      })();
+
+      // === Reader restore state (idempotent) ======================================
+      // Always resolve the *current* reader element (Rehearse or Record)
+      function getReaderEl() {
+        // Prefer the rehearse element if present during Rehearse
+        const rehearseEl = (typeof E !== "undefined" && E && E.rehearseAudio) ? E.rehearseAudio : null;
+        const recordEl   = document.getElementById('readerAudio');
+        const el = rehearseEl || recordEl || window.__OB_READER_EL || null;
+        if (el) window.__OB_READER_EL = el; // keep the singleton pointing at what we actually use
+        return el;
+      }
+      if (typeof window.__OB_LAST_READER_URL === 'undefined') window.__OB_LAST_READER_URL = null;
+      if (typeof window.__OB_NEEDS_UNLOCK === 'undefined') window.__OB_NEEDS_UNLOCK = false;
+      const btnEnableAudio = document.getElementById('btnEnableAudio');
+
+      function rememberReaderUrl(url) {
+        if (url && typeof url === 'string') window.__OB_LAST_READER_URL = url;
+      }
+
+      async function kickReaderElement() {
+        // Try both elements if they exist
+        const candidates = [];
+        const a = getReaderEl(); if (a) candidates.push(a);
+        const rehearseEl = (typeof E !== "undefined" && E && E.rehearseAudio) ? E.rehearseAudio : null;
+        const recordEl   = document.getElementById('readerAudio');
+        if (rehearseEl && !candidates.includes(rehearseEl)) candidates.push(rehearseEl);
+        if (recordEl && !candidates.includes(recordEl)) candidates.push(recordEl);
+
+        for (const el of candidates) {
+          try {
+            el.pause();
+            const url = window.__OB_LAST_READER_URL;
+            el.removeAttribute('src');
+            el.load();
+            if (url) {
+              el.src = url;
+              rememberReaderUrl(url);
+              el.load();
+            }
+          } catch (e) {
+            console.debug('[AUDIO] kickReaderElement', e);
+          }
+        }
+      }
+
+      async function restoreAudioRoute(tag = 'restore') {
+        try {
+          // 1) Resume the global beep ctx (used by test pings / UI sounds)
+          const ctx = await ensureAudioContext();
+          if (ctx?.state === 'suspended') { try { await ctx.resume(); } catch {} }
+
+          // 2) Resume the reader’s WebAudio graph if present (buffer playback path)
+          try {
+            if (typeof hasR === 'function' && hasR()) {
+              try { await ensureReaderCtx(); } catch {}
+              if (R.readerCtx?.state === 'suspended') { try { await R.readerCtx.resume(); } catch {} }
+
+              // If our gain isn’t connected (e.g., after a prior mix graph), restore direct monitor
+              if (R.readerCtx && R.readerGain && !R.readerDirectConnected) {
+                try { restoreReaderDirectMonitor(); } catch {}
+              }
+            }
+          } catch {}
+
+          // 3) For HTMLMediaElement path, reattach src to rebind the output route
+          await kickReaderElement();
+
+          // 4) Warmup ping (binds route on some iOS versions)
+          await playTestBeep(120);
+        } catch (e) {
+          console.debug('[AUDIO] restoreAudioRoute', tag, e);
+        }
+      }
+
+      document.addEventListener('visibilitychange', async () => {
+        if (!document.hidden) {
+          // Coming back to foreground: assume we may need a gesture to unlock.
+          if (window.audioCtx && (window.audioCtx.state === 'suspended' || window.audioCtx.state === 'interrupted')) {
+            window.__OB_NEEDS_UNLOCK = true;
+          }
+          console.debug('[AUDIO] visibility -> foreground');
+          await restoreAudioRoute('visibility');
+        }
+      }, { passive: true });
+
+      window.addEventListener('pageshow', async (ev) => {
+        if (ev?.persisted === true || !document.hidden) {
+          console.debug('[AUDIO] pageshow (bfcache or foreground)');
+          await restoreAudioRoute('pageshow');
+        }
+      }, { passive: true });
+
+      window.addEventListener('pageshow', async () => {
+        try { if (typeof hasR === 'function' && hasR()) await ensureReaderCtx(); } catch {}
+      });
+
+      document.addEventListener('visibilitychange', async () => {
+        if (!document.hidden) {
+          try { if (typeof hasR === 'function' && hasR()) await ensureReaderCtx(); } catch {}
+        }
+      });
+
+      async function tryUnlockAudio(from = 'tap') {
+        try {
+          const ctx = await ensureAudioContext();
+          if (ctx && (ctx.state === 'suspended' || ctx.state === 'interrupted')) {
+            try { await ctx.resume(); } catch {}
+          }
+          const _el = getReaderEl();
+          if (_el && window.__OB_LAST_READER_URL) {
+            await kickReaderElement();
+            try { await _el.play(); } catch {}
+          }
+          window.__OB_NEEDS_UNLOCK = false;
+          if (btnEnableAudio) btnEnableAudio.style.display = 'none';
+        } catch (e) {
+          console.debug('[AUDIO] tryUnlockAudio', from, e);
+          window.__OB_NEEDS_UNLOCK = true;
+          if (btnEnableAudio) btnEnableAudio.style.display = '';
+        }
+      }
+
+      ['click', 'touchend'].forEach((ev) => {
+        document.addEventListener(ev, () => {
+          if (window.__OB_NEEDS_UNLOCK) tryUnlockAudio(ev);
+        }, { passive: true });
+      });
+
+      if (btnEnableAudio) {
+        btnEnableAudio.addEventListener('click', () => tryUnlockAudio('button'));
+      }
+
       // --- Belt & suspenders guard (safe checks for the Record state object) ---
       const hasR = () => !!(typeof R !== "undefined" && R && typeof R === "object");
       // Tight mode when recording
@@ -2053,10 +2306,20 @@ JANE: Ready?"></textarea>
       } catch {}
 
       async function hardResumeOnGesture() {
+        // Resume both contexts under a user gesture
         const ctx = await ensureAudioContext();
-        if (ctx?.state !== 'running') {
-          try { await ctx.resume(); } catch {}
-        }
+        if (ctx?.state !== 'running') { try { await ctx.resume(); } catch {} }
+
+        try {
+          if (typeof hasR === 'function' && hasR()) {
+            try { await ensureReaderCtx(); } catch {}
+            if (R.readerCtx?.state === 'suspended') { try { await R.readerCtx.resume(); } catch {} }
+            if (R.readerCtx && R.readerGain && !R.readerDirectConnected) {
+              try { restoreReaderDirectMonitor(); } catch {}
+            }
+          }
+        } catch {}
+
         try { await window.__OB_READER_EL?.setSinkId?.('default'); } catch {}
       }
 
@@ -2507,7 +2770,9 @@ JANE: Ready?"></textarea>
         const url = RR.map.get(i);
         if(!url) return false;
         try{
-          E.rehearseAudio.src = url + (url.includes("?") ? "&" : "?") + "t=" + Date.now();
+          const bustedUrl = url + (url.includes("?") ? "&" : "?") + "t=" + Date.now();
+          E.rehearseAudio.src = bustedUrl;
+          rememberReaderUrl(bustedUrl);
           await E.rehearseAudio.play();
           await new Promise(res=>{ E.rehearseAudio.onended=()=>res(null); E.rehearseAudio.onerror=()=>res(null); });
           return true;
@@ -2557,6 +2822,22 @@ JANE: Ready?"></textarea>
         playing=!playing;
         $("#btnPlay").textContent=playing?"Pause":"Play";
         if(playing){
+          const reader = getReaderEl();
+          if (window.__OB_NEEDS_UNLOCK && getReaderEl() && window.__OB_LAST_READER_URL) {
+            await restoreAudioRoute('play');
+            const _el = getReaderEl();
+            if (_el) {
+              try {
+                await _el.play();
+                window.__OB_NEEDS_UNLOCK = false;
+                if (btnEnableAudio) btnEnableAudio.style.display = 'none';
+              } catch (err) {
+                console.debug('[AUDIO] play blocked; prompting unlock', err);
+                window.__OB_NEEDS_UNLOCK = true;
+                if (btnEnableAudio) btnEnableAudio.style.display = '';
+              }
+            }
+          }
           try{
             const cur = current();
             if(cur && cur.speaker === myName()){
@@ -2580,6 +2861,22 @@ JANE: Ready?"></textarea>
         if(!list.length) return;
         try{ sr?.stop(); }catch{};
         clearMy();
+        const reader = getReaderEl();
+        if (window.__OB_NEEDS_UNLOCK && getReaderEl() && window.__OB_LAST_READER_URL) {
+          await restoreAudioRoute('play');
+          const _el = getReaderEl();
+          if (_el) {
+            try {
+              await _el.play();
+              window.__OB_NEEDS_UNLOCK = false;
+              if (btnEnableAudio) btnEnableAudio.style.display = 'none';
+            } catch (err) {
+              console.debug('[AUDIO] play blocked; prompting unlock', err);
+              window.__OB_NEEDS_UNLOCK = true;
+              if (btnEnableAudio) btnEnableAudio.style.display = '';
+            }
+          }
+        }
         idx=Math.min(list.length-1,idx+1);
         highlightCurrent();
         if(playing) step(true);
@@ -2597,6 +2894,51 @@ JANE: Ready?"></textarea>
 
       $("#btnToggleEditMode")?.addEventListener("click",()=>{ S.editMode=!S.editMode; applyEditModeUI(); });
       function applyEditModeUI(){ $("#btnToggleEditMode")?.setAttribute("aria-pressed",S.editMode?"true":"false"); $("#editModeState").textContent=S.editMode?"On":"Off"; $$(".editbar",$("#lines")).forEach(el=>el.style.display=S.editMode?"flex":"none"); $$(".inline-slot",$("#lines")).forEach(el=>el.style.display=S.editMode?"flex":"none"); if(E.inlineForm && E.inlineForm.isConnected){ try{ E.inlineForm.remove(); }catch{}; E.currentSlotPlace=null; } }
+
+      // === UI NOTE WIRING ===========================================================
+      // Guard against double-binding across hot reloads
+      if (!window.__OB_UI_NOTES_WIRED__) {
+        window.__OB_UI_NOTES_WIRED__ = true;
+
+        // 1) Any button click anywhere (including tabbar, rail, inner-tabs, gallery)
+        document.addEventListener('click', (ev) => {
+          const btn = ev.target && (ev.target.closest('button') || ev.target.closest('[role="button"]'));
+          if (!btn) return;
+          // Ensure audio is unlocked before we try to play a UI note.
+          if (window.__OB_NEEDS_UNLOCK) { try { hardResumeOnGesture(); window.__OB_NEEDS_UNLOCK = false; } catch {} }
+          try { UINotes.pingFor(btn, 'click'); } catch {}
+        }, { passive: true });
+
+        // 2) Important non-button controls
+        //    - file chooser changes
+        document.addEventListener('change', (ev) => {
+          const input = ev.target && ev.target.closest('input[type="file"]');
+          if (input) { try { UINotes.pingFor(input, 'change:file'); } catch {} }
+        }, { passive: true });
+
+        //    - selects (role, pacing, etc.)
+        document.addEventListener('change', (ev) => {
+          const sel = ev.target && ev.target.closest('select');
+          if (sel) { try { UINotes.pingFor(sel, 'change:select'); } catch {} }
+        }, { passive: true });
+
+        //    - tab switches via nav (dataset.tab)
+        document.querySelectorAll('.tabbar [data-tab]').forEach(btn => {
+          btn.addEventListener('click', () => { try { UINotes.pingFor(btn, 'tab'); } catch {} }, { passive: true });
+        });
+
+        //    - inner Import tabs
+        ['#tab-text', '#tab-pdf'].forEach(q => {
+          const el = document.querySelector(q);
+          if (el) el.addEventListener('click', () => { try { UINotes.pingFor(el, 'inner-tab'); } catch {} }, { passive: true });
+        });
+
+        //    - Gallery card actions (play / download / delete)
+        document.addEventListener('click', (ev) => {
+          const actBtn = ev.target && ev.target.closest('.take-card [data-act]');
+          if (actBtn) { try { UINotes.pingFor(actBtn, 'gallery'); } catch {} }
+        }, { passive: true });
+      }
 
       /* ----------------- RECORD TAB (updated for 16x9 + right rail) ----------------- */
 
@@ -3042,7 +3384,9 @@ JANE: Ready?"></textarea>
             const js = await safeJson(s);
             if(js.status==="complete" && js.download_url){
               R.download_url = js.download_url + "?t=" + Date.now();
-              R.audio.src = R.download_url; R.audio.load();
+              R.audio.src = R.download_url;
+              rememberReaderUrl(R.download_url);
+              R.audio.load();
               clearInterval(dotsTimer);
               setStatusRec("Reader ready.");
               R.btnRender.disabled = false;
