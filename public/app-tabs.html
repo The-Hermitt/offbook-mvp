@@ -1222,26 +1222,29 @@ JANE: Ready?"></textarea>
 
   <!-- App -->
   <script type="module">
+    /* ——— OffBook auth bootstrap ——— */
+    (() => {
+      const url = new URL(window.location.href);
+      const qs = url.searchParams.get('secret');
+      const saved = localStorage.getItem('offbook_secret') || '';
+      const SECRET = (qs && qs.trim()) || saved || '';
+      if (qs && qs !== saved) localStorage.setItem('offbook_secret', qs);
+      if (SECRET) {
+        document.cookie = `ob_secret=${encodeURIComponent(SECRET)}; Path=/; Max-Age=31536000; SameSite=Lax`;
+      }
+      // expose for fetch helper
+      window.__OB_SECRET__ = SECRET;
+    })();
+    function withSecretHeaders(init = {}) {
+      const headers = new Headers(init.headers || {});
+      const s = (window as any).__OB_SECRET__ || localStorage.getItem('offbook_secret') || '';
+      if (s) headers.set('X-Shared-Secret', s);
+      return { ...init, headers };
+    }
+
     import { expectedMinMsFor, AFTER_ADV_COOLDOWN_MS, isSpeaking, endsWithDashy, readyForAdvance } from "./js/speech-timing.js";
     const boot = () => {
-      // Extract and persist secret
-      const url = new URL(window.location.href);
-      const qsSecret = url.searchParams.get('secret');
-      const savedSecret = localStorage.getItem('offbook_secret') || '';
-      const SECRET = (qsSecret && qsSecret.trim()) || savedSecret || '';
-      if (qsSecret && qsSecret !== savedSecret) {
-        localStorage.setItem('offbook_secret', qsSecret);
-        // optional: clean the URL (remove ?secret=...) without reload
-        try { history.replaceState({}, '', url.pathname + url.hash); } catch {}
-      }
       const API_BASE = '/debug';
-      
-      // Helper to add secret header when needed
-      function withSecretHeaders(init = {}) {
-        const headers = new Headers(init.headers || {});
-        if (SECRET) headers.set('X-Shared-Secret', SECRET);
-        return { ...init, headers };
-      }
 
     const $ = (s,r=document)=>r.querySelector(s);
     const $$ = (s,r=document)=>Array.from(r.querySelectorAll(s));
