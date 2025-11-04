@@ -22,12 +22,15 @@ function secretGuard(req: Request, res: Response, next: NextFunction) {
   const required = process.env.SHARED_SECRET;
   if (!required) return next();
 
+  // header
   const providedHeader = req.header("X-Shared-Secret") || "";
 
+  // cookie 'ob_secret'
   const cookie = req.headers.cookie || "";
   const m = cookie.match(/(?:^|;\s*)ob_secret=([^;]+)/);
   const providedCookie = m ? decodeURIComponent(m[1]) : "";
 
+  // debug (enable with DEBUG_AUTH=1)
   if (process.env.DEBUG_AUTH === "1") {
     const mask = (v: string) => (v ? v[0] + "***" + v.slice(-1) : "<none>");
     console.log("[auth]", req.method, req.path, {

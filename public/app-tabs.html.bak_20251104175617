@@ -1222,6 +1222,19 @@ JANE: Ready?"></textarea>
 
   <!-- App -->
   <script type="module">
+/* ——— OffBook auth bootstrap ——— */
+(() => {
+  const url = new URL(window.location.href);
+  const qs = url.searchParams.get('secret');
+  const saved = localStorage.getItem('offbook_secret') || '';
+  const SECRET = (qs && qs.trim()) || saved || '';
+  if (qs && qs !== saved) localStorage.setItem('offbook_secret', qs);
+  if (SECRET) {
+    document.cookie = `ob_secret=${encodeURIComponent(SECRET)}; Path=/; Max-Age=31536000; SameSite=Lax`;
+  }
+  window.__OB_SECRET__ = SECRET;
+})();
+
     import { expectedMinMsFor, AFTER_ADV_COOLDOWN_MS, isSpeaking, endsWithDashy, readyForAdvance } from "./js/speech-timing.js";
     const boot = () => {
       // Extract and persist secret
