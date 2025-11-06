@@ -1,12 +1,12 @@
-import express, { Request, Response, NextFunction } from "express";
+import express, { Request, Response } from "express";
 import cors from "cors";
 import path from "path";
 import multer from "multer";
 import { createRequire } from "module";
+import cookieParser from "cookie-parser";
 
 const app = express();
 const PORT = Number(process.env.PORT || 3010);
-const SHARED = process.env.SHARED_SECRET || "";
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
 
 // --- tiny helper: safe fetch with timeout ---
@@ -26,21 +26,54 @@ async function fetchWithTimeout(input: RequestInfo, init: RequestInit & { timeou
 app.use(cors());
 app.use(express.json({ limit: "5mb" }));
 app.use(express.urlencoded({ extended: true }));
+app.use(cookieParser());
 
 // Static UI
 app.use("/public", express.static(path.join(process.cwd(), "public")));
 app.use("/", express.static(path.join(process.cwd(), "public")));
 
-function requireSecret(req: Request, res: Response, next: NextFunction) {
-  if (!SHARED) return next();
-  const header = req.get("X-Shared-Secret");
-  if (header === SHARED) return next();
-  res.status(401).json({ error: "unauthorized" });
+function getSharedSecret(): string | undefined {
+  const s = process.env.SHARED_SECRET;
+  return s && s.trim().length > 0 ? s.trim() : undefined;
 }
+
+type RequestWithCookies = import("express").Request & {
+  cookies?: Record<string, unknown>;
+};
+
+function extractProvidedSecret(req: import("express").Request): string | undefined {
+  const h = (req.headers["x-shared-secret"] as string | undefined)?.trim();
+  const cookies = (req as RequestWithCookies).cookies;
+  const rawCookie = cookies?.["ob_secret"];
+  const c = typeof rawCookie === "string" ? rawCookie.trim() : undefined;
+  return h || c || undefined;
+}
+
+function requireSharedSecret(): import("express").RequestHandler {
+  return (req, res, next) => {
+    const expected = getSharedSecret();
+    if (!expected) return next();
+    const provided = extractProvidedSecret(req);
+    if (provided === expected) {
+      if (!req.headers["x-shared-secret"]) {
+        req.headers["x-shared-secret"] = provided;
+      }
+      return next();
+    }
+    res.status(401).json({
+      error: "unauthorized",
+      reason: "missing_or_invalid_secret",
+    });
+  };
+}
+
+const sharedSecretMiddleware = requireSharedSecret();
+app.use("/debug", sharedSecretMiddleware);
+const requireSecret = sharedSecretMiddleware;
 
 // Health
 app.get("/health", (_req, res) =>
-  res.json({ ok: true, env: { PORT, has_shared_secret: !!SHARED } })
+  res.json({ ok: true, env: { PORT, has_shared_secret: !!getSharedSecret() } })
 );
 app.get("/health/tts", (_req, res) =>
   res.json({ engine: "openai", has_key: !!OPENAI_API_KEY })
@@ -406,6 +439,7 @@ await tryMountProjectHttpRoutes().then((mounted) => { if (!mounted) mountFallbac
 // Start
 app.listen(PORT, () => {
   console.log(`OffBook MVP listening on http://localhost:${PORT}`);
-  if (SHARED) console.log(`Debug routes require header X-Shared-Secret: ${SHARED}`);
-  console.log("UI tip: open /app-tabs.html?secret=" + (SHARED || "(none)"));
+  const shared = getSharedSecret();
+  if (shared) console.log(`Debug routes require header X-Shared-Secret: ${shared}`);
+  console.log("UI tip: open /app-tabs.html?secret=" + (shared || "(none)"));
 });
