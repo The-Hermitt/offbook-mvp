@@ -1140,9 +1140,32 @@ JANE: Ready?"></textarea>
       </div>
     </section>
 
-    <!-- INFO -->
-    <section id="screen-info" class="screen">
+    <!-- SETTINGS -->
+    <section id="screen-settings" class="screen">
       <div class="card">
+        <h3>Settings</h3>
+        <div class="hint">Access Code → Passkey (WebAuthn). Secret remains available for staging.</div>
+        <div class="spacer8"></div>
+
+        <label>Access Code</label>
+        <input id="inviteCode" type="text" placeholder="Enter invite code" autocomplete="one-time-code" />
+
+        <div class="spacer8"></div>
+        <div class="row">
+          <button id="btnRegisterPasskey" class="btn">Register Passkey</button>
+          <button id="btnSignIn" class="btn secondary">Sign In</button>
+          <button id="btnSignOut" class="btn secondary">Sign Out</button>
+        </div>
+
+        <div class="spacer8"></div>
+        <pre id="authStatus" class="status" aria-live="polite"></pre>
+
+        <div class="spacer8"></div>
+        <div id="reauthTip" class="small" style="display:none">
+          Got a 401? <a href="#" id="linkReenterCode">Re-enter Access Code</a>.
+        </div>
+
+        <div class="spacer12"></div>
         <h3>Info & How to Use</h3>
         <p class="hint">Quick start guide. Headphones recommended for clean timing.</p>
 
@@ -1212,7 +1235,8 @@ JANE: Ready?"></textarea>
       <button data-tab="rehearse" role="tab" aria-selected="false">Rehearse</button>
       <button data-tab="record" role="tab" aria-selected="false">Record</button>
       <button data-tab="gallery" role="tab" aria-selected="false">Gallery</button>
-      <button data-tab="info" role="tab" aria-selected="false">Info</button>
+      <button data-tab="settings" role="tab" aria-selected="false">Settings</button>
+      <span id="privacyBadge" class="badge small" style="justify-self:end; align-self:center; display:none">🔒 Private</span>
     </div>
   </nav>
 
@@ -1257,6 +1281,163 @@ JANE: Ready?"></textarea>
         next.headers = headers;
         return next;
       }
+      async function refreshPrivacyBadge() {
+        try {
+          const res = await fetch("/auth/session", withSecretHeaders());
+          let has = false;
+          if (res.ok) {
+            const s = await res.json();
+            has = Boolean(s?.userId) || Boolean(window.__OB_SECRET__);
+          } else {
+            // 401 still counts as private if a secret is present
+            has = Boolean(window.__OB_SECRET__);
+          }
+          const el = document.getElementById("privacyBadge");
+          if (el) el.style.display = has ? "inline-block" : "none";
+        } catch {
+          // ignore network errors
+        }
+      }
+      document.addEventListener("DOMContentLoaded", refreshPrivacyBadge);
+      // ---- WebAuthn helpers (no external libs) ----
+      const b64uToBuf = (b64u) => {
+        if (b64u instanceof ArrayBuffer) return b64u;
+        if (b64u instanceof Uint8Array) return b64u.buffer;
+        if (typeof b64u !== "string") throw new Error("Expected base64url string for WebAuthn field");
+        const pad = "=".repeat((4 - (b64u.length % 4)) % 4);
+        const b64 = (b64u.replace(/-/g, "+").replace(/_/g, "/") + pad);
+        const str = atob(b64);
+        const bytes = new Uint8Array(str.length);
+        for (let i = 0; i < str.length; i++) bytes[i] = str.charCodeAt(i);
+        return bytes.buffer;
+      };
+      const bufToB64u = (buf) => {
+        const bytes = new Uint8Array(buf);
+        let str = '';
+        for (let i = 0; i < bytes.byteLength; i++) str += String.fromCharCode(bytes[i]);
+        const b64 = btoa(str).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/,'');
+        return b64;
+      };
+
+      function transformRegOptions(optsIn) {
+        const src = optsIn && optsIn.publicKey ? optsIn.publicKey : optsIn;
+        if (!src || !src.challenge) { throw new Error("Registration options missing challenge"); }
+        const o = { ...src };
+        o.challenge = b64uToBuf(src.challenge);
+        if (o.user && typeof o.user.id === "string") o.user = { ...o.user, id: b64uToBuf(o.user.id) };
+        if (Array.isArray(o.excludeCredentials)) {
+          o.excludeCredentials = o.excludeCredentials.map(c => ({ ...c, id: b64uToBuf(c.id) }));
+        }
+        return o;
+      }
+      function transformAuthOptions(optsIn) {
+        const src = optsIn && optsIn.publicKey ? optsIn.publicKey : optsIn;
+        if (!src || !src.challenge) { throw new Error("Authentication options missing challenge"); }
+        const o = { ...src };
+        o.challenge = b64uToBuf(src.challenge);
+        if (Array.isArray(o.allowCredentials)) {
+          o.allowCredentials = o.allowCredentials.map(c => ({ ...c, id: b64uToBuf(c.id) }));
+        }
+        return o;
+      }
+      function credToJSON(cred) {
+        // Recursively convert ArrayBuffers in PublicKeyCredential to base64url for JSON
+        const recurse = (x) => {
+          if (x instanceof ArrayBuffer) return bufToB64u(x);
+          if (Array.isArray(x)) return x.map(recurse);
+          if (x && typeof x === 'object') {
+            const out = {};
+            for (const k of Object.keys(x)) out[k] = recurse(x[k]);
+            return out;
+          }
+          return x;
+        };
+        return recurse(cred);
+      }
+      async function beginRegister() {
+        let lastOpts = null;
+        try {
+          const accessCode = document.getElementById("inviteCode")?.value || "";
+          const r1 = await fetch("/auth/begin-register", withSecretHeaders({
+            method: "POST",
+            headers: { "Content-Type":"application/json" },
+            body: JSON.stringify({ accessCode })
+          }));
+          if (!r1.ok) { document.getElementById("authStatus").textContent = "Register: " + await r1.text(); return; }
+          const opts = await r1.json();
+          lastOpts = opts;
+          const publicKey = transformRegOptions(opts);
+          const attResp = await navigator.credentials.create({ publicKey });
+          const payload = credToJSON(attResp);
+          const r2 = await fetch("/auth/finish-register", withSecretHeaders({
+            method: "POST",
+            headers: { "Content-Type":"application/json" },
+            body: JSON.stringify(payload)
+          }));
+          document.getElementById("authStatus").textContent = r2.ok ? "Passkey registered." : ("Register failed: " + await r2.text());
+          refreshPrivacyBadge();
+        } catch (err) {
+          const msg = (err && err.message) ? err.message : String(err);
+          const statusEl = document.getElementById("authStatus");
+          if (statusEl) statusEl.textContent = "Register error: " + msg;
+          try {
+            const txt = await (await fetch("/auth/session", withSecretHeaders())).text();
+            void txt;
+          } catch {}
+          if (statusEl && /missing challenge/i.test(msg)) {
+            const payloadObj = lastOpts && lastOpts.publicKey ? lastOpts.publicKey : lastOpts;
+            const keys = payloadObj && typeof payloadObj === "object" ? Object.keys(payloadObj) : [];
+            statusEl.textContent = msg + " · payload keys: " + JSON.stringify(keys);
+          }
+          console.error("beginRegister error", err);
+        }
+      }
+
+      async function beginLogin() {
+        let lastOpts = null;
+        try {
+          const r1 = await fetch("/auth/begin-login", withSecretHeaders({ method:"POST" }));
+          if (!r1.ok) { document.getElementById("authStatus").textContent = "Login: " + await r1.text(); return; }
+          const opts = await r1.json();
+          lastOpts = opts;
+          const publicKey = transformAuthOptions(opts);
+          const assertion = await navigator.credentials.get({ publicKey });
+          const payload = credToJSON(assertion);
+          const r2 = await fetch("/auth/finish-login", withSecretHeaders({
+            method:"POST",
+            headers: { "Content-Type":"application/json" },
+            body: JSON.stringify(payload)
+          }));
+          document.getElementById("authStatus").textContent = r2.ok ? "Signed in." : ("Login failed: " + await r2.text());
+          if (r2.status === 401) { const t = document.getElementById("reauthTip"); if (t) t.style.display = "block"; }
+          refreshPrivacyBadge();
+        } catch (err) {
+          const msg = (err && err.message) ? err.message : String(err);
+          const statusEl = document.getElementById("authStatus");
+          if (statusEl) statusEl.textContent = "Login error: " + msg;
+          try {
+            const txt = await (await fetch("/auth/session", withSecretHeaders())).text();
+            void txt;
+          } catch {}
+          if (statusEl && /missing challenge/i.test(msg)) {
+            const payloadObj = lastOpts && lastOpts.publicKey ? lastOpts.publicKey : lastOpts;
+            const keys = payloadObj && typeof payloadObj === "object" ? Object.keys(payloadObj) : [];
+            statusEl.textContent = msg + " · payload keys: " + JSON.stringify(keys);
+          }
+          console.error("beginLogin error", err);
+        }
+      }
+
+      async function signOut() {
+        await fetch("/auth/logout", withSecretHeaders({ method:"POST" }));
+        document.getElementById("authStatus").textContent = "Signed out.";
+        refreshPrivacyBadge();
+      }
+
+      document.getElementById("btnRegisterPasskey")?.addEventListener("click", () => beginRegister());
+      document.getElementById("btnSignIn")?.addEventListener("click", () => beginLogin());
+      document.getElementById("btnSignOut")?.addEventListener("click", () => signOut());
+      document.getElementById("linkReenterCode")?.addEventListener("click", (e)=>{ e.preventDefault(); document.getElementById("inviteCode")?.focus(); });
     const $ = (s,r=document)=>r.querySelector(s);
     const $$ = (s,r=document)=>Array.from(r.querySelectorAll(s));
     // --- TDZ fix: declare R early so Safari doesn't throw before it's assigned ---

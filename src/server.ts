@@ -4,6 +4,11 @@ import path from "path";
 import multer from "multer";
 import { createRequire } from "module";
 import cookieParser from "cookie-parser";
+import cookieSession from "cookie-session";
+import { makeAuthRouter } from "./auth/routes";
+import db from "./lib/db";
+import { ensureAuditTable, makeAuditMiddleware } from "./lib/audit";
+import { makeRateLimiters } from "./middleware/rateLimit";
 
 const app = express();
 const PORT = Number(process.env.PORT || 3010);
@@ -31,6 +36,23 @@ app.use(cookieParser());
 // Static UI
 app.use("/public", express.static(path.join(process.cwd(), "public")));
 app.use("/", express.static(path.join(process.cwd(), "public")));
+
+if (typeof app?.set === "function") { app.set("trust proxy", 1); }
+
+app.use(cookieSession({
+  name: "ob_sess",
+  secret: process.env.SESSION_SECRET || "dev-secret-change-me",
+  sameSite: "lax",
+  httpOnly: true,
+  secure: process.env.NODE_ENV === "production",
+  maxAge: 1000 * 60 * 60 * 24 * 30, // 30 days
+}));
+
+app.use("/auth", makeAuthRouter());
+
+ensureAuditTable(db);
+const audit = makeAuditMiddleware(db);
+const { debugLimiter, renderLimiter } = makeRateLimiters();
 
 function getSharedSecret(): string | undefined {
   const s = process.env.SHARED_SECRET;
@@ -68,7 +90,7 @@ function requireSharedSecret(): import("express").RequestHandler {
 }
 
 const sharedSecretMiddleware = requireSharedSecret();
-app.use("/debug", sharedSecretMiddleware);
+app.use("/debug", sharedSecretMiddleware, debugLimiter);
 const requireSecret = sharedSecretMiddleware;
 
 // Health
@@ -282,7 +304,7 @@ app.post("/debug/tts_line", requireSecret, async (req: Request, res: Response) =
 function mountFallbackDebugRoutes() {
   app.get("/debug/ping", requireSecret, (_req, res) => res.json({ ok: true }));
 
-  app.post("/debug/upload_script_text", requireSecret, (req: Request, res: Response) => {
+  app.post("/debug/upload_script_text", requireSecret, audit("/debug/upload_script_text"), (req: Request, res: Response) => {
     const title = String(req.body?.title || "Script");
     const text = String(req.body?.text || "");
     const id = genId("scr");
@@ -293,7 +315,7 @@ function mountFallbackDebugRoutes() {
   });
 
   // Robust PDF (text) import
-  app.post("/debug/upload_script_upload", requireSecret, upload.single("pdf"), async (req: Request, res: Response) => {
+  app.post("/debug/upload_script_upload", requireSecret, audit("/debug/upload_script_upload"), upload.single("pdf"), async (req: Request, res: Response) => {
     const title = String((req.body as any)?.title || "PDF");
     const pdfBuf = (req as any).file?.buffer as Buffer | undefined;
     if (!pdfBuf) return res.status(400).json({ error: "missing pdf file" });
@@ -336,14 +358,14 @@ function mountFallbackDebugRoutes() {
     }
   });
 
-  app.get("/debug/scenes", requireSecret, (req: Request, res: Response) => {
+  app.get("/debug/scenes", requireSecret, audit("/debug/scenes"), (req: Request, res: Response) => {
     const script_id = String(req.query.script_id || "");
     const s = mem.scripts.get(script_id);
     if (!s) return res.status(404).json({ error: "not found" });
     res.json({ script_id, scenes: s.scenes });
   });
 
-  app.post("/debug/set_voice", requireSecret, (req: Request, res: Response) => {
+  app.post("/debug/set_voice", requireSecret, audit("/debug/set_voice"), (req: Request, res: Response) => {
     const script_id = String((req.body as any)?.script_id || "");
     const voice_map = (req.body as any)?.voice_map || {};
     const s = mem.scripts.get(script_id);
@@ -353,7 +375,7 @@ function mountFallbackDebugRoutes() {
   });
 
   // REAL: Render partner-only reader MP3 with OpenAI
-  app.post("/debug/render", requireSecret, async (req: Request, res: Response) => {
+  app.post("/debug/render", requireSecret, renderLimiter, audit("/debug/render"), async (req: Request, res: Response) => {
     const script_id = String((req.body as any)?.script_id || "");
     const myRole = String((req.body as any)?.my_role || "").toUpperCase();
     const paceMs = Number((req.body as any)?.pace_ms || 0);
@@ -396,7 +418,7 @@ function mountFallbackDebugRoutes() {
     res.json({ render_id: rid, status: "queued" });
   });
 
-  app.get("/debug/render_status", requireSecret, (req: Request, res: Response) => {
+  app.get("/debug/render_status", requireSecret, audit("/debug/render_status"), (req: Request, res: Response) => {
     const rid = String(req.query.render_id || "");
     const r = mem.renders.get(rid);
     if (!r) return res.status(404).json({ error: "not found" });
