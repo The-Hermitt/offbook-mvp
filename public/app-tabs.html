@@ -964,6 +964,57 @@
     @supports (padding:max(0px)) {
       .ob-modal__card { padding-bottom: max(20px, env(safe-area-inset-bottom)); }
     }
+    /* === Auth Landing (full-screen lock) ====================================== */
+    .auth-landing-scrim{
+      background: radial-gradient(1200px 800px at 70% 20%, rgba(30,35,50,0.7), rgba(0,0,0,0.7)),
+                  rgba(0,0,0,0.55);
+      backdrop-filter: blur(6px);
+    }
+
+    .ob-modal__card.auth-landing{
+      width:min(720px, 94vw);
+      max-width:720px;
+      border-radius:24px;
+      background: linear-gradient(160deg, rgba(14,16,24,0.96), rgba(8,10,16,0.96));
+      border:1px solid rgba(150,164,200,0.18);
+      padding:0;
+      overflow:hidden;
+    }
+
+    .auth-inner{
+      padding:24px;
+    }
+
+    .auth-brand{
+      display:flex; align-items:center; gap:14px;
+      margin-top:0;
+    }
+    .auth-logo{
+      width:64px; height:64px; border-radius:14px;
+      box-shadow:0 10px 28px rgba(0,0,0,0.35), 0 0 0 1px rgba(160,180,220,0.2) inset;
+      background:#000;
+    }
+    .auth-text{ display:flex; flex-direction:column; gap:2px; }
+    .auth-title{
+      margin:0; font-size:22px; letter-spacing:.6px; font-weight:800;
+    }
+    .auth-subtitle{
+      font-size:13px; color:var(--muted); letter-spacing:.3px;
+    }
+
+    .auth-copy{ margin:14px 0 8px; color:var(--muted); }
+    .auth-actions{
+      display:grid; grid-template-columns:1fr; gap:10px; margin-top:8px;
+    }
+    @media (min-width: 520px){
+      .auth-actions{ grid-template-columns:1fr 1fr; }
+    }
+
+    .auth-actions .btn{
+      min-height:48px; font-size:15px; border-radius:16px;
+    }
+    /* Dev tools: compact but readable */
+    #devEntButtons .btn { min-height: 40px; font-size: 14px; }
   </style>
 </head>
 <body>
@@ -1147,10 +1198,15 @@ JANE: Ready?"></textarea>
         <div class="hint">Access Code → Passkey (WebAuthn). Secret remains available for staging.</div>
         <div class="spacer8"></div>
 
-        <label>Access Code</label>
-        <input id="inviteCode" type="text" placeholder="Enter invite code" autocomplete="one-time-code" />
-
-        <div class="spacer8"></div>
+        <div id="inviteBlock" style="display:none">
+          <label>Access Code</label>
+          <input id="inviteCode" type="text" placeholder="Enter invite/access code" autocomplete="one-time-code" />
+          <div class="spacer8"></div>
+          <div class="row">
+            <button id="btnSubmitInvite" class="btn">Enter Access Code</button>
+          </div>
+          <div class="spacer8"></div>
+        </div>
         <div class="row">
           <button id="btnRegisterPasskey" class="btn">Register Passkey</button>
           <button id="btnSignIn" class="btn secondary">Sign In</button>
@@ -1159,6 +1215,11 @@ JANE: Ready?"></textarea>
 
         <div class="spacer8"></div>
         <pre id="authStatus" class="status" aria-live="polite"></pre>
+        <div id="authStatusFriendly" class="small" style="display:none"></div>
+        <div id="entitlementLine" class="small" style="display:none"></div>
+        <div id="devEntButtons" style="display:none; margin-top:6px;">
+          <button id="btnDevGrantCredits" class="btn">Grant 200 test credits</button>
+        </div>
 
         <div class="spacer8"></div>
         <div id="reauthTip" class="small" style="display:none">
@@ -1236,7 +1297,6 @@ JANE: Ready?"></textarea>
       <button data-tab="record" role="tab" aria-selected="false">Record</button>
       <button data-tab="gallery" role="tab" aria-selected="false">Gallery</button>
       <button data-tab="settings" role="tab" aria-selected="false">Settings</button>
-      <span id="privacyBadge" class="badge small" style="justify-self:end; align-self:center; display:none">🔒 Private</span>
     </div>
   </nav>
 
@@ -1281,24 +1341,165 @@ JANE: Ready?"></textarea>
         next.headers = headers;
         return next;
       }
-      async function refreshPrivacyBadge() {
-        try {
-          const res = await fetch("/auth/session", withSecretHeaders());
-          let has = false;
-          if (res.ok) {
-            const s = await res.json();
-            has = Boolean(s?.userId) || Boolean(window.__OB_SECRET__);
-          } else {
-            // 401 still counts as private if a secret is present
-            has = Boolean(window.__OB_SECRET__);
-          }
-          const el = document.getElementById("privacyBadge");
-          if (el) el.style.display = has ? "inline-block" : "none";
-        } catch {
-          // ignore network errors
+      async function getSession() {
+        const res = await fetch("/auth/session", withSecretHeaders());
+        if (!res.ok) throw new Error("session_fetch_failed");
+        return await res.json();
+      }
+      function openPaywall(message){
+        const m = document.getElementById("paywallMsg");
+        if (m && message) m.textContent = message;
+        const pw = document.getElementById("paywall");
+        pw?.classList.remove("ob-hidden");
+        pw?.setAttribute("aria-hidden","false");
+        document.body.classList.add("ob-modal-open");
+      }
+      function closePaywall(){
+        const pw = document.getElementById("paywall");
+        pw?.classList.add("ob-hidden");
+        pw?.setAttribute("aria-hidden","true");
+        document.body.classList.remove("ob-modal-open");
+      }
+      (function wirePaywallModal(){
+        document.getElementById("paywallClose")?.addEventListener("click", closePaywall);
+        document.getElementById("btnStartSub")?.addEventListener("click", () => {
+          alert("Subscription flow coming soon.");
+          closePaywall();
+        });
+        document.getElementById("btnAddCredits")?.addEventListener("click", () => {
+          alert("Add-credits flow coming soon.");
+          closePaywall();
+        });
+      })();
+      async function hasEntitlementToRender(){
+        const s = await getSession();
+        const ent = s?.entitlement || {};
+        const hasPlan = ent.plan && ent.plan !== "none";
+        const quotaLeft = (ent.included_quota || 0) - (ent.renders_used || 0);
+        const hasCredits = (ent.credits_available || 0) > 0;
+        return Boolean(hasPlan || quotaLeft > 0 || hasCredits);
+      }
+      function guardMeteredButtons(){
+        const targets = [
+          document.getElementById("btnRehearseRender"),
+          document.getElementById("btnRender"),
+        ].filter(Boolean);
+
+        for (const el of targets){
+          el.addEventListener("click", async (e) => {
+            try{
+              const ok = await hasEntitlementToRender();
+              if (!ok){
+                e.stopImmediatePropagation();
+                e.preventDefault();
+                openPaywall("Start a subscription or add credits to render.");
+              }
+            } catch {
+              e.stopImmediatePropagation();
+              e.preventDefault();
+              openPaywall("We couldn't verify your access. Please try again.");
+            }
+          }, { capture: true });
         }
       }
-      document.addEventListener("DOMContentLoaded", refreshPrivacyBadge);
+      function show(el, on) {
+        if (el) el.style.display = on ? "" : "none";
+      }
+      async function refreshAuthUI() {
+        try {
+          const s = await getSession();
+          const inviteBlock = document.getElementById("inviteBlock");
+          show(inviteBlock, Boolean(s?.hasInviteCode));
+
+          // Decide whether we're in dev view (also used for debugging output)
+          const isDev = new URLSearchParams(location.search).has("dev");
+
+          // Elements
+          const authStatus = document.getElementById("authStatus");                 // debug <pre>
+          const authStatusFriendly = document.getElementById("authStatusFriendly"); // human text
+
+          // Friendly line
+          if (authStatusFriendly) {
+            let msg = "";
+            if (s?.passkey?.loggedIn) {
+              msg = "You're signed in with a passkey.";
+            } else if (s?.hasInviteCode && !s?.invited) {
+              msg = "Enter your access code to continue.";
+            } else {
+              msg = "Not signed in.";
+            }
+            authStatusFriendly.textContent = msg;
+            authStatusFriendly.style.display = isDev ? "none" : "";
+          }
+
+          // Debug block: only when ?dev=1
+          if (authStatus) {
+            if (isDev) {
+              const invitedTxt = s?.invited ? "yes" : "no";
+              const passkeyTxt = s?.passkey?.registered ? (s?.passkey?.loggedIn ? "registered+logged-in" : "registered") : "none";
+              authStatus.textContent =
+                `Auth gate: ${s?.enforceAuthGate ? "ON" : "off"} · Invite set: ${s?.hasInviteCode ? "yes" : "no"} · Invited: ${invitedTxt}\n` +
+                `Passkey: ${passkeyTxt} · userId: ${s?.userId ?? "—"}`;
+              authStatus.style.display = "";
+            } else {
+              authStatus.style.display = "none";
+            }
+          }
+
+          // ——— Entitlement (read-only) ———
+          const ent = s?.entitlement || {};
+          const elEnt = document.getElementById("entitlementLine");
+          if (elEnt) {
+            const plan = (ent.plan && ent.plan !== "none") ? ent.plan : "No plan";
+            const inc = Number.isFinite(ent.included_quota) ? ent.included_quota : 0;
+            const used = Number.isFinite(ent.renders_used) ? ent.renders_used : 0;
+            const credits = Number.isFinite(ent.credits_available) ? ent.credits_available : 0;
+
+            elEnt.textContent = `Plan: ${plan} • Included: ${inc} • Used: ${used} • Credits: ${credits}`;
+            elEnt.style.display = "";
+          }
+          const devBtns = document.getElementById("devEntButtons");
+          if (devBtns) devBtns.style.display = isDev ? "" : "none";
+        } catch {
+          // soft-fail; keep UI as-is
+        }
+      }
+      (function wireInviteUI(){
+        const btn = document.getElementById("btnSubmitInvite");
+        if (btn) {
+          btn.addEventListener("click", async () => {
+            const input = document.getElementById("inviteCode");
+            const code = (input?.value || "").trim();
+            if (!code) { alert("Please enter your access code."); return; }
+            try {
+              const res = await fetch("/auth/enter-code", withSecretHeaders({
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ code }),
+              }));
+              if (res.ok) {
+                await refreshAuthUI();
+                if (input) input.value = "";
+              } else {
+                const data = await res.json().catch(() => ({}));
+                alert(data?.error === "invalid_code" ? "Invalid access code." : "Couldn't apply access code.");
+              }
+            } catch {
+              alert("Network error while submitting code.");
+            }
+          });
+        }
+
+        const relink = document.getElementById("linkReenterCode");
+        if (relink) {
+          relink.addEventListener("click", (e) => {
+            e.preventDefault();
+            const blk = document.getElementById("inviteBlock");
+            show(blk, true);
+            document.getElementById("inviteCode")?.focus();
+          });
+        }
+      })();
       // ---- WebAuthn helpers (no external libs) ----
       const b64uToBuf = (b64u) => {
         if (b64u instanceof ArrayBuffer) return b64u;
@@ -1375,7 +1576,7 @@ JANE: Ready?"></textarea>
             body: JSON.stringify(payload)
           }));
           document.getElementById("authStatus").textContent = r2.ok ? "Passkey registered." : ("Register failed: " + await r2.text());
-          refreshPrivacyBadge();
+          refreshAuthUI();
         } catch (err) {
           const msg = (err && err.message) ? err.message : String(err);
           const statusEl = document.getElementById("authStatus");
@@ -1410,7 +1611,7 @@ JANE: Ready?"></textarea>
           }));
           document.getElementById("authStatus").textContent = r2.ok ? "Signed in." : ("Login failed: " + await r2.text());
           if (r2.status === 401) { const t = document.getElementById("reauthTip"); if (t) t.style.display = "block"; }
-          refreshPrivacyBadge();
+          refreshAuthUI();
         } catch (err) {
           const msg = (err && err.message) ? err.message : String(err);
           const statusEl = document.getElementById("authStatus");
@@ -1431,13 +1632,225 @@ JANE: Ready?"></textarea>
       async function signOut() {
         await fetch("/auth/logout", withSecretHeaders({ method:"POST" }));
         document.getElementById("authStatus").textContent = "Signed out.";
-        refreshPrivacyBadge();
+        refreshAuthUI();
       }
 
-      document.getElementById("btnRegisterPasskey")?.addEventListener("click", () => beginRegister());
-      document.getElementById("btnSignIn")?.addEventListener("click", () => beginLogin());
-      document.getElementById("btnSignOut")?.addEventListener("click", () => signOut());
-      document.getElementById("linkReenterCode")?.addEventListener("click", (e)=>{ e.preventDefault(); document.getElementById("inviteCode")?.focus(); });
+      // --- WebAuthn helpers (dev-friendly) -------------------------------------
+      function bufToUrl(b){
+        return btoa(String.fromCharCode(...new Uint8Array(b))).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
+      }
+      function urlToBuf(s){
+        const n = s.replace(/-/g, "+").replace(/_/g, "/");
+        const pad = "===".slice((n.length + 3) % 4);
+        const bin = atob(n + pad);
+        const bytes = new Uint8Array(bin.length);
+        for (let i=0;i<bin.length;i++) bytes[i] = bin.charCodeAt(i);
+        return bytes.buffer;
+      }
+      async function startLoginFlow(){
+        const r1 = await fetch("/auth/passkey/login/start", withSecretHeaders({ method:"POST" }));
+        if(!r1.ok) throw new Error("login_start_failed");
+        const { options } = await r1.json();
+        options.challenge = urlToBuf(options.challenge);
+        if (Array.isArray(options.allowCredentials)) {
+          options.allowCredentials = options.allowCredentials.map(c => ({ ...c, id: urlToBuf(c.id) }));
+        }
+        const cred = await navigator.credentials.get({ publicKey: options });
+        if(!cred) throw new Error("no_credential");
+        const payload = {
+          id: cred.id,
+          type: cred.type,
+          rawId: bufToUrl(cred.rawId),
+          response: {
+            clientDataJSON: bufToUrl(cred.response.clientDataJSON),
+            authenticatorData: cred.response.authenticatorData ? bufToUrl(cred.response.authenticatorData) : undefined,
+            signature: cred.response.signature ? bufToUrl(cred.response.signature) : undefined,
+            userHandle: cred.response.userHandle ? bufToUrl(cred.response.userHandle) : undefined,
+          }
+        };
+        const r2 = await fetch("/auth/passkey/login/finish", withSecretHeaders({
+          method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify(payload)
+        }));
+        if(!r2.ok) throw new Error("login_finish_failed");
+        return r2.json();
+      }
+      async function startRegisterFlow(){
+        const r1 = await fetch("/auth/passkey/register/start", withSecretHeaders({ method:"POST" }));
+        if(!r1.ok) throw new Error("register_start_failed");
+        const { options } = await r1.json();
+        options.challenge = urlToBuf(options.challenge);
+        if (options.user && options.user.id) options.user.id = urlToBuf(options.user.id);
+        if (Array.isArray(options.excludeCredentials)) {
+          options.excludeCredentials = options.excludeCredentials.map(c => ({ ...c, id: urlToBuf(c.id) }));
+        }
+        const cred = await navigator.credentials.create({ publicKey: options });
+        if(!cred) throw new Error("no_credential");
+        const payload = {
+          id: cred.id,
+          type: cred.type,
+          rawId: bufToUrl(cred.rawId),
+          response: {
+            clientDataJSON: bufToUrl(cred.response.clientDataJSON),
+            attestationObject: cred.response.attestationObject ? bufToUrl(cred.response.attestationObject) : undefined,
+          }
+        };
+        const r2 = await fetch("/auth/passkey/register/finish", withSecretHeaders({
+          method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify(payload)
+        }));
+        if(!r2.ok) throw new Error("register_finish_failed");
+        return r2.json();
+      }
+
+      // --- Gate controller (enforced = fully blocking) --------------------------
+      async function maybeShowAuthGate(){
+        const gate = document.getElementById("authGate");
+        if (!gate) return;
+
+        const main = document.querySelector("main");
+        const tabbar = document.querySelector("nav.tabbar");
+        const header = document.querySelector("header");
+        const closeBtn = document.getElementById("authGateClose");
+
+        try{
+          const s = await getSession();
+          const enforced = Boolean(s?.enforceAuthGate);
+          const needsGate = enforced && !(s?.invited) && !(s?.passkey?.loggedIn);
+
+          gate.classList.toggle("ob-hidden", !needsGate);
+          gate.setAttribute("aria-hidden", String(!needsGate));
+          document.body.classList.toggle("ob-modal-open", needsGate);
+
+          if (needsGate) {
+            if (closeBtn) closeBtn.style.display = "none";
+            if (main)  { main.setAttribute("inert", "");  main.setAttribute("aria-hidden", "true"); }
+            if (tabbar){ tabbar.setAttribute("inert", ""); tabbar.setAttribute("aria-hidden", "true"); }
+            if (header){ header.setAttribute("inert", ""); header.setAttribute("aria-hidden", "true"); }
+          } else {
+            if (closeBtn) closeBtn.style.display = "";
+            if (main)  { main.removeAttribute("inert");  main.removeAttribute("aria-hidden"); }
+            if (tabbar){ tabbar.removeAttribute("inert"); tabbar.removeAttribute("aria-hidden"); }
+            if (header){ header.removeAttribute("inert"); header.removeAttribute("aria-hidden"); }
+          }
+        } catch {
+          gate.classList.add("ob-hidden");
+          gate.setAttribute("aria-hidden", "true");
+          document.body.classList.remove("ob-modal-open");
+          if (main)  { main.removeAttribute("inert");  main.removeAttribute("aria-hidden"); }
+          if (tabbar){ tabbar.removeAttribute("inert"); tabbar.removeAttribute("aria-hidden"); }
+          if (header){ header.removeAttribute("inert"); header.removeAttribute("aria-hidden"); }
+        }
+      }
+
+      function wireAuthGateUI(){
+        const gate = document.getElementById("authGate");
+        if (!gate) return;
+
+        const btnPasskey = document.getElementById("authGatePasskey");
+        const btnInvite  = document.getElementById("authGateInvite");
+        const btnClose   = document.getElementById("authGateClose");
+
+        btnPasskey?.addEventListener("click", async () => {
+          try{
+            await startLoginFlow().catch(async () => { await startRegisterFlow(); });
+            await refreshAuthUI();
+            await maybeShowAuthGate();
+          } catch(err){
+            alert("Passkey sign-in failed. You can try again or use an invite code.");
+          }
+        });
+
+        btnInvite?.addEventListener("click", () => {
+          const tabBtn = document.querySelector('nav [data-tab="settings"]');
+          tabBtn?.click?.();
+          const blk = document.getElementById("inviteBlock");
+          if (blk) { blk.style.display = ""; document.getElementById("inviteCode")?.focus(); }
+        });
+
+        // Dev-only convenience: allow closing ONLY when not enforced
+        btnClose?.addEventListener("click", async () => {
+          try {
+            const s = await getSession();
+            if (s?.enforceAuthGate) {
+              return;
+            }
+          } catch {}
+          document.getElementById("authGate")?.classList.add("ob-hidden");
+          document.body.classList.remove("ob-modal-open");
+        });
+      }
+
+      const _origRefreshAuthUI = refreshAuthUI;
+      refreshAuthUI = async function(){
+        await _origRefreshAuthUI();
+        await maybeShowAuthGate();
+      };
+
+      wireAuthGateUI();
+      maybeShowAuthGate();
+
+      refreshAuthUI();
+      function wireSettingsPasskeyButtons(){
+        const btnReg = document.getElementById("btnRegisterPasskey");
+        const btnIn  = document.getElementById("btnSignIn");
+        const btnOut = document.getElementById("btnSignOut");
+
+        if (btnReg) {
+          btnReg.addEventListener("click", async () => {
+            try {
+              await startRegisterFlow();
+              await refreshAuthUI();
+              alert("Passkey registered.");
+            } catch (e) {
+              alert("Passkey registration failed. Try again or check Safari settings.");
+            }
+          });
+        }
+
+        if (btnIn) {
+          btnIn.addEventListener("click", async () => {
+            try {
+              await startLoginFlow();
+              await refreshAuthUI();
+              alert("Signed in with passkey.");
+            } catch (e) {
+              alert("Passkey sign-in failed. If you don't have one yet, try Register Passkey.");
+            }
+          });
+        }
+
+        if (btnOut) {
+          btnOut.addEventListener("click", async () => {
+            try {
+              await fetch("/auth/signout", withSecretHeaders({ method:"POST" }));
+              await refreshAuthUI();
+              alert("Signed out.");
+            } catch (e) {
+              alert("Sign out failed.");
+            }
+          });
+        }
+      }
+      wireSettingsPasskeyButtons();
+      guardMeteredButtons();
+      (function wireDevEntitlement(){
+        const btn = document.getElementById("btnDevGrantCredits");
+        if (!btn) return;
+        btn.addEventListener("click", async () => {
+          try{
+            const res = await fetch("/auth/dev/grant-credits?dev=1", withSecretHeaders({
+              method:"POST",
+              headers:{ "Content-Type":"application/json" },
+              body: JSON.stringify({ amount: 200 })
+            }));
+            const data = await res.json().catch(()=> ({}));
+            if (!res.ok || !data?.ok) throw new Error(data?.error || "failed");
+            await refreshAuthUI();
+            alert("Added 200 test credits.");
+          } catch(e){
+            alert("Could not grant credits (dev tools disabled?).");
+          }
+        });
+      })();
     const $ = (s,r=document)=>r.querySelector(s);
     const $$ = (s,r=document)=>Array.from(r.querySelectorAll(s));
     // --- TDZ fix: declare R early so Safari doesn't throw before it's assigned ---
@@ -4478,6 +4891,33 @@ JANE: Ready?"></textarea>
     }
   </script>
 
+  <!-- Auth Gate Interstitial (hidden by default; controlled by flag from /auth/session) -->
+  <div id="authGate" class="ob-modal ob-hidden" aria-hidden="true">
+    <div class="ob-modal__scrim auth-landing-scrim"></div>
+    <div class="ob-modal__card auth-landing" role="dialog" aria-modal="true" aria-labelledby="authGateTitle">
+      <button id="authGateClose" class="ob-modal__close" aria-label="Close" title="Close">&times;</button>
+
+      <div class="auth-inner">
+        <div class="auth-brand">
+          <img class="auth-logo" src="/icons/icon-192.png" alt="" />
+          <div class="auth-text">
+            <h3 id="authGateTitle" class="auth-title">OFFBOOK</h3>
+            <div class="auth-subtitle">Rehearse · Record · Book</div>
+          </div>
+        </div>
+
+        <div class="auth-copy">
+          <p>Sign in with your device passkey or use an access code.</p>
+        </div>
+
+        <div class="auth-actions">
+          <button id="authGateInvite" class="btn secondary">Use invite code</button>
+          <button id="authGatePasskey" class="btn">Continue with Face ID</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- Route / Ringer Guidance Modal -->
   <div id="routeModal" aria-hidden="true" role="dialog" aria-labelledby="routeModalTitle" aria-modal="true" class="ob-modal ob-hidden">
     <div class="ob-modal__scrim"></div>
@@ -4516,6 +4956,22 @@ JANE: Ready?"></textarea>
 
   <div class="countdown" id="countdown" aria-hidden="true" style="display:none">
     <div class="count-num" id="countNum">3</div>
+  </div>
+
+  <!-- Paywall (stub) -->
+  <div id="paywall" class="ob-modal ob-hidden" aria-hidden="true">
+    <div class="ob-modal__scrim"></div>
+    <div class="ob-modal__card" role="dialog" aria-modal="true" aria-labelledby="paywallTitle">
+      <button id="paywallClose" class="ob-modal__close" aria-label="Close">×</button>
+      <h3 id="paywallTitle" class="ob-modal__title">You're out of access</h3>
+      <div class="ob-modal__body">
+        <p class="small" id="paywallMsg">Start a subscription or add credits to continue.</p>
+      </div>
+      <div class="ob-modal__actions">
+        <button id="btnStartSub" class="btn">Start subscription</button>
+        <button id="btnAddCredits" class="btn secondary">Add credits</button>
+      </div>
+    </div>
   </div>
 </body>
 </html>

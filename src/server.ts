@@ -5,7 +5,7 @@ import multer from "multer";
 import { createRequire } from "module";
 import cookieParser from "cookie-parser";
 import cookieSession from "cookie-session";
-import { makeAuthRouter } from "./auth/routes";
+import authRouter from "./routes/auth";
 import db from "./lib/db";
 import { ensureAuditTable, makeAuditMiddleware } from "./lib/audit";
 import { makeRateLimiters } from "./middleware/rateLimit";
@@ -48,7 +48,7 @@ app.use(cookieSession({
   maxAge: 1000 * 60 * 60 * 24 * 30, // 30 days
 }));
 
-app.use("/auth", makeAuthRouter());
+app.use("/auth", authRouter);
 
 ensureAuditTable(db);
 const audit = makeAuditMiddleware(db);
