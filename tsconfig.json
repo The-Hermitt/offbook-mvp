@@ -10,6 +10,10 @@
     "outDir": "dist",
     "noEmit": true
   },
-  "include": ["src/**/*.ts"],
+  "include": [
+    "src/**/*.ts",
+    "src/types/**/*.d.ts",
+    "src"
+  ],
   "exclude": ["src/tools/**"]
 }

@@ -5,6 +5,9 @@ import multer from "multer";
 import path from "path";
 import fs from "fs";
 import crypto from "crypto";
+import db from "./lib/db";
+import { ensureAuditTable, makeAuditMiddleware } from "./lib/audit";
+import { makeRateLimiters } from "./middleware/rateLimit";
 
 // ---------- Types ----------
 type SceneLine = { speaker: string; text: string };
@@ -110,7 +113,12 @@ const upload = multer({
       file.mimetype === "image/png" ||
       file.mimetype === "image/jpeg" ||
       file.mimetype === "image/jpg";
-    cb(ok ? null : new Error("Unsupported file type"), ok);
+    if (ok) {
+      cb(null, true);
+    } else {
+      // reject unsupported types without raising an Error to satisfy TS types
+      cb(null, false);
+    }
   },
 });
 
@@ -142,7 +150,7 @@ async function newTesseractWorker(): Promise<TesseractWorker | null> {
 }
 
 async function rasterizePdfToPngBuffers(pdfBuffer: Buffer, maxPages = 3): Promise<Buffer[]> {
-  const pdfjs = await import("pdfjs-dist/legacy/build/pdf.js");
+  const pdfjs = await import("pdfjs-dist/legacy/build/pdf");
   const { createCanvas } = await import("canvas");
   const loadingTask = (pdfjs as any).getDocument({ data: pdfBuffer });
   const pdf = await loadingTask.promise;
@@ -214,13 +222,18 @@ function baseUrlFrom(req: Request): string {
 
 // ---------- Routes ----------
 export function initHttpRoutes(app: Express) {
+  if (typeof app?.set === "function") { app.set("trust proxy", 1); }
+  ensureAuditTable(db);
+  const audit = makeAuditMiddleware(db);
+  const { debugLimiter, renderLimiter } = makeRateLimiters();
+
   const debug = express.Router();
   const api = express.Router();
 
   debug.use(secretGuard);
 
   // POST /debug/upload_script_text
-  debug.post("/upload_script_text", (req: Request, res: Response) => {
+  debug.post("/upload_script_text", audit("/debug/upload_script_text"), (req: Request, res: Response) => {
     const { title, text } = req.body || {};
     if (!title || !text) return res.status(400).json({ error: "title and text are required" });
     const id = crypto.randomUUID();
@@ -231,7 +244,7 @@ export function initHttpRoutes(app: Express) {
   });
 
   // POST /debug/upload_script_upload  (PDF or image)
-  debug.post("/upload_script_upload", upload.single("pdf"), async (req: Request, res: Response) => {
+  debug.post("/upload_script_upload", audit("/debug/upload_script_upload"), upload.single("pdf"), async (req: Request, res: Response) => {
     try {
       const title = String(req.body?.title || "Uploaded Script");
       if (!req.file?.buffer || !req.file.mimetype) return res.status(400).json({ error: "missing file" });
@@ -251,7 +264,7 @@ export function initHttpRoutes(app: Express) {
   });
 
   // GET /debug/scenes
-  debug.get("/scenes", (req: Request, res: Response) => {
+  debug.get("/scenes", audit("/debug/scenes"), (req: Request, res: Response) => {
     const scriptId = String(req.query.script_id || "");
     if (!scriptId || !scripts.has(scriptId)) return res.status(404).json({ error: "script not found" });
     const script = scripts.get(scriptId)!;
@@ -259,7 +272,7 @@ export function initHttpRoutes(app: Express) {
   });
 
   // POST /debug/set_voice
-  debug.post("/set_voice", (req: Request, res: Response) => {
+  debug.post("/set_voice", audit("/debug/set_voice"), (req: Request, res: Response) => {
     const { script_id, voice_map } = req.body || {};
     if (!script_id || !scripts.has(script_id)) return res.status(404).json({ error: "script not found" });
     if (!voice_map || typeof voice_map !== "object") return res.status(400).json({ error: "voice_map required" });
@@ -270,7 +283,7 @@ export function initHttpRoutes(app: Express) {
   });
 
   // POST /debug/render (stub -> silent mp3)
-  debug.post("/render", (req: Request, res: Response) => {
+  debug.post("/render", renderLimiter, audit("/debug/render"), (req: Request, res: Response) => {
     const { script_id, scene_id, role } = req.body || {};
     if (!script_id || !scene_id || !role) return res.status(400).json({ error: "script_id, scene_id, role required" });
     if (!scripts.has(script_id)) return res.status(404).json({ error: "script not found" });
@@ -283,7 +296,7 @@ export function initHttpRoutes(app: Express) {
   });
 
   // GET /debug/render_status
-  debug.get("/render_status", (req: Request, res: Response) => {
+  debug.get("/render_status", audit("/debug/render_status"), (req: Request, res: Response) => {
     const rid = String(req.query.render_id || "");
     if (!rid || !renders.has(rid)) return res.status(404).json({ status: "error", error: "render not found" });
     const job = renders.get(rid)!;
@@ -297,7 +310,7 @@ export function initHttpRoutes(app: Express) {
   });
 
   // Mount routers
-  app.use("/debug", debug);
+  app.use("/debug", debugLimiter, debug);
 
   api.get("/assets/:render_id", (req: Request, res: Response) => {
     const file = path.join(ASSETS_DIR, `${String(req.params.render_id)}.mp3`);

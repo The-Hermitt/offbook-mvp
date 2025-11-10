@@ -1,0 +1,7 @@
+[client]
+- Handler: public/app-tabs.html:1875-1881 attaches an onclick to #btnDevGrantCredits that disables the button, calls fetchCredits(true), then refreshCreditsLine().
+- fetchCredits(): public/app-tabs.html:1515-1525 builds URL via dbgUrl("/debug/credits?dev=1") when grantDev=true, otherwise "/debug/credits"; performs fetch(url, { method: "GET" }) with no explicit headers/body (secret only added to the query string via dbgUrl, so X-Shared-Secret is never set).
+
+[server]
+- Route: src/http-routes.ts:429-444 defines debug.get("/credits", ...) which reads a uid (via __resolveUid) and returns { uid, snapshot } from getCreditsSnapshot(). This router sits behind requireSharedSecretForDebug (src/http-routes.ts:283) and debugLimiter (line 485), so /debug/* requires the shared secret (header or ?secret=) before reaching the handler.
+- Dev grant implementation: the only place maybeDevGrant() (which grants 200 credits when req.query.dev === "1") is invoked is inside the /debug/render_status handler (src/http-routes.ts:468-477). The /debug/credits handler ignores ?dev=1 entirely, so hitting /debug/credits?dev=1 never grants credits—mismatch with the client's “Grant 200 test credits” expectation.
