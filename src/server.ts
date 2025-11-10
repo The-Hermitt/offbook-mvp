@@ -301,8 +301,84 @@ app.post("/debug/tts_line", requireSecret, async (req: Request, res: Response) =
 /* ---------------------------------------------------------- */
 
 // ---------- Routes ----------
+// ---- Credits guard used by fallback /debug/render --------------------------
+type Entitlement = {
+  plan: string;
+  included_quota: number;
+  renders_used: number;
+  credits_available: number;
+  period_start?: string | null;
+  period_end?: string | null;
+};
+
+function getDevStore(app: import("express").Express) {
+  const anyApp = app as any;
+  anyApp.locals = anyApp.locals || {};
+  anyApp.locals.devEntStore = anyApp.locals.devEntStore || {};
+  return anyApp.locals.devEntStore as Record<string, any>;
+}
+
+function devKey(_req: Request) {
+  return process.env.SHARED_SECRET ? `secret:${process.env.SHARED_SECRET}` : "anon";
+}
+
+function getEntitlement(req: Request): Entitlement {
+  const store = getDevStore(req.app);
+  const key = devKey(req);
+  store[key] = store[key] || {
+    plan: "none",
+    included_quota: 0,
+    renders_used: 0,
+    credits_available: 0,
+    period_start: null,
+    period_end: null,
+  };
+  return store[key] as Entitlement;
+}
+
+function remainingCredits(ent: Entitlement): number {
+  const included = Number(ent?.included_quota ?? 0);
+  const granted = Number(ent?.credits_available ?? 0);
+  const used = Number(ent?.renders_used ?? 0);
+  return Math.max(0, included + granted - used);
+}
+
+function requireCredits(req: Request, res: Response, next: import("express").NextFunction) {
+  const ent = getEntitlement(req);
+  const remaining = remainingCredits(ent);
+  res.setHeader("x-credits-remaining", String(remaining));
+  res.setHeader(
+    "x-credits-source",
+    ent?.plan && ent.plan !== "none"
+      ? "plan"
+      : (ent?.credits_available ?? 0) > 0
+      ? "credits"
+      : "none"
+  );
+  if (remaining <= 0) {
+    return res.status(402).json({
+      error: "insufficient_credits",
+      message: "No rehearsal credits remaining.",
+    });
+  }
+  return next();
+}
+
 function mountFallbackDebugRoutes() {
   app.get("/debug/ping", requireSecret, (_req, res) => res.json({ ok: true }));
+  app.get("/debug/credits", requireSecret, (req: Request, res: Response) => {
+    const ent = getEntitlement(req);
+    res.json({ entitlement: ent, remaining: remainingCredits(ent) });
+  });
+  // Grant test credits (dev-only, secret-guarded)
+  app.post("/debug/credits/grant", requireSecret, (req: Request, res: Response) => {
+    const amt = Number((req.body && ((req.body as any).amount ?? req.query.amount)) ?? 10);
+    const ent = getEntitlement(req);
+    ent.credits_available = Number(ent.credits_available || 0) + (isFinite(amt) ? amt : 0);
+    const remaining =
+      Math.max(0, Number(ent.included_quota || 0) + Number(ent.credits_available || 0) - Number(ent.renders_used || 0));
+    res.json({ ok: true, entitlement: ent, remaining });
+  });
 
   app.post("/debug/upload_script_text", requireSecret, audit("/debug/upload_script_text"), (req: Request, res: Response) => {
     const title = String(req.body?.title || "Script");
@@ -375,7 +451,7 @@ function mountFallbackDebugRoutes() {
   });
 
   // REAL: Render partner-only reader MP3 with OpenAI
-  app.post("/debug/render", requireSecret, renderLimiter, audit("/debug/render"), async (req: Request, res: Response) => {
+  app.post("/debug/render", requireSecret, requireCredits, renderLimiter, audit("/debug/render"), async (req: Request, res: Response) => {
     const script_id = String((req.body as any)?.script_id || "");
     const myRole = String((req.body as any)?.my_role || "").toUpperCase();
     const paceMs = Number((req.body as any)?.pace_ms || 0);

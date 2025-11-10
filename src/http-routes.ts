@@ -8,6 +8,7 @@ import crypto from "crypto";
 import db from "./lib/db";
 import { ensureAuditTable, makeAuditMiddleware } from "./lib/audit";
 import { makeRateLimiters } from "./middleware/rateLimit";
+import { buildEntitlementFor } from "./lib/entitlement";
 
 // ---------- Types ----------
 type SceneLine = { speaker: string; text: string };
@@ -282,8 +283,55 @@ export function initHttpRoutes(app: Express) {
     res.json({ ok: true });
   });
 
+  // --- Credits guard (shares logic with /auth/session) -------------------------
+  type Entitlement = import("./lib/entitlement").Entitlement;
+
+  function getEntitlementForRequest(req: Request): Entitlement {
+    // Use the same helper as /auth/session to avoid drift.
+    return buildEntitlementFor(req);
+  }
+
+  function remainingCredits(ent: Entitlement): number {
+    const included = Number(ent?.included_quota ?? 0);
+    const granted = Number(ent?.credits_available ?? 0);
+    const used = Number(ent?.renders_used ?? 0);
+    return Math.max(0, included + granted - used);
+  }
+
+  function requireCredits(req: Request, res: Response, next: NextFunction) {
+    const ent = getEntitlementForRequest(req);
+    const remaining = remainingCredits(ent);
+    console.log("[render-credit-check]", {
+      included_quota: ent?.included_quota ?? 0,
+      credits_available: ent?.credits_available ?? 0,
+      renders_used: ent?.renders_used ?? 0,
+      remaining,
+    });
+    res.setHeader("x-credits-remaining", String(remaining));
+    const source =
+      ent?.plan && ent.plan !== "none"
+        ? "plan"
+        : (Number(ent?.credits_available ?? 0) > 0 ? "credits" : "none");
+    res.setHeader("x-credits-source", source);
+    if (remaining <= 0) {
+      return res.status(402).json({
+        error: "insufficient_credits",
+        message: "No rehearsal credits remaining.",
+        remaining,
+      });
+    }
+    next();
+  }
+
+  // DEBUG: Inspect entitlement and computed remaining
+  debug.get("/credits", audit("/debug/credits"), (req: Request, res: Response) => {
+    const ent = getEntitlementForRequest(req);
+    const remaining = remainingCredits(ent);
+    res.json({ entitlement: ent, remaining });
+  });
+
   // POST /debug/render (stub -> silent mp3)
-  debug.post("/render", renderLimiter, audit("/debug/render"), (req: Request, res: Response) => {
+  debug.post("/render", requireCredits, renderLimiter, audit("/debug/render"), (req: Request, res: Response) => {
     const { script_id, scene_id, role } = req.body || {};
     if (!script_id || !scene_id || !role) return res.status(400).json({ error: "script_id, scene_id, role required" });
     if (!scripts.has(script_id)) return res.status(404).json({ error: "script not found" });

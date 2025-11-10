@@ -1341,15 +1341,19 @@ JANE: Ready?"></textarea>
         try { delete window.__OB_SECRET__; } catch { window.__OB_SECRET__ = undefined; }
       }
       const JSON_HDRS = { "Content-Type":"application/json" };
-      const isNgrokHost = /ngrok/i.test(location.hostname);
+      function buildHeaders(opts = {}) {
+        const base = opts.headers instanceof Headers ? opts.headers : (opts.headers || {});
+        const headers = new Headers(base);
+        if (opts.json) headers.set("Content-Type", "application/json");
+        const activeSecret = window.__OB_SECRET__;
+        if (activeSecret) headers.set("X-Shared-Secret", activeSecret);
+        headers.set("ngrok-skip-browser-warning", "true");
+        return headers;
+      }
       function withSecretHeaders(init = {}) {
         const next = { ...(init || {}) };
         const baseHeaders = init?.headers instanceof Headers ? init.headers : init?.headers;
-        const headers = new Headers(baseHeaders || {});
-        const activeSecret = window.__OB_SECRET__;
-        if (activeSecret) headers.set("X-Shared-Secret", activeSecret);
-        if (isNgrokHost) headers.set("ngrok-skip-browser-warning", "true");
-        next.headers = headers;
+        next.headers = buildHeaders({ headers: baseHeaders });
         return next;
       }
       async function getSession() {
@@ -1382,6 +1386,23 @@ JANE: Ready?"></textarea>
           closePaywall();
         });
       })();
+      function openPaywallModal(message = "Start a subscription or add credits to continue.") {
+        sfx("cta");
+        openPaywall(message);
+        const targets = [
+          document.getElementById("btnStartSubscription") || document.getElementById("btnStartSub"),
+          document.getElementById("btnAddCredits") || document.getElementById("btnAddCreditsSettings"),
+        ].filter(Boolean);
+        targets.forEach((el) => {
+          if (!el || el.dataset.paywallHooked) return;
+          el.dataset.paywallHooked = "1";
+          el.addEventListener("click", () => {
+            sfx("tap");
+            try { showScreen("settings"); } catch {}
+            clearOutOfCreditsGate();
+          });
+        });
+      }
       async function hasEntitlementToRender(){
         const s = await getSession();
         const ent = s?.entitlement || {};
@@ -1403,12 +1424,12 @@ JANE: Ready?"></textarea>
               if (!ok){
                 e.stopImmediatePropagation();
                 e.preventDefault();
-                openPaywall("Start a subscription or add credits to render.");
+                openPaywallModal("Start a subscription or add credits to render.");
               }
             } catch {
               e.stopImmediatePropagation();
               e.preventDefault();
-              openPaywall("We couldn't verify your access. Please try again.");
+              openPaywallModal("We couldn't verify your access. Please try again.");
             }
           }, { capture: true });
         }
@@ -1439,8 +1460,15 @@ JANE: Ready?"></textarea>
             } else {
               msg = "Not signed in.";
             }
-            authStatusFriendly.textContent = msg;
-            authStatusFriendly.style.display = isDev ? "none" : "";
+            authStatusFriendly.dataset.passkeyCopy = msg;
+            if (isDev) {
+              authStatusFriendly.dataset.obHideFriendly = "1";
+              authStatusFriendly.style.display = "none";
+              authStatusFriendly.textContent = "";
+            } else {
+              delete authStatusFriendly.dataset.obHideFriendly;
+              syncFriendlyCopy();
+            }
           }
 
           // Debug block: only when ?dev=1
@@ -1856,6 +1884,7 @@ JANE: Ready?"></textarea>
             const data = await res.json().catch(()=> ({}));
             if (!res.ok || !data?.ok) throw new Error(data?.error || "failed");
             await refreshAuthUI();
+            clearOutOfCreditsGate();
             alert("Added 200 test credits.");
           } catch(e){
             alert("Could not grant credits (dev tools disabled?).");
@@ -2516,6 +2545,67 @@ JANE: Ready?"></textarea>
           } catch {}
         }
       };
+let __outOfCredits = false;
+let _renderBusy = false;
+function _debounceStart(btn){
+  _renderBusy = true;
+  const target = (btn && typeof btn === "object" && "disabled" in btn) ? btn : null;
+  if(target) target.disabled = true;
+  setTimeout(()=>{
+    _renderBusy = false;
+    if(target) target.disabled = false;
+  }, 800);
+}
+function clearOutOfCreditsGate(){ __outOfCredits = false; }
+      function syncFriendlyCopy(){
+        const friendly = document.getElementById("authStatusFriendly");
+        if(!friendly) return;
+        if(friendly.dataset?.obHideFriendly === "1"){
+          friendly.style.display = "none";
+          friendly.textContent = "";
+          return;
+        }
+        const passkeyCopy = friendly.dataset?.passkeyCopy || "";
+        const creditsCopy = friendly.dataset?.creditsCopy || "";
+        const parts = [passkeyCopy, creditsCopy].filter(Boolean);
+        if(parts.length){
+          friendly.style.display = "block";
+          friendly.textContent = parts.join(" · ");
+        }else{
+          friendly.style.display = "none";
+          friendly.textContent = "";
+        }
+      }
+      if (typeof window !== "undefined") window.__syncFriendlyCopy = syncFriendlyCopy;
+      function setCreditsFriendlyCopy(copy){
+        const friendly = document.getElementById("authStatusFriendly");
+        if(!friendly) return;
+        if(copy){
+          friendly.dataset.creditsCopy = copy;
+        }else{
+          delete friendly.dataset.creditsCopy;
+        }
+        syncFriendlyCopy();
+      }
+      if (typeof window !== "undefined") window.setCreditsFriendlyCopy = setCreditsFriendlyCopy;
+      function updateCreditsDebug(remaining){
+        let el = document.getElementById("creditsDebug");
+        if(!el){
+          el = document.createElement("div");
+          el.id = "creditsDebug";
+          el.className = "small";
+          const anchor = document.getElementById("authStatus") || document.getElementById("authStatusFriendly") || document.querySelector("#screen-settings .card");
+          if(anchor && anchor.parentNode){
+            anchor.parentNode.insertBefore(el, anchor.nextSibling);
+          }else{
+            document.body.appendChild(el);
+          }
+        }
+        const t = new Date().toLocaleTimeString();
+        el.textContent = `Credits (preflight): ${remaining} @ ${t}`;
+        el.style.opacity = "0.9";
+      }
+      if (typeof window !== "undefined") window.updateCreditsDebug = updateCreditsDebug;
 
       async function safeJson(r){ const t=await r.text(); try{return JSON.parse(t)}catch{return {raw:t}} }
       function handleUnauthorized(r){
@@ -2524,6 +2614,72 @@ JANE: Ready?"></textarea>
           return true;
         }
         return false;
+      }
+
+      function sfx(type="tap"){
+        try{
+          const ctx = new (window.AudioContext||window.webkitAudioContext)();
+          const o = ctx.createOscillator();
+          const g = ctx.createGain();
+          o.type = "sine";
+          o.frequency.value = type==="cta" ? 660 : type==="dismiss" ? 320 : 520;
+          g.gain.setValueAtTime(0.0001, ctx.currentTime);
+          g.gain.exponentialRampToValueAtTime(0.2, ctx.currentTime + 0.01);
+          g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.10);
+          o.connect(g);
+          g.connect(ctx.destination);
+          o.start();
+          o.stop(ctx.currentTime + 0.12);
+        }catch{}
+      }
+
+      function showTransientNotice(msg){
+        const bar = document.getElementById("errbar");
+        if(bar){
+          bar.textContent = msg;
+          bar.removeAttribute("data-locked");
+          bar.classList.add("show");
+          setTimeout(()=>bar.classList.remove("show"), 2500);
+        }else{
+          alert(msg);
+        }
+      }
+
+      function showOutOfCreditsHint(){
+        const hint = document.getElementById("addCreditsHintSettings");
+        const toast = document.getElementById("addCreditsToastSettings");
+        const btn = document.getElementById("btnAddCreditsSettings");
+        if(hint){
+          hint.style.display = "block";
+          hint.textContent = "You’re out of credits — Add credits to continue.";
+        }
+        if(toast){ toast.style.display = "block"; }
+        if(btn){ btn.disabled = false; }
+      }
+
+async function preflightCredits(){
+  try{
+    await window.obRefreshCredits?.();
+    const creditsState = window.obCredits || {};
+    const remaining = typeof creditsState?.remaining === "number" ? Math.max(0, creditsState.remaining) : NaN;
+    if(Number.isNaN(remaining)){
+      updateCreditsDebug("n/a");
+      return true;
+    }
+    if(remaining <= 0){
+      __outOfCredits = true;
+      showTransientNotice("You're out of rehearsal credits. Add credits in Settings.");
+      try { showOutOfCreditsHint(); } catch {}
+      openPaywallModal();
+      return false;
+    }
+    __outOfCredits = false;
+    return true;
+  }catch{
+    updateCreditsDebug("n/a");
+    return true;
+  }
+}
       }
 
       async function loadSupportedVoices(){
@@ -3396,7 +3552,19 @@ JANE: Ready?"></textarea>
         try{ preloadReaderBuffers(); }catch{}
       }
   function clearRehearseRender(){ RR.map.clear(); RR.failures=0; stopDots(); R.readerBuffers = new Map(); resetReaderActiveSources(); R.readerLoading=false; setRehearseRenderStatus("Cleared pre-render.","warn"); }
-      $("#btnRehearseRender")?.addEventListener("click", renderRehearseVoices);
+const rehearseRenderBtn = $("#btnRehearseRender");
+rehearseRenderBtn?.addEventListener("click", async (ev) => {
+  if(_renderBusy) return;
+  sfx("tap");
+  _debounceStart(ev?.currentTarget || null);
+  const ok = await preflightCredits();
+  if(!ok) return;
+  try{
+    await renderRehearseVoices();
+  }catch(e){
+    console.error("[offbook] rehearsal render failed", e);
+  }
+});
       $("#btnRehearseClear")?.addEventListener("click", clearRehearseRender);
 
       async function playOpenAiIfCached(i){
@@ -4038,10 +4206,7 @@ JANE: Ready?"></textarea>
           R.btnRender.classList.add("progressing");
         }
         try{
-          const r = await fetch("/debug/render", withSecretHeaders({ method:"POST", headers:{...JSON_HDRS}, body:JSON.stringify({ script_id:S.script_id, my_role:(S.role||"").toUpperCase(), pace_ms:0 }) }));
-          if(handleUnauthorized(r)){ clearInterval(dotsTimer); setStatusRec("Locked."); R.btnRender.disabled=false; return; }
-          const j = await safeJson(r);
-          if(!r.ok){ clearInterval(dotsTimer); setStatusRec("Render error "+r.status+": "+JSON.stringify(j)); R.btnRender.disabled=false; return; }
+          const j = await window.callRenderWithPreflight({ script_id:S.script_id, my_role:(S.role||"").toUpperCase(), pace_ms:0 });
           R.render_id = j.render_id;
           const poll = async ()=>{
             const s = await fetch(`/debug/render_status?render_id=${encodeURIComponent(R.render_id)}`, withSecretHeaders({ headers:{...JSON_HDRS} }));
@@ -4063,7 +4228,24 @@ JANE: Ready?"></textarea>
           setTimeout(poll, 500);
         }catch(e){
           clearInterval(dotsTimer);
-          setStatusRec("Network error: "+e); R.btnRender.disabled=false;
+          if(R.btnRender){
+            R.btnRender.disabled = false;
+            R.btnRender.classList.remove("progressing");
+          }
+          if(e?.status === 401){
+            setStatusRec("Locked.");
+            return;
+          }
+          if(e?.status === 402){
+            setStatusRec("You're out of rehearsal credits. Add credits in Settings.");
+            return;
+          }
+          if(e?.status){
+            const payloadTxt = e?.payload ? `: ${JSON.stringify(e.payload)}` : (e?.body ? `: ${e.body}` : "");
+            setStatusRec(`Render error ${e.status}${payloadTxt}`);
+          }else{
+            setStatusRec("Network error: "+e);
+          }
         }
       }
 
@@ -4612,9 +4794,14 @@ JANE: Ready?"></textarea>
 
 
       /* --- Button wiring --- */
-      R.btnRender?.addEventListener("click", async ()=>{
-        // If we already have pre-rendered clips in RR.map from Rehearse, reuse them.
-        const hasCached = primeReaderFromCacheIfAvailable() || (RR.map && RR.map.size);
+R.btnRender?.addEventListener("click", async (ev)=>{
+  if(_renderBusy) return;
+  sfx("tap");
+  _debounceStart(ev?.currentTarget || null);
+  const okGate = await preflightCredits();
+  if(!okGate) return;
+  // If we already have pre-rendered clips in RR.map from Rehearse, reuse them.
+  const hasCached = primeReaderFromCacheIfAvailable() || (RR.map && RR.map.size);
         if(hasCached && RR.map && RR.map.size){
           setStatusRec(`Voices ready: ${RR.map.size} lines (cached).`);
           try{ preloadReaderBuffers(); }catch{}
@@ -4997,7 +5184,12 @@ JANE: Ready?"></textarea>
         // Prefer the specific line if present; fall back to the older container
         const el = document.getElementById('passkeySignedInCopy') || document.getElementById('authStatusFriendly');
         if (!el) return;
-        el.textContent = on ? "You're signed in with a passkey." : "Not signed in.";
+        el.dataset.passkeyCopy = on ? "You're signed in with a passkey." : "Not signed in.";
+        if (el.id === 'authStatusFriendly' && typeof window.__syncFriendlyCopy === 'function') {
+          window.__syncFriendlyCopy();
+        } else {
+          el.textContent = el.dataset.passkeyCopy;
+        }
       }
 
       const FIRST_LOAD_LOCK_MS = 3000;      // minimum "signed-out" window on initial load
@@ -5183,5 +5375,119 @@ JANE: Ready?"></textarea>
       }
     })();
   </script>
+  <script id="ob-helpers" defer>
+/* === OffBook consolidated helpers (credits/auth + UI + preflight) ==========
+   Single source of truth. Safe to re-run (idempotent): guards on window.OB.
+==============================================================================*/
+(function () {
+  // Reuse existing OB if present (avoid redeclaration on hot reload)
+  const OB = (window.OB ||= (() => {
+    const params = new URLSearchParams(location.search);
+    const SECRET = params.get('secret') || '';
+    const N_WARN = 'true'; // ngrok bypass
+
+    const authHeaders = () => {
+      const h = { 'ngrok-skip-browser-warning': N_WARN };
+      if (SECRET) h['X-Shared-Secret'] = SECRET;
+      return h;
+    };
+
+    const noStore = { cache: 'no-store' }; // prevent stale credit reads
+
+    const fetchJSON = async (path, opts = {}) => {
+      const headers = { ...(opts.headers || {}), ...authHeaders() };
+      const url = `${path}${path.includes('?') ? '&' : '?'}ngrok-skip-browser-warning=${N_WARN}`;
+      const res = await fetch(url, { ...opts, headers, ...noStore });
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        throw new Error(`HTTP ${res.status} ${res.statusText} – ${text}`);
+      }
+      return res.json();
+    };
+
+    return { authHeaders, fetchJSON };
+  })());
+
+  // Credits state kept on window to be callable from existing handlers
+  window.obCredits = window.obCredits || { remaining: 0 };
+
+  window.obRefreshCredits = async function obRefreshCredits() {
+    try {
+      const data = await OB.fetchJSON('/debug/credits');
+      window.obCredits = data || { remaining: 0 };
+      const remainingRaw = typeof data?.remaining === 'number' ? Math.max(0, data.remaining) : NaN;
+      const remainingVal = Number.isNaN(remainingRaw) ? 'n/a' : remainingRaw;
+      window.__outOfCredits = Number.isNaN(remainingRaw) ? false : remainingRaw <= 0;
+      window.updateCreditsDebug?.(remainingVal);
+
+      // Friendly readout (Settings)
+      const friendly = document.getElementById('authStatusFriendly');
+      if (window.setCreditsFriendlyCopy && !Number.isNaN(remainingRaw)) {
+        window.setCreditsFriendlyCopy(`Credits remaining: ${remainingRaw}`);
+      } else if (friendly) {
+        friendly.style.display = 'block';
+        friendly.textContent = `Credits remaining: ${remainingVal}`;
+      }
+
+      // Toggle render buttons if present
+      const btns = [
+        document.getElementById('btnRehearseRender'),
+        document.getElementById('btnRender')
+      ].filter(Boolean);
+      btns.forEach(b => (b.disabled = Number.isNaN(remainingRaw) ? b.disabled : (remainingRaw <= 0)));
+    } catch (e) {
+      window.obCredits = { remaining: NaN };
+      window.__outOfCredits = false;
+      window.updateCreditsDebug?.('n/a');
+      console.warn('Credits refresh failed:', e.message);
+    }
+  };
+
+  window.obGrantCredits = async function obGrantCredits(n = 10) {
+    try {
+      await OB.fetchJSON('/debug/credits/grant', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ amount: n })
+      });
+      await window.obRefreshCredits();
+      const toast = document.getElementById('addCreditsToastSettings');
+      if (toast) { toast.style.display = 'block'; toast.textContent = `Granted ${n} credits.`; }
+    } catch (e) {
+      const toast = document.getElementById('addCreditsToastSettings');
+      if (toast) { toast.style.display = 'block'; toast.textContent = `Grant failed: ${e.message}`; }
+    }
+  };
+
+  // Render preflight used by Rehearse handler (opt-in: call this from your existing code)
+  window.callRenderWithPreflight = async function callRenderWithPreflight(payload) {
+    await window.obRefreshCredits();
+    if (!window.obCredits || window.obCredits.remaining <= 0) {
+      const s = document.getElementById('rehearseRenderStatus');
+      if (s) s.textContent = 'No credits remaining. Add credits in Settings.';
+      window.__outOfCredits = true;
+      const err = new Error('402: No credits');
+      err.status = 402;
+      throw err;
+    }
+    window.__outOfCredits = false;
+    return OB.fetchJSON('/debug/render', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+  };
+
+  // Auto-refresh on load; enable Settings button if present
+  window.addEventListener('DOMContentLoaded', () => {
+    const btn = document.getElementById('btnAddCreditsSettings');
+    if (btn) {
+      btn.disabled = false;
+      btn.addEventListener('click', () => window.obGrantCredits(10));
+    }
+    window.obRefreshCredits();
+  });
+})();
+</script>
 </body>
 </html>

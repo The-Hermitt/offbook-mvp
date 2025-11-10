@@ -1,25 +1,11 @@
 import express from "express";
 import crypto from "node:crypto";
+import { devSessions, type DevSession } from "../lib/devSessions";
+import { buildEntitlementFor } from "../lib/entitlement";
 
-const INCLUDED_RENDERS_PER_MONTH = Number(process.env.INCLUDED_RENDERS_PER_MONTH || 0);
 const DEV_STARTING_CREDITS = Number(process.env.DEV_STARTING_CREDITS || 0);
 
-// In-memory session store for single-tester dev
-type Sess = {
-  regChallenge?: string;
-  authChallenge?: string;
-  userId?: string;
-  credentialId?: string;
-  loggedIn?: boolean;
-
-  // — Entitlements (dev placeholders) —
-  plan?: "none" | "dev";
-  rendersUsed?: number;
-  creditsAvailable?: number;
-  periodStart?: string;
-  periodEnd?: string;
-};
-const sessions = new Map<string, Sess>();
+// In-memory session store for single-tester dev (shared via devSessions)
 
 function b64url(bytes: Buffer) {
   return bytes.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
@@ -66,17 +52,18 @@ function getOrCreateSid(req: express.Request, res: express.Response) {
     sid = crypto.randomUUID();
     setCookie(res, "ob_sid", sid, req);
   }
-  if (!sessions.has(sid)) {
+  if (!devSessions.has(sid)) {
     const now = new Date();
     const start = new Date(now.getFullYear(), now.getMonth(), 1);
     const end = new Date(now.getFullYear(), now.getMonth() + 1, 1);
-    sessions.set(sid, {
+    const session: DevSession = {
       plan: "none",
       rendersUsed: 0,
       creditsAvailable: DEV_STARTING_CREDITS,
       periodStart: start.toISOString(),
       periodEnd: end.toISOString(),
-    });
+    };
+    devSessions.set(sid, session);
   }
   return sid;
 }
@@ -109,7 +96,8 @@ router.get("/session", (req, res) => {
     : true;
 
   const sid = cookies["ob_sid"];
-  const sess = sid ? sessions.get(sid) : undefined;
+  const sess = sid ? devSessions.get(sid) : undefined;
+  const entitlement = buildEntitlementFor(req, sess);
 
   res.json({
     invited,
@@ -120,14 +108,7 @@ router.get("/session", (req, res) => {
       registered: Boolean(sess?.credentialId),
       loggedIn: Boolean(sess?.loggedIn),
     },
-    entitlement: {
-      plan: sess?.plan || "none",
-      included_quota: INCLUDED_RENDERS_PER_MONTH,
-      renders_used: sess?.rendersUsed ?? 0,
-      credits_available: sess?.creditsAvailable ?? 0,
-      period_start: sess?.periodStart || null,
-      period_end: sess?.periodEnd || null,
-    },
+    entitlement,
   });
 });
 
@@ -167,7 +148,7 @@ router.post("/signout", (_req, res) => {
 // For solo dev we default to a single tester identity.
 router.post("/passkey/register/start", (req, res) => {
   const sid = getOrCreateSid(req, res);
-  const sess = sessions.get(sid)!;
+  const sess = devSessions.get(sid)!;
 
   const rpId = getRpId(req);
   const challenge = genChallenge();
@@ -221,7 +202,7 @@ router.post("/passkey/register/start", (req, res) => {
 // Body: { id, rawId, response: { clientDataJSON, attestationObject? }, type }
 router.post("/passkey/register/finish", express.json({ limit: "1mb" }), (req, res) => {
   const sid = getOrCreateSid(req, res);
-  const sess = sessions.get(sid)!;
+  const sess = devSessions.get(sid)!;
 
   if (!sess.regChallenge) {
     return res.status(400).json({ ok: false, error: "no_challenge" });
@@ -262,7 +243,7 @@ router.post("/passkey/register/finish", express.json({ limit: "1mb" }), (req, re
 // Body optional: { userId?: string } -- kept for parity; allowCredentials omitted for dev.
 router.post("/passkey/login/start", (req, res) => {
   const sid = getOrCreateSid(req, res);
-  const sess = sessions.get(sid)!;
+  const sess = devSessions.get(sid)!;
 
   const rpId = getRpId(req);
   const challenge = genChallenge();
@@ -285,7 +266,7 @@ router.post("/passkey/login/start", (req, res) => {
 // Body: { id, rawId, response: { clientDataJSON, authenticatorData?, signature?, userHandle? }, type }
 router.post("/passkey/login/finish", express.json({ limit: "1mb" }), (req, res) => {
   const sid = getOrCreateSid(req, res);
-  const sess = sessions.get(sid)!;
+  const sess = devSessions.get(sid)!;
 
   if (!sess.authChallenge) {
     return res.status(400).json({ ok: false, error: "no_challenge" });
@@ -332,7 +313,7 @@ router.post("/dev/grant-credits", express.json(), (req, res) => {
   if (!devToolsOn) return res.status(403).json({ ok: false, error: "dev_tools_disabled" });
 
   const sid = getOrCreateSid(req, res);
-  const sess = sessions.get(sid)!;
+  const sess = devSessions.get(sid)!;
 
   const amt = Number((req.body && (req.body as any).amount) ?? 200);
   if (!Number.isFinite(amt) || amt <= 0) return res.status(400).json({ ok: false, error: "bad_amount" });

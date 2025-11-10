@@ -1,0 +1,236 @@
+Script Tag Counts
+-----------------
+<script count : 6
+</script> count: 6
+
+Line Numbers
+-------------
+<script lines : 12, 1315, 1316, 1319, 5174, 5378
+</script> lines: 28, 1315, 1316, 5090, 5377, 5491
+
+Nested Script Warnings
+----------------------
+None detected.
+
+Last 220 Lines
+---------------
+ 5274: 
+ 5275:         // Hold UI as signed-out during first load, and during post-signout window
+ 5276:         if (now < firstLoadLockUntil || now < uiLockUntil) {
+ 5277:           setAddCreditsEnabled(false);
+ 5278:           return;
+ 5279:         }
+ 5280: 
+ 5281:         const serverIn = await isSignedIn();
+ 5282: 
+ 5283:         // de-flap: require TWO consecutive "in" reads before enabling
+ 5284:         if (serverIn) {
+ 5285:           consecutiveIn = lastServerIn ? consecutiveIn + 1 : 1;
+ 5286:         } else {
+ 5287:           consecutiveIn = 0;
+ 5288:         }
+ 5289:         lastServerIn = serverIn;
+ 5290: 
+ 5291:         // If user last explicitly signed OUT, never auto-enable from background reads.
+ 5292:         // Require an explicit Sign In click to flip this.
+ 5293:         const lastAct = lastAuthAction();
+ 5294:         const allowEnable = lastAct !== 'signout';
+ 5295:         setAddCreditsEnabled(allowEnable && consecutiveIn >= 2);
+ 5296:       }
+ 5297: 
+ 5298:       // initial
+ 5299:       refresh();
+ 5300:       scheduleRefresh(300);  // one follow-up tick
+ 5301:       scheduleRefresh(1200); // and a second "settle" tick
+ 5302: 
+ 5303:       // React to auth UI changes without touching existing handlers
+ 5304:       const moTargets = [friendly, passkeyCopy].filter(Boolean);
+ 5305:       const mo = new MutationObserver(refresh);
+ 5306:       moTargets.forEach(t => mo.observe(t, { childList: true, characterData: true, subtree: true, attributes: true }));
+ 5307: 
+ 5308:       ['btnSignIn','btnSignOut','btnRegisterPasskey'].forEach(id=>{
+ 5309:         const el = document.getElementById(id);
+ 5310:         if (!el) return;
+ 5311:         el.addEventListener('click', () => {
+ 5312:           const now = Date.now();
+ 5313:           if (id === 'btnSignOut') {
+ 5314:             // remember user explicitly signed out
+ 5315:             try { localStorage.setItem('obAuthLast', JSON.stringify({ action: 'signout', ts: now })); } catch {}
+ 5316:             // Lock UI in "signed out" for 5000ms optimistically
+ 5317:             uiLockUntil = now + 5000;
+ 5318:             lastServerIn = false;
+ 5319:             consecutiveIn = 0;
+ 5320:             setAddCreditsEnabled(false);
+ 5321:           } else if (id === 'btnSignIn') {
+ 5322:             // remember user explicitly signed in
+ 5323:             try { localStorage.setItem('obAuthLast', JSON.stringify({ action: 'signin', ts: now })); } catch {}
+ 5324:             // Clear lock on sign-in attempt so we can re-enable quickly
+ 5325:             uiLockUntil = 0;
+ 5326:             lastServerIn = false;
+ 5327:             consecutiveIn = 0;
+ 5328:           }
+ 5329:           scheduleRefresh(150);
+ 5330:           scheduleRefresh(600);
+ 5331:           scheduleRefresh(1200);
+ 5332:         });
+ 5333:       });
+ 5334: 
+ 5335:       window.addEventListener('visibilitychange', () => {
+ 5336:         if (document.visibilityState === 'visible') scheduleRefresh(120);
+ 5337:       });
+ 5338:       window.addEventListener('pageshow', () => scheduleRefresh(120));
+ 5339: 
+ 5340:       // safe click handler (unchanged)
+ 5341:       btn && btn.addEventListener('click', function () {
+ 5342:         if (btn.disabled) return;
+ 5343:         try {
+ 5344:           if (toast) {
+ 5345:             toast.style.display = 'block';
+ 5346:             clearTimeout(toast._t);
+ 5347:             toast._t = setTimeout(() => { toast.style.display = 'none'; }, 2200);
+ 5348:           }
+ 5349:         } catch (_) {}
+ 5350:       });
+ 5351: 
+ 5352:       // Soft SFX even when disabled (no action fires)
+ 5353:       if (btn) {
+ 5354:         btn.addEventListener('pointerdown', function (e) {
+ 5355:           if (!btn.disabled) return;          // only add sound when disabled
+ 5356:           try {
+ 5357:             const AC = window.AudioContext || window.webkitAudioContext;
+ 5358:             const ctx = new AC();
+ 5359:             const osc = ctx.createOscillator();
+ 5360:             const gain = ctx.createGain();
+ 5361:             osc.type = 'square';
+ 5362:             osc.frequency.value = 220;
+ 5363:             osc.connect(gain);
+ 5364:             gain.connect(ctx.destination);
+ 5365:             const t = ctx.currentTime;
+ 5366:             gain.gain.setValueAtTime(0.0001, t);
+ 5367:             gain.gain.exponentialRampToValueAtTime(0.12, t + 0.005);
+ 5368:             gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.06);
+ 5369:             osc.start(t);
+ 5370:             osc.stop(t + 0.08);
+ 5371:           } catch (_) { /* ignore */ }
+ 5372:           e.preventDefault();
+ 5373:           e.stopPropagation();
+ 5374:         }, { capture: true });
+ 5375:       }
+ 5376:     })();
+ 5377:   </script>
+ 5378:   <script id="ob-helpers" defer>
+ 5379: /* === OffBook consolidated helpers (credits/auth + UI + preflight) ==========
+ 5380:    Single source of truth. Safe to re-run (idempotent): guards on window.OB.
+ 5381: ==============================================================================*/
+ 5382: (function () {
+ 5383:   // Reuse existing OB if present (avoid redeclaration on hot reload)
+ 5384:   const OB = (window.OB ||= (() => {
+ 5385:     const params = new URLSearchParams(location.search);
+ 5386:     const SECRET = params.get('secret') || '';
+ 5387:     const N_WARN = 'true'; // ngrok bypass
+ 5388: 
+ 5389:     const authHeaders = () => {
+ 5390:       const h = { 'ngrok-skip-browser-warning': N_WARN };
+ 5391:       if (SECRET) h['X-Shared-Secret'] = SECRET;
+ 5392:       return h;
+ 5393:     };
+ 5394: 
+ 5395:     const noStore = { cache: 'no-store' }; // prevent stale credit reads
+ 5396: 
+ 5397:     const fetchJSON = async (path, opts = {}) => {
+ 5398:       const headers = { ...(opts.headers || {}), ...authHeaders() };
+ 5399:       const url = `${path}${path.includes('?') ? '&' : '?'}ngrok-skip-browser-warning=${N_WARN}`;
+ 5400:       const res = await fetch(url, { ...opts, headers, ...noStore });
+ 5401:       if (!res.ok) {
+ 5402:         const text = await res.text().catch(() => '');
+ 5403:         throw new Error(`HTTP ${res.status} ${res.statusText} – ${text}`);
+ 5404:       }
+ 5405:       return res.json();
+ 5406:     };
+ 5407: 
+ 5408:     return { authHeaders, fetchJSON };
+ 5409:   })());
+ 5410: 
+ 5411:   // Credits state kept on window to be callable from existing handlers
+ 5412:   window.obCredits = window.obCredits || { remaining: 0 };
+ 5413: 
+ 5414:   window.obRefreshCredits = async function obRefreshCredits() {
+ 5415:     try {
+ 5416:       const data = await OB.fetchJSON('/debug/credits');
+ 5417:       window.obCredits = data || { remaining: 0 };
+ 5418:       const remainingRaw = typeof data?.remaining === 'number' ? Math.max(0, data.remaining) : NaN;
+ 5419:       const remainingVal = Number.isNaN(remainingRaw) ? 'n/a' : remainingRaw;
+ 5420:       window.__outOfCredits = Number.isNaN(remainingRaw) ? false : remainingRaw <= 0;
+ 5421:       window.updateCreditsDebug?.(remainingVal);
+ 5422: 
+ 5423:       // Friendly readout (Settings)
+ 5424:       const friendly = document.getElementById('authStatusFriendly');
+ 5425:       if (window.setCreditsFriendlyCopy && !Number.isNaN(remainingRaw)) {
+ 5426:         window.setCreditsFriendlyCopy(`Credits remaining: ${remainingRaw}`);
+ 5427:       } else if (friendly) {
+ 5428:         friendly.style.display = 'block';
+ 5429:         friendly.textContent = `Credits remaining: ${remainingVal}`;
+ 5430:       }
+ 5431: 
+ 5432:       // Toggle render buttons if present
+ 5433:       const btns = [
+ 5434:         document.getElementById('btnRehearseRender'),
+ 5435:         document.getElementById('btnRender')
+ 5436:       ].filter(Boolean);
+ 5437:       btns.forEach(b => (b.disabled = Number.isNaN(remainingRaw) ? b.disabled : (remainingRaw <= 0)));
+ 5438:     } catch (e) {
+ 5439:       window.obCredits = { remaining: NaN };
+ 5440:       window.__outOfCredits = false;
+ 5441:       window.updateCreditsDebug?.('n/a');
+ 5442:       console.warn('Credits refresh failed:', e.message);
+ 5443:     }
+ 5444:   };
+ 5445: 
+ 5446:   window.obGrantCredits = async function obGrantCredits(n = 10) {
+ 5447:     try {
+ 5448:       await OB.fetchJSON('/debug/credits/grant', {
+ 5449:         method: 'POST',
+ 5450:         headers: { 'Content-Type': 'application/json' },
+ 5451:         body: JSON.stringify({ amount: n })
+ 5452:       });
+ 5453:       await window.obRefreshCredits();
+ 5454:       const toast = document.getElementById('addCreditsToastSettings');
+ 5455:       if (toast) { toast.style.display = 'block'; toast.textContent = `Granted ${n} credits.`; }
+ 5456:     } catch (e) {
+ 5457:       const toast = document.getElementById('addCreditsToastSettings');
+ 5458:       if (toast) { toast.style.display = 'block'; toast.textContent = `Grant failed: ${e.message}`; }
+ 5459:     }
+ 5460:   };
+ 5461: 
+ 5462:   // Render preflight used by Rehearse handler (opt-in: call this from your existing code)
+ 5463:   window.callRenderWithPreflight = async function callRenderWithPreflight(payload) {
+ 5464:     await window.obRefreshCredits();
+ 5465:     if (!window.obCredits || window.obCredits.remaining <= 0) {
+ 5466:       const s = document.getElementById('rehearseRenderStatus');
+ 5467:       if (s) s.textContent = 'No credits remaining. Add credits in Settings.';
+ 5468:       window.__outOfCredits = true;
+ 5469:       const err = new Error('402: No credits');
+ 5470:       err.status = 402;
+ 5471:       throw err;
+ 5472:     }
+ 5473:     window.__outOfCredits = false;
+ 5474:     return OB.fetchJSON('/debug/render', {
+ 5475:       method: 'POST',
+ 5476:       headers: { 'Content-Type': 'application/json' },
+ 5477:       body: JSON.stringify(payload)
+ 5478:     });
+ 5479:   };
+ 5480: 
+ 5481:   // Auto-refresh on load; enable Settings button if present
+ 5482:   window.addEventListener('DOMContentLoaded', () => {
+ 5483:     const btn = document.getElementById('btnAddCreditsSettings');
+ 5484:     if (btn) {
+ 5485:       btn.disabled = false;
+ 5486:       btn.addEventListener('click', () => window.obGrantCredits(10));
+ 5487:     }
+ 5488:     window.obRefreshCredits();
+ 5489:   });
+ 5490: })();
+ 5491: </script>
+ 5492: </body>
+ 5493: </html>
