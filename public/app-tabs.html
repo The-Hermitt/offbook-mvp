@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <title>OFFBOOK — Rehearsal MVP</title>
-  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
   <!-- PWA / iOS standalone niceties -->
   <link rel="manifest" href="/manifest.webmanifest">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -11,24 +11,19 @@
   <link rel="apple-touch-icon" href="/icons/icon-192.png">
   <script>
     (function () {
-      const isPWA = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
       const vp = document.querySelector('meta[name=viewport]');
-      if (!vp) return;
-      if (isPWA) {
-        // Lock zoom in PWA so the app feels native (no pinch/double-tap zoom)
-        vp.setAttribute('content','width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover');
-        // Stop pinch/double-tap zoom (iOS only). Keep this scoped to PWA.
-        let lastTouchEnd = 0;
-        document.addEventListener('touchend', function(e){
-          const now = Date.now();
-          if (now - lastTouchEnd <= 350) e.preventDefault();
-          lastTouchEnd = now;
-        }, { passive:false });
-        document.addEventListener('gesturestart', e => e.preventDefault(), { passive:false });
-      } else {
-        // Keep Safari accessible
-        vp.setAttribute('content','width=device-width, initial-scale=1, viewport-fit=cover');
+      if (vp) {
+        vp.setAttribute('content', 'width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover');
       }
+
+      let lastTouchEnd = 0;
+      document.addEventListener('touchend', function (e) {
+        const now = Date.now();
+        if (now - lastTouchEnd <= 350) e.preventDefault();
+        lastTouchEnd = now;
+      }, { passive: false });
+
+      document.addEventListener('gesturestart', e => e.preventDefault(), { passive: false });
     })();
   </script>
     <style>
@@ -64,6 +59,8 @@
     }
     *{ box-sizing:border-box }
     html,body{
+      overscroll-behavior:none;
+      touch-action:manipulation;
       margin:0;
       padding:0;
       min-height:100%;
@@ -306,6 +303,17 @@
       letter-spacing:.3px;
     }
     .small{ font-size:12px; color:var(--muted); letter-spacing:.2px }
+    /* Settings action row: tidy 2×2 grid on small screens */
+    #screen-settings #authActionsRow {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+    @media (min-width: 560px) {
+      #screen-settings #authActionsRow {
+        grid-template-columns: repeat(4, 1fr);
+      }
+    }
     
     /* Rehearse render status — keep visible and readable */
     #rehearseRenderStatus{
@@ -1207,11 +1215,14 @@ JANE: Ready?"></textarea>
           </div>
           <div class="spacer8"></div>
         </div>
-        <div class="row">
+        <div id="authActionsRow" class="row">
           <button id="btnRegisterPasskey" class="btn">Register Passkey</button>
           <button id="btnSignIn" class="btn secondary">Sign In</button>
           <button id="btnSignOut" class="btn secondary">Sign Out</button>
+          <button id="btnAddCreditsSettings" class="btn secondary" disabled>Add credits</button>
         </div>
+        <div id="addCreditsHintSettings" class="small">Sign in to add credits.</div>
+        <div id="addCreditsToastSettings" class="small" style="display:none; margin-top:6px">Stripe checkout coming soon.</div>
 
         <div class="spacer8"></div>
         <pre id="authStatus" class="status" aria-live="polite"></pre>
@@ -4973,5 +4984,204 @@ JANE: Ready?"></textarea>
       </div>
     </div>
   </div>
+  <script>
+    (function () {
+      // Elements
+      const btn = document.getElementById('btnAddCreditsSettings');
+      const hint = document.getElementById('addCreditsHintSettings');
+      const toast = document.getElementById('addCreditsToastSettings');
+      const friendly = document.getElementById('authStatusFriendly');   // text area that mirrors auth state
+      const passkeyCopy = document.getElementById('passkeySignedInCopy'); // shown when passkey signed-in
+
+      function setFriendlySignedState(on) {
+        // Prefer the specific line if present; fall back to the older container
+        const el = document.getElementById('passkeySignedInCopy') || document.getElementById('authStatusFriendly');
+        if (!el) return;
+        el.textContent = on ? "You're signed in with a passkey." : "Not signed in.";
+      }
+
+      const FIRST_LOAD_LOCK_MS = 3000;      // minimum "signed-out" window on initial load
+      let firstLoadLockUntil = 0;
+      try {
+        const raw = localStorage.getItem('obAuthLast');
+        const last = raw ? JSON.parse(raw) : null;
+        // If the last explicit action was SIGNOUT (within 15 minutes), hold UI as signed-out briefly on load.
+        if (last && last.action === 'signout' && (Date.now() - (last.ts || 0) < 15 * 60 * 1000)) {
+          firstLoadLockUntil = Date.now() + FIRST_LOAD_LOCK_MS;
+        }
+      } catch {}
+
+      function lastAuthAction() {
+        try {
+          const raw = localStorage.getItem('obAuthLast');
+          return raw ? JSON.parse(raw).action : null;
+        } catch {
+          return null;
+        }
+      }
+
+      let uiLockUntil = 0;          // timestamp while we force "signed out"
+      let lastServerIn = false;     // last server read of loggedIn
+      let consecutiveIn = 0;        // count consecutive "in" reads
+
+      let _inflight = false;
+      let _lastFetchAt = 0;
+      let _nextTimer = null;
+
+      function scheduleRefresh(delayMs = 0) {
+        if (_nextTimer) clearTimeout(_nextTimer);
+        _nextTimer = setTimeout(() => {
+          _nextTimer = null;
+          refresh();
+        }, delayMs);
+      }
+
+      async function isSignedIn() {
+        if (_inflight) return lastServerIn; // reuse last known truth while a call is in flight
+        _inflight = true;
+        const url = `${location.origin}/auth/session?t=${Date.now()}&rand=${Math.random()}`;
+        try {
+          const r = await fetch(url, {
+            method: 'GET',
+            credentials: 'include',
+            cache: 'no-store',
+            headers: {
+              'Cache-Control': 'no-cache, no-store, max-age=0',
+              'Pragma': 'no-cache',
+              'Accept': 'application/json'
+            }
+          });
+          const text = await r.text(); // read raw
+          let j = null;
+          try { j = JSON.parse(text); } catch (_) {}
+          return !!(j && j.passkey && j.passkey.loggedIn);
+        } catch (err) {
+          return false;
+        } finally {
+          _inflight = false;
+        }
+      }
+
+      function setAddCreditsEnabled(on) {
+        if (!btn) return;
+        btn.disabled = !on;
+        if (on) btn.classList.remove('secondary');
+        else btn.classList.add('secondary');
+        if (hint) hint.style.display = on ? 'none' : 'block';
+        setFriendlySignedState(on);
+      }
+
+      async function refresh() {
+        const now = Date.now();
+        // throttle
+        if (now - _lastFetchAt < 800) {
+          scheduleRefresh(800 - (now - _lastFetchAt));
+          return;
+        }
+        _lastFetchAt = now;
+
+        // Hold UI as signed-out during first load, and during post-signout window
+        if (now < firstLoadLockUntil || now < uiLockUntil) {
+          setAddCreditsEnabled(false);
+          return;
+        }
+
+        const serverIn = await isSignedIn();
+
+        // de-flap: require TWO consecutive "in" reads before enabling
+        if (serverIn) {
+          consecutiveIn = lastServerIn ? consecutiveIn + 1 : 1;
+        } else {
+          consecutiveIn = 0;
+        }
+        lastServerIn = serverIn;
+
+        // If user last explicitly signed OUT, never auto-enable from background reads.
+        // Require an explicit Sign In click to flip this.
+        const lastAct = lastAuthAction();
+        const allowEnable = lastAct !== 'signout';
+        setAddCreditsEnabled(allowEnable && consecutiveIn >= 2);
+      }
+
+      // initial
+      refresh();
+      scheduleRefresh(300);  // one follow-up tick
+      scheduleRefresh(1200); // and a second "settle" tick
+
+      // React to auth UI changes without touching existing handlers
+      const moTargets = [friendly, passkeyCopy].filter(Boolean);
+      const mo = new MutationObserver(refresh);
+      moTargets.forEach(t => mo.observe(t, { childList: true, characterData: true, subtree: true, attributes: true }));
+
+      ['btnSignIn','btnSignOut','btnRegisterPasskey'].forEach(id=>{
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.addEventListener('click', () => {
+          const now = Date.now();
+          if (id === 'btnSignOut') {
+            // remember user explicitly signed out
+            try { localStorage.setItem('obAuthLast', JSON.stringify({ action: 'signout', ts: now })); } catch {}
+            // Lock UI in "signed out" for 5000ms optimistically
+            uiLockUntil = now + 5000;
+            lastServerIn = false;
+            consecutiveIn = 0;
+            setAddCreditsEnabled(false);
+          } else if (id === 'btnSignIn') {
+            // remember user explicitly signed in
+            try { localStorage.setItem('obAuthLast', JSON.stringify({ action: 'signin', ts: now })); } catch {}
+            // Clear lock on sign-in attempt so we can re-enable quickly
+            uiLockUntil = 0;
+            lastServerIn = false;
+            consecutiveIn = 0;
+          }
+          scheduleRefresh(150);
+          scheduleRefresh(600);
+          scheduleRefresh(1200);
+        });
+      });
+
+      window.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') scheduleRefresh(120);
+      });
+      window.addEventListener('pageshow', () => scheduleRefresh(120));
+
+      // safe click handler (unchanged)
+      btn && btn.addEventListener('click', function () {
+        if (btn.disabled) return;
+        try {
+          if (toast) {
+            toast.style.display = 'block';
+            clearTimeout(toast._t);
+            toast._t = setTimeout(() => { toast.style.display = 'none'; }, 2200);
+          }
+        } catch (_) {}
+      });
+
+      // Soft SFX even when disabled (no action fires)
+      if (btn) {
+        btn.addEventListener('pointerdown', function (e) {
+          if (!btn.disabled) return;          // only add sound when disabled
+          try {
+            const AC = window.AudioContext || window.webkitAudioContext;
+            const ctx = new AC();
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            osc.type = 'square';
+            osc.frequency.value = 220;
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+            const t = ctx.currentTime;
+            gain.gain.setValueAtTime(0.0001, t);
+            gain.gain.exponentialRampToValueAtTime(0.12, t + 0.005);
+            gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.06);
+            osc.start(t);
+            osc.stop(t + 0.08);
+          } catch (_) { /* ignore */ }
+          e.preventDefault();
+          e.stopPropagation();
+        }, { capture: true });
+      }
+    })();
+  </script>
 </body>
 </html>
