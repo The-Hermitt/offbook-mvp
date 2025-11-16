@@ -3413,6 +3413,17 @@ JANE: Ready?"></textarea>
 
         RR.rendering = false; stopDots();
         ReaderCache.set(RR.map);
+        try {
+          const resp = await fetch("/auth/dev/use-credit?dev=1", withSecretHeaders({
+            method: "POST",
+            headers: { ...JSON_HDRS, "Accept": "application/json" },
+          }));
+          if (resp.ok && typeof refreshAuthUI === "function") {
+            await refreshAuthUI();
+          }
+        } catch (e) {
+          console.warn("dev/use-credit failed", e);
+        }
 
         const okCount = RR.map.size;
         const errText = String(firstErr || "");

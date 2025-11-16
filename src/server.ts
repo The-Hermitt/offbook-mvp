@@ -434,6 +434,14 @@ function mountFallbackDebugRoutes() {
 
   app.get("/debug/render_status", requireSecret, audit("/debug/render_status"), (req: Request, res: Response) => {
     const render_id = String(req.query.render_id || "");
+
+    // DEBUG: see if this route is being hit and what cookies we have
+    console.log("[debug] /debug/render_status request:", {
+      render_id,
+      cookies: (req as any).cookies || null,
+      hasSidCookie: Boolean((req as any).cookies?.ob_sid),
+    });
+
     const job = mem.renders.get(render_id);
     if (!job) {
       return res.status(404).json({ error: "not found" });
