@@ -8,6 +8,7 @@ import crypto from "crypto";
 import db from "./lib/db";
 import { ensureAuditTable, makeAuditMiddleware } from "./lib/audit";
 import { makeRateLimiters } from "./middleware/rateLimit";
+import { noteRenderComplete } from "./routes/auth";
 
 // ---------- Types ----------
 type SceneLine = { speaker: string; text: string };
@@ -31,7 +32,12 @@ function secretGuard(req: Request, res: Response, next: NextFunction) {
 
 // ---------- In-memory state ----------
 const scripts = new Map<string, Script>();
-const renders = new Map<string, { status: "queued" | "working" | "complete" | "error"; file?: string; err?: string }>();
+const renders = new Map<string, {
+  status: "queued" | "working" | "complete" | "error";
+  file?: string;
+  err?: string;
+  accounted?: boolean;
+}>();
 
 // ---------- Assets dir ----------
 const ASSETS_DIR = path.join(process.cwd(), "assets");
@@ -228,6 +234,10 @@ export function initHttpRoutes(app: Express) {
   const { debugLimiter, renderLimiter } = makeRateLimiters();
 
   const debug = express.Router();
+  // Quick probe to confirm http-routes.ts is mounted
+  debug.get("/whoami", (req: Request, res: Response) => {
+    res.json({ ok: true, marker: "http-routes.ts" });
+  });
   const api = express.Router();
 
   debug.use(secretGuard);
@@ -289,17 +299,32 @@ export function initHttpRoutes(app: Express) {
     if (!scripts.has(script_id)) return res.status(404).json({ error: "script not found" });
 
     const renderId = crypto.randomUUID();
-    renders.set(renderId, { status: "working" });
+    renders.set(renderId, { status: "working", accounted: false });
     const file = writeSilentMp3(renderId);
-    renders.set(renderId, { status: "complete", file });
+    renders.set(renderId, { status: "complete", file, accounted: false });
     res.json({ render_id: renderId, status: "complete" });
   });
 
   // GET /debug/render_status
   debug.get("/render_status", audit("/debug/render_status"), (req: Request, res: Response) => {
     const rid = String(req.query.render_id || "");
-    if (!rid || !renders.has(rid)) return res.status(404).json({ status: "error", error: "render not found" });
+    if (!rid || !renders.has(rid)) {
+      return res.status(404).json({ status: "error", error: "render not found" });
+    }
     const job = renders.get(rid)!;
+
+    // When a render first reaches "complete", account for it exactly once.
+    if (job.status === "complete" && !job.accounted) {
+      try {
+        console.log("[credits] render complete (http-routes): accounting usage; rid=%s", rid);
+        noteRenderComplete(req);
+        job.accounted = true;
+        renders.set(rid, job);
+      } catch (err) {
+        console.error("[credits] noteRenderComplete failed (http-routes):", err);
+      }
+    }
+
     const payload: any = { status: job.status };
     if (job.status === "complete" && job.file) {
       const base = baseUrlFrom(req);

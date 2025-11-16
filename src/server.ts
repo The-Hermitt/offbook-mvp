@@ -5,7 +5,7 @@ import multer from "multer";
 import { createRequire } from "module";
 import cookieParser from "cookie-parser";
 import cookieSession from "cookie-session";
-import authRouter from "./routes/auth";
+import authRouter, { noteRenderComplete } from "./routes/auth";
 import db from "./lib/db";
 import { ensureAuditTable, makeAuditMiddleware } from "./lib/audit";
 import { makeRateLimiters } from "./middleware/rateLimit";
@@ -106,9 +106,16 @@ type Line = { speaker: string; text: string };
 type Scene = { id: string; title: string; lines: Line[] };
 type Script = { id: string; title: string; scenes: Scene[]; voices: Record<string, string> };
 
+type RenderJob = {
+  status: "queued" | "complete" | "error";
+  url?: string;
+  err?: string;
+  accounted?: boolean;
+};
+
 const mem = {
   scripts: new Map<string, Script>(),
-  renders: new Map<string, { status: "queued" | "complete" | "error"; url?: string; err?: string }>(),
+  renders: new Map<string, RenderJob>(),
   assets: new Map<string, Buffer>(), // id -> MP3 bytes (for renders and single-line TTS)
 };
 const upload = multer({ storage: multer.memoryStorage() });
@@ -303,6 +310,9 @@ app.post("/debug/tts_line", requireSecret, async (req: Request, res: Response) =
 // ---------- Routes ----------
 function mountFallbackDebugRoutes() {
   app.get("/debug/ping", requireSecret, (_req, res) => res.json({ ok: true }));
+  app.get("/debug/whoami", requireSecret, (req: Request, res: Response) => {
+    res.json({ ok: true, marker: "fallback/server.ts" });
+  });
 
   app.post("/debug/upload_script_text", requireSecret, audit("/debug/upload_script_text"), (req: Request, res: Response) => {
     const title = String(req.body?.title || "Script");
@@ -384,7 +394,8 @@ function mountFallbackDebugRoutes() {
     if (!OPENAI_API_KEY) return res.status(500).json({ error: "OPENAI_API_KEY not set" });
 
     const rid = genId("rnd");
-    mem.renders.set(rid, { status: "queued" });
+    const job: RenderJob = { status: "queued", accounted: false };
+    mem.renders.set(rid, job);
 
     (async () => {
       try {
@@ -408,10 +419,13 @@ function mountFallbackDebugRoutes() {
 
         const mp3 = concatMp3(chunks.length ? chunks : [await openaiTts(" ", "alloy", "tts-1")]);
         mem.assets.set(rid, mp3);
-        mem.renders.set(rid, { status: "complete", url: `/api/assets/${rid}` });
+
+        job.status = "complete";
+        job.url = `/api/assets/${rid}`;
       } catch (e: any) {
         const msg = e?.message || String(e);
-        mem.renders.set(rid, { status: "error", err: msg });
+        job.status = "error";
+        job.err = msg;
       }
     })();
 
@@ -419,10 +433,36 @@ function mountFallbackDebugRoutes() {
   });
 
   app.get("/debug/render_status", requireSecret, audit("/debug/render_status"), (req: Request, res: Response) => {
-    const rid = String(req.query.render_id || "");
-    const r = mem.renders.get(rid);
-    if (!r) return res.status(404).json({ error: "not found" });
-    res.json({ status: r.status, download_url: r.url, error: r.err });
+    const render_id = String(req.query.render_id || "");
+    const job = mem.renders.get(render_id);
+    if (!job) {
+      return res.status(404).json({ error: "not found" });
+    }
+
+    console.log(
+      "[debug] fallback render_status hit: rid=%s status=%s accounted=%s",
+      render_id,
+      job.status,
+      (job as any).accounted
+    );
+
+    // When a render first reaches "complete", account for it exactly once.
+    if (job.status === "complete" && !job.accounted) {
+      try {
+        console.log("[credits] render complete: accounting usage; rid=%s", render_id);
+        noteRenderComplete(req);
+        job.accounted = true;
+      } catch (err) {
+        console.error("[credits] noteRenderComplete failed:", err);
+      }
+    }
+
+    // Return a minimal, stable shape
+    res.json({
+      status: job.status,
+      url: job.url,
+      err: job.err,
+    });
   });
 
   app.get("/api/assets/:render_id", (req: Request, res: Response) => {

@@ -81,6 +81,44 @@ function getOrCreateSid(req: express.Request, res: express.Response) {
   return sid;
 }
 
+export function noteRenderComplete(req: express.Request) {
+  const cookies = parseCookies(req);
+  const sid = cookies["ob_sid"];
+  if (!sid) {
+    console.log("[credits] noteRenderComplete: missing ob_sid cookie");
+    return;
+  }
+
+  const sess = sessions.get(sid);
+  if (!sess) {
+    console.log("[credits] noteRenderComplete: no session for sid", sid);
+    return;
+  }
+
+  const beforeUsed =
+    typeof sess.rendersUsed === "number" ? sess.rendersUsed : 0;
+  const beforeCredits =
+    typeof sess.creditsAvailable === "number" ? sess.creditsAvailable : 0;
+
+  const used = beforeUsed + 1;
+  let credits = beforeCredits;
+  if (credits > 0) {
+    credits = credits - 1;
+  }
+
+  sess.rendersUsed = used;
+  sess.creditsAvailable = credits;
+
+  console.log(
+    "[credits] noteRenderComplete: sid=%s used %d→%d credits %d→%d",
+    sid,
+    beforeUsed,
+    used,
+    beforeCredits,
+    credits
+  );
+}
+
 function getRpId(req: express.Request) {
   const envId = (process.env.RP_ID || "").trim();
   if (envId) return envId;
@@ -254,7 +292,14 @@ router.post("/passkey/register/finish", express.json({ limit: "1mb" }), (req, re
   sess.loggedIn = true;
   delete sess.regChallenge;
 
-  return res.json({ ok: true, userId: sess.userId, credentialId: sess.credentialId });
+  // Auto sign-in after successful registration
+  const sid2 = getOrCreateSid(req, res);
+  const postSess = sessions.get(sid2) || {};
+  postSess.loggedIn = true;
+  postSess.userId = postSess.userId || `passkey:${(postSess.credentialId || "").slice(0, 8)}`;
+  sessions.set(sid2, postSess);
+
+  return res.json({ ok: true, userId: sess.userId, credentialId: sess.credentialId, autoSignedIn: true });
 });
 
 // --- PASSKEY LOGIN: START -----------------------------------------------------
@@ -334,11 +379,73 @@ router.post("/dev/grant-credits", express.json(), (req, res) => {
   const sid = getOrCreateSid(req, res);
   const sess = sessions.get(sid)!;
 
-  const amt = Number((req.body && (req.body as any).amount) ?? 200);
-  if (!Number.isFinite(amt) || amt <= 0) return res.status(400).json({ ok: false, error: "bad_amount" });
+  const amount = Number(req.body?.amount ?? 200) || 200;
+  const before = typeof sess.creditsAvailable === "number"
+    ? sess.creditsAvailable
+    : 0;
 
-  sess.creditsAvailable = (sess.creditsAvailable || 0) + amt;
-  return res.json({ ok: true, credits_available: sess.creditsAvailable });
+  sess.creditsAvailable = before + amount;
+
+  console.log(
+    "[credits] dev grant: sid=%s before=%d amount=%d after=%d",
+    sid,
+    before,
+    amount,
+    sess.creditsAvailable
+  );
+
+  return res.json({
+    ok: true,
+    sid,
+    credits_available: sess.creditsAvailable,
+  });
+});
+
+router.post("/dev/use-credit", express.json(), (req, res) => {
+  const devToolsOn = /^true$/i.test(process.env.DEV_TOOLS || "") ||
+                     /(^|[?&])dev(=1|&|$)/.test(req.url);
+  if (!devToolsOn) {
+    return res.status(403).json({ ok: false, error: "dev_tools_disabled" });
+  }
+
+  const sid = getOrCreateSid(req, res);
+  const sess = sessions.get(sid)!;
+
+  const beforeUsed =
+    typeof sess.rendersUsed === "number" ? sess.rendersUsed : 0;
+  const beforeCredits =
+    typeof sess.creditsAvailable === "number" ? sess.creditsAvailable : 0;
+
+  if (beforeCredits <= 0) {
+    return res.status(400).json({
+      ok: false,
+      error: "no_credits",
+      renders_used: beforeUsed,
+      credits_available: beforeCredits,
+    });
+  }
+
+  const used = beforeUsed + 1;
+  const credits = beforeCredits - 1;
+
+  sess.rendersUsed = used;
+  sess.creditsAvailable = credits;
+
+  console.log(
+    "[credits] dev use-credit: sid=%s used %d→%d credits %d→%d",
+    sid,
+    beforeUsed,
+    used,
+    beforeCredits,
+    credits
+  );
+
+  return res.json({
+    ok: true,
+    sid,
+    renders_used: used,
+    credits_available: credits,
+  });
 });
 
 export default router;

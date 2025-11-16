@@ -1372,14 +1372,29 @@ JANE: Ready?"></textarea>
         document.body.classList.remove("ob-modal-open");
       }
       (function wirePaywallModal(){
-        document.getElementById("paywallClose")?.addEventListener("click", closePaywall);
-        document.getElementById("btnStartSub")?.addEventListener("click", () => {
-          alert("Subscription flow coming soon.");
+        const btnClose = document.getElementById("paywallClose");
+        const btnStartSub = document.getElementById("btnStartSub");
+        const btnAddCredits = document.getElementById("btnAddCredits");
+
+        function goToSettings(){
+          closePaywall();
+          try {
+            showScreen("settings");
+            const settings = document.getElementById("screen-settings");
+            settings?.scrollIntoView({ behavior: "smooth", block: "start" });
+          } catch {}
+        }
+
+        btnClose?.addEventListener("click", () => {
           closePaywall();
         });
-        document.getElementById("btnAddCredits")?.addEventListener("click", () => {
-          alert("Add-credits flow coming soon.");
-          closePaywall();
+
+        btnStartSub?.addEventListener("click", () => {
+          goToSettings();
+        });
+
+        btnAddCredits?.addEventListener("click", () => {
+          goToSettings();
         });
       })();
       async function hasEntitlementToRender(){
@@ -1396,20 +1411,41 @@ JANE: Ready?"></textarea>
           document.getElementById("btnRender"),
         ].filter(Boolean);
 
-        for (const el of targets){
-          el.addEventListener("click", async (e) => {
-            try{
-              const ok = await hasEntitlementToRender();
-              if (!ok){
-                e.stopImmediatePropagation();
-                e.preventDefault();
-                openPaywall("Start a subscription or add credits to render.");
-              }
-            } catch {
-              e.stopImmediatePropagation();
-              e.preventDefault();
-              openPaywall("We couldn't verify your access. Please try again.");
+        for (const el of targets) {
+          el.addEventListener("click", (e) => {
+            // If this click has already been approved by the guard, let it pass.
+            if (el.dataset.obGuardApproved === "1") {
+              // Clear the flag so the next real click is checked again.
+              delete el.dataset.obGuardApproved;
+              return;
             }
+
+            // Stop the original click immediately so the normal render handler
+            // can't run until we've checked entitlements.
+            e.stopImmediatePropagation();
+            e.preventDefault();
+
+            (async () => {
+              try {
+                const ok = await hasEntitlementToRender();
+                if (!ok) {
+                  openPaywall("Start a subscription or add credits to render.");
+                  return;
+                }
+
+                // Mark this element as approved and fire a second synthetic click.
+                // Our capture handler will see the flag and let it fall through.
+                el.dataset.obGuardApproved = "1";
+                const evt = new MouseEvent("click", {
+                  bubbles: true,
+                  cancelable: true,
+                  view: window
+                });
+                el.dispatchEvent(evt);
+              } catch {
+                openPaywall("We couldn't verify your access. Please try again.");
+              }
+            })();
           }, { capture: true });
         }
       }
@@ -4055,6 +4091,14 @@ JANE: Ready?"></textarea>
               clearInterval(dotsTimer);
               setStatusRec("Reader ready.");
               R.btnRender.disabled = false;
+              // After a successful render, refresh entitlement snapshot so the counter updates
+              try {
+                if (typeof refreshAuthUI === "function") {
+                  await refreshAuthUI();
+                }
+              } catch {
+                // best-effort only; don't break playback if this fails
+              }
             }else if(js.status==="error"){
               clearInterval(dotsTimer);
               setStatusRec("Render failed: "+(js.error||"unknown")); R.btnRender.disabled=false;
