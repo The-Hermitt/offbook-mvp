@@ -5,14 +5,21 @@ import multer from "multer";
 import { createRequire } from "module";
 import cookieParser from "cookie-parser";
 import cookieSession from "cookie-session";
-import authRouter from "./routes/auth";
+import Stripe from "stripe";
+import authRouter, { noteRenderComplete } from "./routes/auth";
 import db from "./lib/db";
+import { addUserCredits, getAvailableCredits } from "./lib/credits";
 import { ensureAuditTable, makeAuditMiddleware } from "./lib/audit";
 import { makeRateLimiters } from "./middleware/rateLimit";
 
 const app = express();
 const PORT = Number(process.env.PORT || 3010);
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
+const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY || "";
+const stripe =
+  STRIPE_SECRET_KEY
+    ? new Stripe(STRIPE_SECRET_KEY)
+    : null;
 
 // --- tiny helper: safe fetch with timeout ---
 async function fetchWithTimeout(input: RequestInfo, init: RequestInit & { timeoutMs?: number } = {}) {
@@ -101,14 +108,142 @@ app.get("/health/tts", (_req, res) =>
   res.json({ engine: "openai", has_key: !!OPENAI_API_KEY })
 );
 
+// Billing — Phase 1: real Stripe Checkout (test mode)
+app.post("/billing/create_checkout", express.json(), async (req: Request, res: Response) => {
+  try {
+    if (!stripe) {
+      return res.status(500).json({
+        ok: false,
+        error: "stripe_not_configured",
+      });
+    }
+
+    const body = (req.body || {}) as { planId?: string };
+    const planId = body.planId || "credits-100";
+
+    const priceId = process.env.STRIPE_PRICE_TOPUP_100;
+    if (!priceId) {
+      return res.status(500).json({
+        ok: false,
+        error: "missing_price_id",
+      });
+    }
+
+    const successUrl =
+      process.env.STRIPE_SUCCESS_URL ||
+      "https://example.com/offbook-success";
+    const cancelUrl =
+      process.env.STRIPE_CANCEL_URL ||
+      "https://example.com/offbook-cancel";
+
+    const session = await stripe.checkout.sessions.create({
+      mode: "payment",
+      line_items: [
+        {
+          price: priceId,
+          quantity: 1,
+        },
+      ],
+      success_url: successUrl,
+      cancel_url: cancelUrl,
+      client_reference_id: planId,
+    });
+
+    console.log("[billing] stripe checkout session=%s plan=%s", session.id, planId);
+
+    return res.json({
+      ok: true,
+      checkout_url: session.url,
+      mode: "stripe_test",
+    });
+  } catch (e: any) {
+    console.error("[billing] create_checkout error", e);
+    const msg = e?.message || String(e);
+    return res.status(500).json({
+      ok: false,
+      error: msg.slice(0, 200),
+    });
+  }
+});
+
+// Billing — Phase 2: Stripe webhook (initial credits wiring)
+app.post("/billing/webhook", (req: Request, res: Response) => {
+  const sig = req.header("Stripe-Signature") || "";
+  const event: any = (req as any).body || {};
+
+  console.log("[billing] webhook raw hit", {
+    path: req.path,
+    stripeSignature: sig,
+    eventType: event?.type,
+    eventId: event?.id,
+  });
+
+  try {
+    // We only care about completed checkout sessions for now
+    if (event.type === "checkout.session.completed") {
+      const session = event?.data?.object || {};
+      const ref = session?.client_reference_id || "credits-100";
+
+      // TEMP: single test user for MVP wiring
+      const userId = "solo-tester";
+
+      // TEMP: simple mapping — "credits-100" plan → +100 credits
+      let creditsToAdd = 0;
+      if (ref === "credits-100") {
+        creditsToAdd = 100;
+      }
+
+      if (creditsToAdd > 0) {
+        const snap = addUserCredits(userId, creditsToAdd);
+        const available = getAvailableCredits(snap);
+
+        console.log("[billing] webhook credited", {
+          userId,
+          creditsAdded: creditsToAdd,
+          totalCredits: snap.total_credits,
+          usedCredits: snap.used_credits,
+          availableCredits: available,
+          stripeEventId: event.id,
+        });
+
+        return res.json({
+          ok: true,
+          handled: true,
+          user_id: userId,
+          credits_added: creditsToAdd,
+          total_credits: snap.total_credits,
+          used_credits: snap.used_credits,
+          available_credits: available,
+        });
+      }
+    }
+
+    // Other event types are acknowledged but ignored for now
+    return res.json({ ok: true, handled: false });
+  } catch (err: any) {
+    console.error("[billing] webhook error", err);
+    const msg = err?.message || String(err);
+    return res
+      .status(500)
+      .json({ ok: false, error: msg.slice(0, 200) });
+  }
+});
+
 // ---- In-memory store (fallback + rendered assets)
 type Line = { speaker: string; text: string };
 type Scene = { id: string; title: string; lines: Line[] };
 type Script = { id: string; title: string; scenes: Scene[]; voices: Record<string, string> };
 
+type RenderJob = {
+  status: "queued" | "complete" | "error";
+  url?: string;
+  err?: string;
+  accounted?: boolean;
+};
+
 const mem = {
   scripts: new Map<string, Script>(),
-  renders: new Map<string, { status: "queued" | "complete" | "error"; url?: string; err?: string }>(),
+  renders: new Map<string, RenderJob>(),
   assets: new Map<string, Buffer>(), // id -> MP3 bytes (for renders and single-line TTS)
 };
 const upload = multer({ storage: multer.memoryStorage() });
@@ -303,6 +438,9 @@ app.post("/debug/tts_line", requireSecret, async (req: Request, res: Response) =
 // ---------- Routes ----------
 function mountFallbackDebugRoutes() {
   app.get("/debug/ping", requireSecret, (_req, res) => res.json({ ok: true }));
+  app.get("/debug/whoami", requireSecret, (req: Request, res: Response) => {
+    res.json({ ok: true, marker: "fallback/server.ts" });
+  });
 
   app.post("/debug/upload_script_text", requireSecret, audit("/debug/upload_script_text"), (req: Request, res: Response) => {
     const title = String(req.body?.title || "Script");
@@ -384,7 +522,8 @@ function mountFallbackDebugRoutes() {
     if (!OPENAI_API_KEY) return res.status(500).json({ error: "OPENAI_API_KEY not set" });
 
     const rid = genId("rnd");
-    mem.renders.set(rid, { status: "queued" });
+    const job: RenderJob = { status: "queued", accounted: false };
+    mem.renders.set(rid, job);
 
     (async () => {
       try {
@@ -408,10 +547,13 @@ function mountFallbackDebugRoutes() {
 
         const mp3 = concatMp3(chunks.length ? chunks : [await openaiTts(" ", "alloy", "tts-1")]);
         mem.assets.set(rid, mp3);
-        mem.renders.set(rid, { status: "complete", url: `/api/assets/${rid}` });
+
+        job.status = "complete";
+        job.url = `/api/assets/${rid}`;
       } catch (e: any) {
         const msg = e?.message || String(e);
-        mem.renders.set(rid, { status: "error", err: msg });
+        job.status = "error";
+        job.err = msg;
       }
     })();
 
@@ -419,10 +561,44 @@ function mountFallbackDebugRoutes() {
   });
 
   app.get("/debug/render_status", requireSecret, audit("/debug/render_status"), (req: Request, res: Response) => {
-    const rid = String(req.query.render_id || "");
-    const r = mem.renders.get(rid);
-    if (!r) return res.status(404).json({ error: "not found" });
-    res.json({ status: r.status, download_url: r.url, error: r.err });
+    const render_id = String(req.query.render_id || "");
+
+    // DEBUG: see if this route is being hit and what cookies we have
+    console.log("[debug] /debug/render_status request:", {
+      render_id,
+      cookies: (req as any).cookies || null,
+      hasSidCookie: Boolean((req as any).cookies?.ob_sid),
+    });
+
+    const job = mem.renders.get(render_id);
+    if (!job) {
+      return res.status(404).json({ error: "not found" });
+    }
+
+    console.log(
+      "[debug] fallback render_status hit: rid=%s status=%s accounted=%s",
+      render_id,
+      job.status,
+      (job as any).accounted
+    );
+
+    // When a render first reaches "complete", account for it exactly once.
+    if (job.status === "complete" && !job.accounted) {
+      try {
+        console.log("[credits] render complete: accounting usage; rid=%s", render_id);
+        noteRenderComplete(req);
+        job.accounted = true;
+      } catch (err) {
+        console.error("[credits] noteRenderComplete failed:", err);
+      }
+    }
+
+    // Return a minimal, stable shape
+    res.json({
+      status: job.status,
+      url: job.url,
+      err: job.err,
+    });
   });
 
   app.get("/api/assets/:render_id", (req: Request, res: Response) => {

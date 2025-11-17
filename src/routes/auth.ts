@@ -1,5 +1,6 @@
 import express from "express";
 import crypto from "node:crypto";
+import { getAvailableCreditsForUser, spendUserCredits } from "../lib/credits";
 
 const INCLUDED_RENDERS_PER_MONTH = Number(process.env.INCLUDED_RENDERS_PER_MONTH || 0);
 const DEV_STARTING_CREDITS = Number(process.env.DEV_STARTING_CREDITS || 0);
@@ -81,6 +82,64 @@ function getOrCreateSid(req: express.Request, res: express.Response) {
   return sid;
 }
 
+export function noteRenderComplete(req: express.Request) {
+  const cookies = parseCookies(req);
+  const sid = cookies["ob_sid"];
+  if (!sid) {
+    console.log("[credits] noteRenderComplete: missing ob_sid cookie");
+    return;
+  }
+
+  const sess = sessions.get(sid);
+  if (!sess) {
+    console.log("[credits] noteRenderComplete: no session for sid", sid);
+    return;
+  }
+
+  const beforeUsed =
+    typeof sess.rendersUsed === "number" ? sess.rendersUsed : 0;
+  const beforeCredits =
+    typeof sess.creditsAvailable === "number" ? sess.creditsAvailable : 0;
+
+  const used = beforeUsed + 1;
+  let credits = beforeCredits;
+  if (credits > 0) {
+    credits = credits - 1;
+  }
+
+  sess.rendersUsed = used;
+  sess.creditsAvailable = credits;
+
+  console.log(
+    "[credits] noteRenderComplete: sid=%s used %d→%d credits %d→%d",
+    sid,
+    beforeUsed,
+    used,
+    beforeCredits,
+    credits
+  );
+  const userId = sess.userId || "solo-tester";
+  try {
+    const beforeDb = getAvailableCreditsForUser(userId);
+    if (beforeDb > 0) {
+      const updated = spendUserCredits(userId, 1);
+      const afterDb = updated
+        ? updated.total_credits - updated.used_credits
+        : getAvailableCreditsForUser(userId);
+
+      console.log("[credits] db spend after render", {
+        userId,
+        beforeDb,
+        afterDb,
+      });
+    } else {
+      console.log("[credits] db spend after render: no db credits for user", userId);
+    }
+  } catch (err) {
+    console.error("[credits] db spend after render failed", err);
+  }
+}
+
 function getRpId(req: express.Request) {
   const envId = (process.env.RP_ID || "").trim();
   if (envId) return envId;
@@ -110,12 +169,16 @@ router.get("/session", (req, res) => {
 
   const sid = cookies["ob_sid"];
   const sess = sid ? sessions.get(sid) : undefined;
+  const userId = sess?.userId || null;
+  const dbCredits = userId ? getAvailableCreditsForUser(userId) : 0;
+  const sessionCredits = sess?.creditsAvailable ?? 0;
+  const combinedCredits = sessionCredits + dbCredits;
 
   res.json({
     invited,
     hasInviteCode: Boolean((process.env.INVITE_CODE || "").trim()),
     enforceAuthGate: /^true$/i.test(process.env.ENFORCE_AUTH_GATE || ""),
-    userId: sess?.userId || null,
+    userId,
     passkey: {
       registered: Boolean(sess?.credentialId),
       loggedIn: Boolean(sess?.loggedIn),
@@ -124,7 +187,7 @@ router.get("/session", (req, res) => {
       plan: sess?.plan || "none",
       included_quota: INCLUDED_RENDERS_PER_MONTH,
       renders_used: sess?.rendersUsed ?? 0,
-      credits_available: sess?.creditsAvailable ?? 0,
+      credits_available: combinedCredits,
       period_start: sess?.periodStart || null,
       period_end: sess?.periodEnd || null,
     },
@@ -254,7 +317,14 @@ router.post("/passkey/register/finish", express.json({ limit: "1mb" }), (req, re
   sess.loggedIn = true;
   delete sess.regChallenge;
 
-  return res.json({ ok: true, userId: sess.userId, credentialId: sess.credentialId });
+  // Auto sign-in after successful registration
+  const sid2 = getOrCreateSid(req, res);
+  const postSess = sessions.get(sid2) || {};
+  postSess.loggedIn = true;
+  postSess.userId = postSess.userId || `passkey:${(postSess.credentialId || "").slice(0, 8)}`;
+  sessions.set(sid2, postSess);
+
+  return res.json({ ok: true, userId: sess.userId, credentialId: sess.credentialId, autoSignedIn: true });
 });
 
 // --- PASSKEY LOGIN: START -----------------------------------------------------
@@ -334,11 +404,118 @@ router.post("/dev/grant-credits", express.json(), (req, res) => {
   const sid = getOrCreateSid(req, res);
   const sess = sessions.get(sid)!;
 
-  const amt = Number((req.body && (req.body as any).amount) ?? 200);
-  if (!Number.isFinite(amt) || amt <= 0) return res.status(400).json({ ok: false, error: "bad_amount" });
+  const amount = Number(req.body?.amount ?? 200) || 200;
+  const before = typeof sess.creditsAvailable === "number"
+    ? sess.creditsAvailable
+    : 0;
 
-  sess.creditsAvailable = (sess.creditsAvailable || 0) + amt;
-  return res.json({ ok: true, credits_available: sess.creditsAvailable });
+  sess.creditsAvailable = before + amount;
+
+  console.log(
+    "[credits] dev grant: sid=%s before=%d amount=%d after=%d",
+    sid,
+    before,
+    amount,
+    sess.creditsAvailable
+  );
+
+  return res.json({
+    ok: true,
+    sid,
+    credits_available: sess.creditsAvailable,
+  });
+});
+
+router.post("/dev/use-credit", express.json(), (req, res) => {
+  const devToolsOn =
+    /^true$/i.test(process.env.DEV_TOOLS || "") ||
+    /(^|[?&])dev(=1|&|$)/.test(req.url);
+  if (!devToolsOn) {
+    return res
+      .status(403)
+      .json({ ok: false, error: "dev_tools_disabled" });
+  }
+
+  const sid = getOrCreateSid(req, res);
+  const sess = sessions.get(sid)!;
+
+  const beforeUsed =
+    typeof sess.rendersUsed === "number" ? sess.rendersUsed : 0;
+  const beforeSessionCredits =
+    typeof sess.creditsAvailable === "number" ? sess.creditsAvailable : 0;
+
+  const userId = sess.userId || "solo-tester";
+
+  // Read DB-backed credits for this user (Stripe top-ups, etc.)
+  let beforeDbCredits = 0;
+  try {
+    beforeDbCredits = getAvailableCreditsForUser(userId);
+  } catch (err) {
+    console.error(
+      "[credits] dev use-credit: failed to read db credits",
+      err
+    );
+  }
+
+  const totalBefore = beforeSessionCredits + beforeDbCredits;
+
+  if (totalBefore <= 0) {
+    // No credits anywhere (session or DB)
+    return res.status(400).json({
+      ok: false,
+      error: "no_credits",
+      renders_used: beforeUsed,
+      credits_available: totalBefore,
+    });
+  }
+
+  const used = beforeUsed + 1;
+  let sessionCredits = beforeSessionCredits;
+  let dbCreditsAfter = beforeDbCredits;
+
+  if (beforeDbCredits > 0) {
+    // Prefer to spend from the real DB-backed credits first.
+    try {
+      const updated = spendUserCredits(userId, 1);
+      dbCreditsAfter = updated
+        ? updated.total_credits - updated.used_credits
+        : getAvailableCreditsForUser(userId);
+    } catch (err) {
+      console.error(
+        "[credits] dev use-credit: db spend failed, falling back to session",
+        err
+      );
+      sessionCredits = Math.max(0, sessionCredits - 1);
+    }
+  } else {
+    // No DB credits; fall back to in-memory dev/session credits.
+    sessionCredits = Math.max(0, sessionCredits - 1);
+  }
+
+  sess.rendersUsed = used;
+  sess.creditsAvailable = sessionCredits;
+
+  const totalAfter = sessionCredits + dbCreditsAfter;
+
+  console.log(
+    "[credits] dev use-credit: sid=%s used %d→%d session %d→%d db %d→%d total_after=%d userId=%s",
+    sid,
+    beforeUsed,
+    used,
+    beforeSessionCredits,
+    sessionCredits,
+    beforeDbCredits,
+    dbCreditsAfter,
+    totalAfter,
+    userId
+  );
+
+  return res.json({
+    ok: true,
+    sid,
+    renders_used: used,
+    credits_available: totalAfter,
+  });
 });
 
 export default router;
