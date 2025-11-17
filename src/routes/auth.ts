@@ -1,5 +1,6 @@
 import express from "express";
 import crypto from "node:crypto";
+import { getAvailableCreditsForUser, spendUserCredits } from "../lib/credits";
 
 const INCLUDED_RENDERS_PER_MONTH = Number(process.env.INCLUDED_RENDERS_PER_MONTH || 0);
 const DEV_STARTING_CREDITS = Number(process.env.DEV_STARTING_CREDITS || 0);
@@ -117,6 +118,26 @@ export function noteRenderComplete(req: express.Request) {
     beforeCredits,
     credits
   );
+  const userId = sess.userId || "solo-tester";
+  try {
+    const beforeDb = getAvailableCreditsForUser(userId);
+    if (beforeDb > 0) {
+      const updated = spendUserCredits(userId, 1);
+      const afterDb = updated
+        ? updated.total_credits - updated.used_credits
+        : getAvailableCreditsForUser(userId);
+
+      console.log("[credits] db spend after render", {
+        userId,
+        beforeDb,
+        afterDb,
+      });
+    } else {
+      console.log("[credits] db spend after render: no db credits for user", userId);
+    }
+  } catch (err) {
+    console.error("[credits] db spend after render failed", err);
+  }
 }
 
 function getRpId(req: express.Request) {
@@ -148,12 +169,16 @@ router.get("/session", (req, res) => {
 
   const sid = cookies["ob_sid"];
   const sess = sid ? sessions.get(sid) : undefined;
+  const userId = sess?.userId || null;
+  const dbCredits = userId ? getAvailableCreditsForUser(userId) : 0;
+  const sessionCredits = sess?.creditsAvailable ?? 0;
+  const combinedCredits = sessionCredits + dbCredits;
 
   res.json({
     invited,
     hasInviteCode: Boolean((process.env.INVITE_CODE || "").trim()),
     enforceAuthGate: /^true$/i.test(process.env.ENFORCE_AUTH_GATE || ""),
-    userId: sess?.userId || null,
+    userId,
     passkey: {
       registered: Boolean(sess?.credentialId),
       loggedIn: Boolean(sess?.loggedIn),
@@ -162,7 +187,7 @@ router.get("/session", (req, res) => {
       plan: sess?.plan || "none",
       included_quota: INCLUDED_RENDERS_PER_MONTH,
       renders_used: sess?.rendersUsed ?? 0,
-      credits_available: sess?.creditsAvailable ?? 0,
+      credits_available: combinedCredits,
       period_start: sess?.periodStart || null,
       period_end: sess?.periodEnd || null,
     },
@@ -402,10 +427,13 @@ router.post("/dev/grant-credits", express.json(), (req, res) => {
 });
 
 router.post("/dev/use-credit", express.json(), (req, res) => {
-  const devToolsOn = /^true$/i.test(process.env.DEV_TOOLS || "") ||
-                     /(^|[?&])dev(=1|&|$)/.test(req.url);
+  const devToolsOn =
+    /^true$/i.test(process.env.DEV_TOOLS || "") ||
+    /(^|[?&])dev(=1|&|$)/.test(req.url);
   if (!devToolsOn) {
-    return res.status(403).json({ ok: false, error: "dev_tools_disabled" });
+    return res
+      .status(403)
+      .json({ ok: false, error: "dev_tools_disabled" });
   }
 
   const sid = getOrCreateSid(req, res);
@@ -413,38 +441,80 @@ router.post("/dev/use-credit", express.json(), (req, res) => {
 
   const beforeUsed =
     typeof sess.rendersUsed === "number" ? sess.rendersUsed : 0;
-  const beforeCredits =
+  const beforeSessionCredits =
     typeof sess.creditsAvailable === "number" ? sess.creditsAvailable : 0;
 
-  if (beforeCredits <= 0) {
+  const userId = sess.userId || "solo-tester";
+
+  // Read DB-backed credits for this user (Stripe top-ups, etc.)
+  let beforeDbCredits = 0;
+  try {
+    beforeDbCredits = getAvailableCreditsForUser(userId);
+  } catch (err) {
+    console.error(
+      "[credits] dev use-credit: failed to read db credits",
+      err
+    );
+  }
+
+  const totalBefore = beforeSessionCredits + beforeDbCredits;
+
+  if (totalBefore <= 0) {
+    // No credits anywhere (session or DB)
     return res.status(400).json({
       ok: false,
       error: "no_credits",
       renders_used: beforeUsed,
-      credits_available: beforeCredits,
+      credits_available: totalBefore,
     });
   }
 
   const used = beforeUsed + 1;
-  const credits = beforeCredits - 1;
+  let sessionCredits = beforeSessionCredits;
+  let dbCreditsAfter = beforeDbCredits;
+
+  if (beforeDbCredits > 0) {
+    // Prefer to spend from the real DB-backed credits first.
+    try {
+      const updated = spendUserCredits(userId, 1);
+      dbCreditsAfter = updated
+        ? updated.total_credits - updated.used_credits
+        : getAvailableCreditsForUser(userId);
+    } catch (err) {
+      console.error(
+        "[credits] dev use-credit: db spend failed, falling back to session",
+        err
+      );
+      sessionCredits = Math.max(0, sessionCredits - 1);
+    }
+  } else {
+    // No DB credits; fall back to in-memory dev/session credits.
+    sessionCredits = Math.max(0, sessionCredits - 1);
+  }
 
   sess.rendersUsed = used;
-  sess.creditsAvailable = credits;
+  sess.creditsAvailable = sessionCredits;
+
+  const totalAfter = sessionCredits + dbCreditsAfter;
 
   console.log(
-    "[credits] dev use-credit: sid=%s used %d→%d credits %d→%d",
+    "[credits] dev use-credit: sid=%s used %d→%d session %d→%d db %d→%d total_after=%d userId=%s",
     sid,
     beforeUsed,
     used,
-    beforeCredits,
-    credits
+    beforeSessionCredits,
+    sessionCredits,
+    beforeDbCredits,
+    dbCreditsAfter,
+    totalAfter,
+    userId
   );
 
   return res.json({
     ok: true,
     sid,
     renders_used: used,
-    credits_available: credits,
+    credits_available: totalAfter,
   });
 });
 

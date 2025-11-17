@@ -1917,12 +1917,19 @@ JANE: Ready?"></textarea>
             }));
             const data = await resp.json().catch(() => ({}));
 
-            if (resp.ok && data && data.checkout_url) {
-              const url = String(data.checkout_url);
-              toast.textContent = "Stub checkout URL: " + url;
-            } else {
-              toast.textContent = "Billing not configured yet. (Stub checkout.)";
+          if (resp.ok && data && data.checkout_url) {
+            const url = String(data.checkout_url);
+            // Show the URL in the toast for a moment (debug-friendly)
+            toast.textContent = "Opening checkout: " + url;
+            toast.style.display = "block";
+            try {
+              window.location.href = url;
+            } catch (e) {
+              console.warn("redirect to checkout failed", e);
             }
+          } else {
+            toast.textContent = "Billing not configured yet. (Stripe test.)";
+          }
           } catch (e) {
             console.warn("billing/create_checkout failed", e);
             toast.textContent = "Could not contact billing service.";
