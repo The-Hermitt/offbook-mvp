@@ -1493,7 +1493,7 @@ JANE: Ready?"></textarea>
             }
           }
 
-          // ——— Entitlement (read-only) ———
+          // --- Entitlement (read-only) ---
           const ent = s?.entitlement || {};
           const elEnt = document.getElementById("entitlementLine");
           if (elEnt) {
@@ -1505,8 +1505,28 @@ JANE: Ready?"></textarea>
             elEnt.textContent = `Plan: ${plan} • Included: ${inc} • Used: ${used} • Credits: ${credits}`;
             elEnt.style.display = "";
           }
+
+          // Dev entitlement controls (Grant 200 test credits)
           const devBtns = document.getElementById("devEntButtons");
           if (devBtns) devBtns.style.display = isDev ? "" : "none";
+
+          // Settings → Add credits button state
+          const btnAdd = document.getElementById("btnAddCreditsSettings");
+          const addHint = document.getElementById("addCreditsHintSettings");
+          const addToast = document.getElementById("addCreditsToastSettings");
+          if (btnAdd && addHint && addToast) {
+            const isSignedIn = Boolean(s?.userId);
+            const canAdd = isSignedIn || isDev; // dev mode can always test checkout
+
+            btnAdd.disabled = !canAdd;
+            if (canAdd) {
+              addHint.textContent = "Add credits opens a test checkout link in this build.";
+            } else {
+              addHint.textContent = "Sign in to add credits.";
+            }
+            // Hide any old toast until user taps the button again
+            addToast.style.display = "none";
+          }
         } catch {
           // soft-fail; keep UI as-is
         }
@@ -1877,7 +1897,45 @@ JANE: Ready?"></textarea>
           });
         }
       }
+      function wireAddCreditsButton(){
+        const btn = document.getElementById("btnAddCreditsSettings");
+        const toast = document.getElementById("addCreditsToastSettings");
+        if (!btn) return;
+
+        btn.addEventListener("click", async function () {
+          if (btn.disabled) return;
+          if (!toast) return;
+
+          clearTimeout(toast._t);
+          toast.textContent = "Contacting billing (stub checkout)...";
+          toast.style.display = "block";
+          try {
+            const resp = await fetch("/billing/create_checkout", withSecretHeaders({
+              method: "POST",
+              headers: { ...JSON_HDRS, "Accept": "application/json" },
+              body: JSON.stringify({ planId: "credits-100" }),
+            }));
+            const data = await resp.json().catch(() => ({}));
+
+            if (resp.ok && data && data.checkout_url) {
+              const url = String(data.checkout_url);
+              toast.textContent = "Stub checkout URL: " + url;
+            } else {
+              toast.textContent = "Billing not configured yet. (Stub checkout.)";
+            }
+          } catch (e) {
+            console.warn("billing/create_checkout failed", e);
+            toast.textContent = "Could not contact billing service.";
+          }
+
+          clearTimeout(toast._t);
+          toast._t = setTimeout(() => {
+            toast.style.display = "none";
+          }, 5000);
+        });
+      }
       wireSettingsPasskeyButtons();
+      wireAddCreditsButton();
       guardMeteredButtons();
       (function wireDevEntitlement(){
         const btn = document.getElementById("btnDevGrantCredits");

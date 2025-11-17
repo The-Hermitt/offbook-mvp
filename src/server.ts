@@ -101,6 +101,28 @@ app.get("/health/tts", (_req, res) =>
   res.json({ engine: "openai", has_key: !!OPENAI_API_KEY })
 );
 
+// Stripe Phase 0: fake checkout endpoint (stub)
+app.post(
+  "/billing/create_checkout",
+  express.json(),
+  (req: Request, res: Response) => {
+    try {
+      const body = (req.body || {}) as { planId?: string };
+      const planId = body.planId || "credits-100";
+
+      const url =
+        "https://example.com/offbook-dev-checkout?plan=" +
+        encodeURIComponent(planId);
+
+      console.log("[billing] create_checkout stub hit plan=%s", planId);
+      return res.json({ ok: true, checkout_url: url });
+    } catch (err) {
+      console.error("[billing] create_checkout stub error", err);
+      return res.status(500).json({ ok: false, error: "stub_failed" });
+    }
+  }
+);
+
 // ---- In-memory store (fallback + rendered assets)
 type Line = { speaker: string; text: string };
 type Scene = { id: string; title: string; lines: Line[] };
