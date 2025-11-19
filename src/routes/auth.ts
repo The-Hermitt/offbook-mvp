@@ -219,8 +219,16 @@ router.post("/enter-code", express.json(), (req, res) => {
 });
 
 // --- POST /auth/signout ------------------------------------------------------
-router.post("/signout", (_req, res) => {
+router.post("/signout", (req, res) => {
   res.clearCookie("ob_invite");
+
+  const cookies = parseCookies(req);
+  const sid = cookies["ob_sid"];
+  if (sid && sessions.has(sid)) {
+    const sess = sessions.get(sid)!;
+    sess.loggedIn = false;
+  }
+
   return res.json({ ok: true });
 });
 
