@@ -29,3 +29,7 @@ try {
 }
 
 export default db;
+
+export function getDB() {
+  return db;
+}

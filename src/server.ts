@@ -20,6 +20,7 @@ const stripe =
   STRIPE_SECRET_KEY
     ? new Stripe(STRIPE_SECRET_KEY)
     : null;
+const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || "";
 
 // --- tiny helper: safe fetch with timeout ---
 async function fetchWithTimeout(input: RequestInfo, init: RequestInit & { timeoutMs?: number } = {}) {
@@ -36,7 +37,17 @@ async function fetchWithTimeout(input: RequestInfo, init: RequestInit & { timeou
 }
 
 app.use(cors());
-app.use(express.json({ limit: "5mb" }));
+
+// Use JSON for most routes, but skip it for the Stripe webhook so we can
+// access the raw request body for signature verification.
+const jsonParser = express.json({ limit: "5mb" });
+app.use((req, res, next) => {
+  if (req.originalUrl === "/billing/webhook") {
+    return next();
+  }
+  return jsonParser(req, res, next);
+});
+
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
 
@@ -166,68 +177,87 @@ app.post("/billing/create_checkout", express.json(), async (req: Request, res: R
   }
 });
 
-// Billing — Phase 2: Stripe webhook (initial credits wiring)
-app.post("/billing/webhook", (req: Request, res: Response) => {
-  const sig = req.header("Stripe-Signature") || "";
-  const event: any = (req as any).body || {};
-
-  console.log("[billing] webhook raw hit", {
-    path: req.path,
-    stripeSignature: sig,
-    eventType: event?.type,
-    eventId: event?.id,
-  });
-
-  try {
-    // We only care about completed checkout sessions for now
-    if (event.type === "checkout.session.completed") {
-      const session = event?.data?.object || {};
-      const ref = session?.client_reference_id || "credits-100";
-
-      // TEMP: single test user for MVP wiring
-      const userId = "solo-tester";
-
-      // TEMP: simple mapping — "credits-100" plan → +100 credits
-      let creditsToAdd = 0;
-      if (ref === "credits-100") {
-        creditsToAdd = 100;
+// Billing — Stripe webhook (test mode, signature-verified)
+app.post(
+  "/billing/webhook",
+  // Stripe requires the raw request body for signature verification.
+  express.raw({ type: "application/json" }),
+  async (req: Request, res: Response) => {
+    try {
+      if (!stripe || !STRIPE_WEBHOOK_SECRET) {
+        console.warn(
+          "[billing] webhook misconfigured (missing stripe or STRIPE_WEBHOOK_SECRET)"
+        );
+        // Return 200 so Stripe does not endlessly retry in dev.
+        return res.status(200).json({
+          ok: true,
+          ignored: true,
+          reason: "billing_not_configured",
+        });
       }
 
-      if (creditsToAdd > 0) {
-        const snap = addUserCredits(userId, creditsToAdd);
-        const available = getAvailableCredits(snap);
+      const sig = req.header("stripe-signature") || "";
+      const rawBody = req.body as Buffer;
+
+      let event: Stripe.Event;
+      try {
+        event = stripe.webhooks.constructEvent(
+          rawBody,
+          sig,
+          STRIPE_WEBHOOK_SECRET
+        );
+      } catch (err: any) {
+        console.error(
+          "[billing] webhook signature verification failed",
+          err?.message || err
+        );
+        return res.status(400).send("Webhook signature verification failed");
+      }
+
+      const eventType = event.type;
+      const eventId = event.id;
+
+      console.log("[billing] webhook raw hit", {
+        path: req.path,
+        stripeSignature: sig,
+        eventType,
+        eventId,
+      });
+
+      // For now we treat any successful checkout as a 100-credit top-up
+      // for the single dev user. Later this will map to the real user id.
+      if (eventType === "checkout.session.completed") {
+        const session = event.data.object as Stripe.Checkout.Session;
+
+        // For now we hard-code the plan → credits mapping.
+        // "credits-100" → 100 credits; adjust later if we add more plans.
+        const creditsToGrant = 100;
+
+        const uid = "solo-tester";
+
+        const updated = await addUserCredits(uid, creditsToGrant);
+
+        const totalCredits = updated.total_credits;
+        const usedCredits = updated.used_credits;
+        const availableCredits = getAvailableCredits(updated);
 
         console.log("[billing] webhook credited", {
-          userId,
-          creditsAdded: creditsToAdd,
-          totalCredits: snap.total_credits,
-          usedCredits: snap.used_credits,
-          availableCredits: available,
-          stripeEventId: event.id,
-        });
-
-        return res.json({
-          ok: true,
-          handled: true,
-          user_id: userId,
-          credits_added: creditsToAdd,
-          total_credits: snap.total_credits,
-          used_credits: snap.used_credits,
-          available_credits: available,
+          userId: uid,
+          creditsAdded: creditsToGrant,
+          totalCredits,
+          usedCredits,
+          availableCredits,
+          stripeEventId: eventId,
         });
       }
-    }
 
-    // Other event types are acknowledged but ignored for now
-    return res.json({ ok: true, handled: false });
-  } catch (err: any) {
-    console.error("[billing] webhook error", err);
-    const msg = err?.message || String(err);
-    return res
-      .status(500)
-      .json({ ok: false, error: msg.slice(0, 200) });
+      return res.json({ ok: true, received: true });
+    } catch (e: any) {
+      console.error("[billing] webhook error", e);
+      return res.status(500).json({ ok: false, error: "webhook_error" });
+    }
   }
-});
+);
 
 // ---- In-memory store (fallback + rendered assets)
 type Line = { speaker: string; text: string };

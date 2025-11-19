@@ -1203,7 +1203,10 @@ JANE: Ready?"></textarea>
     <section id="screen-settings" class="screen">
       <div class="card">
         <h3>Settings</h3>
-        <div class="hint">Access Code → Passkey (WebAuthn). Secret remains available for staging.</div>
+        <div class="hint">
+          Sign in with your device passkey to unlock rehearsal, recording, and credit top-ups.
+          Access codes are still supported while we’re in beta.
+        </div>
         <div class="spacer8"></div>
 
         <div id="inviteBlock" style="display:none">
@@ -1473,7 +1476,7 @@ JANE: Ready?"></textarea>
             } else if (s?.hasInviteCode && !s?.invited) {
               msg = "Enter your access code to continue.";
             } else {
-              msg = "Not signed in.";
+              msg = "";
             }
             authStatusFriendly.textContent = msg;
             authStatusFriendly.style.display = isDev ? "none" : "";
@@ -1497,12 +1500,15 @@ JANE: Ready?"></textarea>
           const ent = s?.entitlement || {};
           const elEnt = document.getElementById("entitlementLine");
           if (elEnt) {
-            const plan = (ent.plan && ent.plan !== "none") ? ent.plan : "No plan";
-            const inc = Number.isFinite(ent.included_quota) ? ent.included_quota : 0;
+          const isSignedIn = Boolean(s?.passkey?.loggedIn);
             const used = Number.isFinite(ent.renders_used) ? ent.renders_used : 0;
             const credits = Number.isFinite(ent.credits_available) ? ent.credits_available : 0;
 
-            elEnt.textContent = `Plan: ${plan} • Included: ${inc} • Used: ${used} • Credits: ${credits}`;
+            if (!isSignedIn) {
+              elEnt.textContent = "Not signed in. Sign in to see your credits.";
+            } else {
+              elEnt.textContent = `Used: ${used} • Credits: ${credits}`;
+            }
             elEnt.style.display = "";
           }
 
@@ -1515,7 +1521,7 @@ JANE: Ready?"></textarea>
           const addHint = document.getElementById("addCreditsHintSettings");
           const addToast = document.getElementById("addCreditsToastSettings");
           if (btnAdd && addHint && addToast) {
-            const isSignedIn = Boolean(s?.userId);
+            const isSignedIn = Boolean(s?.passkey?.loggedIn);
             const canAdd = isSignedIn || isDev; // dev mode can always test checkout
 
             btnAdd.disabled = !canAdd;
@@ -2217,9 +2223,10 @@ JANE: Ready?"></textarea>
 
       document.addEventListener('visibilitychange', async () => {
         if (!document.hidden) {
-          // Coming back to foreground: assume we may need a gesture to unlock.
-          if (window.audioCtx && (window.audioCtx.state === 'suspended' || window.audioCtx.state === 'interrupted')) {
-            window.__OB_NEEDS_UNLOCK = true;
+          // Coming back to foreground: always assume we may need a gesture to unlock.
+          window.__OB_NEEDS_UNLOCK = true;
+          if (typeof btnEnableAudio !== 'undefined' && btnEnableAudio) {
+            btnEnableAudio.style.display = '';
           }
           console.debug('[AUDIO] visibility -> foreground');
           await restoreAudioRoute('visibility');
@@ -2228,6 +2235,11 @@ JANE: Ready?"></textarea>
 
       window.addEventListener('pageshow', async (ev) => {
         if (ev?.persisted === true || !document.hidden) {
+          // Coming back from bfcache or foreground: mark audio dirty so next tap can unlock.
+          window.__OB_NEEDS_UNLOCK = true;
+          if (typeof btnEnableAudio !== 'undefined' && btnEnableAudio) {
+            btnEnableAudio.style.display = '';
+          }
           console.debug('[AUDIO] pageshow (bfcache or foreground)');
           await restoreAudioRoute('pageshow');
         }
@@ -3679,8 +3691,11 @@ JANE: Ready?"></textarea>
         document.addEventListener('click', (ev) => {
           const btn = ev.target && (ev.target.closest('button') || ev.target.closest('[role="button"]'));
           if (!btn) return;
-          // Ensure audio is unlocked before we try to play a UI note.
-          if (window.__OB_NEEDS_UNLOCK) { try { hardResumeOnGesture(); window.__OB_NEEDS_UNLOCK = false; } catch {} }
+          // If audio is locked, kick the shared unlock helper; it will decide whether
+          // to clear __OB_NEEDS_UNLOCK and hide the Enable Audio button.
+          if (window.__OB_NEEDS_UNLOCK && typeof tryUnlockAudio === 'function') {
+            try { tryUnlockAudio('ui-click').catch(() => {}); } catch {}
+          }
           try { UINotes.pingFor(btn, 'click'); } catch {}
         }, { passive: true });
 
@@ -3795,51 +3810,6 @@ JANE: Ready?"></textarea>
         btn.textContent = text;
       }
 
-      function micConstraints(recordingPhase){
-        if(recordingPhase){
-          return {
-            echoCancellation: false,
-            noiseSuppression: false,
-            autoGainControl: false,
-            channelCount: 1,
-            sampleRate: 48000,
-            sampleSize: 16,
-            advanced: [
-              { echoCancellation:false },
-              { noiseSuppression:false },
-              { autoGainControl:false },
-              { googEchoCancellation:false },
-              { googAutoGainControl:false },
-              { googNoiseSuppression:false }
-            ]
-          };
-        }
-        return {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: false,
-          channelCount: 1
-        };
-      }
-
-      async function ensureReaderCtx(){
-        if(R.readerCtx && R.readerCtx.state === "closed"){ R.readerCtx = null; R.readerGain = null; R.readerDirectConnected = false; }
-        if(!R.readerCtx){
-          R.readerCtx = new (window.AudioContext||window.webkitAudioContext)();
-          if(R.readerCtx?.state === "suspended"){ try{ await R.readerCtx.resume(); }catch{} }
-          R.readerGain = R.readerCtx.createGain();
-          R.readerGain.gain.value = 1.0;
-          try{ R.readerGain.__obProbeConnected = false; }catch{}
-          tapReaderNode(R.readerGain);
-          try{ R.readerGain.connect(R.readerCtx.destination); R.readerDirectConnected = true; }
-          catch{}
-          R.readerActiveSources = new Set();
-        }else if(R.readerCtx?.state === "suspended"){
-          try{ await R.readerCtx.resume(); }catch{}
-        }
-        return R.readerCtx;
-      }
-
       function restoreReaderDirectMonitor(){
         if(R.readerCtx && R.readerGain){
           try{ R.readerGain.disconnect(); }catch{}
@@ -3944,42 +3914,6 @@ JANE: Ready?"></textarea>
         R.readerBridge = null;
         R.readerBridgeSource = null;
         R.readerRecordGain = null;
-      }
-
-      async function preloadReaderBuffers(){
-        if(!RR.map || !RR.map.size || R.readerLoading) return;
-        R.readerLoading = true;
-        try{
-          await ensureReaderCtx();
-          const entries = Array.from(RR.map.entries());
-          let idx = 0;
-          const workers = Math.min(3, entries.length);
-          async function worker(){
-            for(;;){
-              const current = idx++;
-              if(current >= entries.length) break;
-              const [i, url] = entries[current];
-              if(R.readerBuffers.has(i)) continue;
-              try{
-                const suffix = url.includes("?") ? "&" : "?";
-                const resp = await fetch(url + suffix + "t=" + Date.now());
-                if(!resp.ok) continue;
-                const buf = await resp.arrayBuffer();
-                const ctx = R.readerCtx;
-                if(!ctx) continue;
-                const audio = await new Promise((resolve,reject)=>{
-                  try{
-                    const maybe = ctx.decodeAudioData(buf, resolve, reject);
-                    if(maybe && typeof maybe.then === "function") maybe.then(resolve).catch(reject);
-                  }catch(e){ reject(e); }
-                });
-                if(audio) R.readerBuffers.set(i, audio);
-              }catch{}
-            }
-          }
-          await Promise.all(Array.from({length:workers}, ()=>worker()));
-        }catch{}
-        finally{ R.readerLoading = false; }
       }
 
       function setRailStates(){
