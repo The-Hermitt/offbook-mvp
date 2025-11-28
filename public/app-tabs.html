@@ -193,6 +193,12 @@
     }
     textarea{ min-height:130px; line-height:1.4; resize:vertical }
     select{ appearance:none }
+    .assign-voice-select {
+      min-width: 90px;
+      max-width: 140px;
+      padding-inline: 8px;
+      border-radius: 16px;
+    }
     .btn{
       display:inline-flex;
       align-items:center;
@@ -209,6 +215,10 @@
       letter-spacing:.3px;
       box-shadow:0 18px 36px rgba(85,115,255,0.35);
       transition:transform .2s ease, box-shadow .2s ease;
+    }
+    .btn.loading {
+      opacity: 0.6;
+      pointer-events: none;
     }
     .btn:hover{ transform:translateY(-1px); box-shadow:0 20px 40px rgba(85,115,255,0.4) }
     .btn:active{ transform:translateY(0); box-shadow:0 12px 26px rgba(85,115,255,0.28) }
@@ -1585,6 +1595,19 @@ JANE: Ready?"></textarea>
         try { delete window.__OB_SECRET__; } catch { window.__OB_SECRET__ = undefined; }
       }
       const JSON_HDRS = { "Content-Type":"application/json" };
+      // OpenAI TTS / audio voices we support
+      const OPENAI_VOICES = [
+        "alloy",
+        "ash",
+        "ballad",
+        "coral",
+        "echo",
+        "fable",
+        "onyx",
+        "nova",
+        "sage",
+        "shimmer"
+      ];
       const isNgrokHost = /ngrok/i.test(location.hostname);
       function withSecretHeaders(init = {}) {
         const next = { ...(init || {}) };
@@ -2786,7 +2809,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
         role: "",
         voice_map: {},
         editMode: false,
-        supportedVoices: ["alloy"],
+        supportedVoices: OPENAI_VOICES.slice(),
         savedScripts: [],
         currentSceneIndex: 0,
         activeTab: "import"
@@ -3807,7 +3830,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
       // Assign
       function uniqueRoles(){ const names=new Set(); for(const sc of (S.scenes||[])) for(const ln of (sc.lines||[])) names.add(ln.speaker); return Array.from(names).filter(n=>n&&n!=="SYSTEM"&&n!=="NARRATOR"); }
       function hydrateAssign(){
-        $("#pillScript").textContent="script: "+(S.script_id||"—");
+        $("#pillScript").textContent="script: "+(S.script_id||"-");
         $("#pillScenes").textContent="scenes: "+(S.scenes?.length||0);
         const roles=uniqueRoles(); const sel=$("#selectRole");
         sel.innerHTML=roles.map(r=>`<option value="${r}">${r}</option>`).join("");
@@ -3816,30 +3839,131 @@ const savedStrip = document.getElementById("savedScriptsStrip");
         sel.onchange=()=>{ S.role=sel.value; buildVoicePickers(); hydrateRehearse(); applyEditModeUI(); };
         buildVoicePickers();
       }
+      let voicePreviewAudio = null;
+      async function previewVoiceSample(voice, btn){
+        const fallbackVoice = OPENAI_VOICES[0] || "alloy";
+        const chosenVoice = voice || fallbackVoice;
+        const sampleText = "Hi, would you be interested in me being your scene partner? Do you like the sound of my voice?";
+
+        // Try to reuse the same model selector Rehearse uses, fallback to tts-1
+        const modelSel = document.getElementById("selTtsModel");
+        const model = (modelSel && modelSel.value) || "tts-1";
+
+        let originalLabel = btn && btn.textContent;
+
+        try {
+          if (!voicePreviewAudio) {
+            const a = document.createElement("audio");
+            a.preload = "auto";
+            a.setAttribute("playsinline", "");
+            a.style.display = "none";
+            document.body.appendChild(a);
+            voicePreviewAudio = a;
+          }
+
+          // Stop any prior preview
+          try {
+            voicePreviewAudio.pause();
+            voicePreviewAudio.currentTime = 0;
+          } catch {}
+
+          // Simple loading cue on the button
+          if (btn) {
+            btn.disabled = true;
+            btn.textContent = "Loading…";
+          }
+
+          // Ask server for a single TTS line (same route Rehearse uses)
+          const r = await fetch("/debug/tts_line", withSecretHeaders({
+            method: "POST",
+            headers: { ...JSON_HDRS, "Accept": "application/json" },
+            body: JSON.stringify({
+              voice: chosenVoice,
+              model,
+              text: sampleText
+            })
+          }));
+
+          if (!r.ok) return;
+
+          const txt = await r.text();
+          let j = {};
+          try { j = JSON.parse(txt); } catch { /* non-JSON body */ }
+
+          if (!j || !j.url) return;
+
+          // Fetch the actual audio and play it in the preview <audio>
+          const audioResp = await fetch(j.url, { cache: "no-store" });
+          if (!audioResp.ok) return;
+
+          const blob = await audioResp.blob();
+          const url = URL.createObjectURL(blob);
+          voicePreviewAudio.src = url;
+          await voicePreviewAudio.play();
+        } catch (err) {
+          console.error("[Assign] previewVoiceSample error:", err);
+        } finally {
+          if (btn) {
+            btn.disabled = false;
+            btn.textContent = originalLabel || "Test";
+          }
+        }
+      }
       function buildVoicePickers(){
         const box=$("#voicePickers"); box.innerHTML="";
         const partners=uniqueRoles().filter(n=>n!==S.role);
-        partners.forEach(name=>{
+        const defaultVoice = OPENAI_VOICES[0] || "alloy";
+        partners.forEach(roleName=>{
           const wrap=document.createElement("div");
           wrap.className="card"; wrap.style.marginTop="8px";
-          wrap.innerHTML=`<div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
-            <strong>${name}</strong>
-            <select data-name="${name}">
-              ${S.supportedVoices.map(v=>`<option value="${v}" ${((S.voice_map[name]||S.supportedVoices[0])===v)?"selected":""}>${v}</option>`).join("")}
-            </select>
-          </div>`;
+          wrap.innerHTML = `<div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+        <strong>${roleName}</strong>
+        <div style="display:flex;align-items:center;gap:8px">
+          <button type="button" class="btn ghost sm assign-voice-test" data-name="${roleName}">Test</button>
+          <select class="assign-voice-select" data-name="${roleName}">
+            ${S.supportedVoices.map(v=>`<option value="${v}" ${((S.voice_map[roleName]||S.supportedVoices[0])===v)?"selected":""}>${v}</option>`).join("")}
+          </select>
+        </div>
+      </div>`;
+          const sel = wrap.querySelector(`select[data-name="${roleName}"]`);
+          if(sel){
+            const currentVoice = sel.value || defaultVoice;
+            S.voice_map[roleName] = OPENAI_VOICES.includes(currentVoice) ? currentVoice : defaultVoice;
+          }
           box.appendChild(wrap);
         });
         box.querySelectorAll("select").forEach(el=>el.addEventListener("change",(e)=>{
           const sel = e.target; S.voice_map[sel.getAttribute("data-name")] = sel.value;
         }));
+        box.querySelectorAll(".assign-voice-test").forEach(btn => {
+          btn.addEventListener("click", async () => {
+            const roleName = btn.getAttribute("data-name");
+            const sel = box.querySelector(`select[data-name="${roleName}"]`);
+            const voice = (sel && sel.value) || (roleName && S.voice_map[roleName]) || (S.supportedVoices[0] || "alloy");
+            await previewVoiceSample(voice, btn);
+          });
+        });
       }
       $("#btnSaveAssign")?.addEventListener("click", async ()=>{
         if(!S.script_id) return;
+        const voiceMap = {};
+        const defaultVoice = OPENAI_VOICES[0] || "alloy";
+        document.querySelectorAll(".assign-voice-select").forEach(sel=>{
+          const role  = sel.getAttribute("data-name") || sel.dataset.name;
+          const voice = sel.value || defaultVoice;
+          if(role) voiceMap[role] = voice;
+        });
         const roles=uniqueRoles().filter(r=>r!==S.role);
-        for(const r of roles) if(!S.voice_map[r]) S.voice_map[r]=S.supportedVoices[0] || "alloy";
+        for(const r of roles){
+          if(!voiceMap[r]) voiceMap[r]=defaultVoice;
+        }
+        S.voice_map = voiceMap;
         try{
-          const r=await fetch("/debug/set_voice",withSecretHeaders({method:"POST",headers:{...JSON_HDRS},body:JSON.stringify({script_id:S.script_id,voice_map:S.voice_map})}));
+          const r=await fetch("/debug/set_voice", withSecretHeaders({
+            method: "POST",
+            headers: { ...JSON_HDRS },
+            body: JSON.stringify({ script_id:S.script_id, voice_map:voiceMap })
+          }));
           if(handleUnauthorized(r)) return;
         }catch{}
         showScreen("rehearse");
@@ -4520,10 +4644,14 @@ const savedStrip = document.getElementById("savedScriptsStrip");
                   return;
                 }
 
+                // On final attempt, force a safe fallback voice
+                const useFallbackVoice = (n === MAX_ATTEMPTS);
+                const voiceName = useFallbackVoice ? "alloy" : voiceFor(ln.speaker);
+
                 const r = await fetch("/debug/tts_line", withSecretHeaders({
                   method: "POST",
                   headers: { ...JSON_HDRS, "Accept": "application/json" },
-                  body: JSON.stringify({ voice: voiceFor(ln.speaker), model, text: cleanText }),
+                  body: JSON.stringify({ voice: voiceName, model, text: cleanText }),
                   signal: ctrl.signal
                 }));
                 if(handleUnauthorized(r)){
@@ -4794,10 +4922,10 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
             try{
               const cur = current();
-              const srReady = !!(sr && srToggleOn && srPermGranted);
-              // If SR is NOT ready, keep legacy behavior and skip ahead to partner line.
-              // If SR IS ready, stay on my line so the app can "listen" and advance on my cue.
-              if(cur && cur.speaker === myName() && !srReady){
+              const micOn = !!(srToggleOn && srPermGranted);
+              // If the mic is OFF, keep legacy behavior and skip ahead to the first partner line.
+              // If the mic is ON, stay on my line so the app can listen and advance from my cue.
+              if(cur && cur.speaker === myName() && !micOn){
                 const list = filtered();
                 for(let i = idx; i < list.length; i++){
                   if(list[i] && list[i].speaker !== myName()){ idx = i; break; }
