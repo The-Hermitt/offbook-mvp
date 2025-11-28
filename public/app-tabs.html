@@ -1211,11 +1211,26 @@
       .auth-actions{ grid-template-columns:1fr 1fr; }
     }
 
-    .auth-actions .btn{
-      min-height:48px; font-size:15px; border-radius:16px;
-    }
-    /* Dev tools: compact but readable */
-    #devEntButtons .btn { min-height: 40px; font-size: 14px; }
+      .auth-actions .btn{
+        min-height:48px; font-size:15px; border-radius:16px;
+      }
+      /* Dev tools: compact but readable */
+      #devEntButtons .btn { min-height: 40px; font-size: 14px; }
+
+      /* Rehearse: make Count-in pill compact instead of full-width */
+      #selRehearseCountIn {
+        flex: 0 0 auto;
+        width: auto;
+        min-width: 64px;
+        max-width: 88px;
+        text-align: center;
+        padding-inline: 10px;
+      }
+
+      /* On very small screens, keep it from stretching */
+      .toolbar .right #selRehearseCountIn {
+        align-self: center;
+      }
   </style>
 </head>
 <body>
@@ -1328,13 +1343,7 @@ JANE: Ready?"></textarea>
           </div>
         </div>
 
-        <div class="hint" id="rehearseBanner"><b>Review and edit your script first</b> before rendering for rehearsal. When ready, press “Render for rehearsal (OpenAI)” to pre-load partner voices for perfect timing.</div>
-        <div class="spacer8"></div>
-
-        <div class="row">
-          <button id="btnToggleEditMode" class="btn secondary" aria-pressed="false">Edit Script</button>
-          <span class="badge">Edit mode: <span id="editModeState">Off</span></span>
-        </div>
+        <div class="hint" id="rehearseBanner"><b>Review and edit your script in the Import tab</b> before rendering for rehearsal. When ready, press "Render for rehearsal (OpenAI)" to pre-load partner voices for perfect timing.</div>
         <div class="spacer8"></div>
 
         <div class="row">
@@ -1370,10 +1379,17 @@ JANE: Ready?"></textarea>
                 <option value="300">+300 ms</option>
               </select>
             </div>
-            <div class="right">
-              <button id="btnMic" class="btn secondary" aria-pressed="false">Mic: Off</button>
-              <span id="micBadge" class="badge warn">off</span>
-            </div>
+                <div class="right">
+                  <label for="selRehearseCountIn" class="small">Count-in</label>
+                  <select id="selRehearseCountIn" title="Rehearse count-in">
+                    <option value="0" selected>0s</option>
+                    <option value="3">3s</option>
+                    <option value="5">5s</option>
+                    <option value="10">10s</option>
+                  </select>
+                  <button id="btnMic" class="btn secondary" aria-pressed="false">Mic: Off</button>
+                  <span id="micBadge" class="badge warn">off</span>
+                </div>
           </div>
         </div>
 
@@ -1486,7 +1502,7 @@ JANE: Ready?"></textarea>
           <div class="spacer8"></div>
           <li><b>Rehearse</b>
             <div class="small">
-              • Toggle <b>Edit Script</b> to tweak or delete lines; add with the inline “+ Add here”.<br>
+              • Scripts are read-only here. To change lines, go back to <b>Import</b>, adjust your script, then return to Rehearse.<br>
               • Press <b>Render for rehearsal (OpenAI)</b> to pre-load partner clips. Choose Fast/HD.<br>
               • Use <b>Play / Prev / Next</b>. Turn <b>Mic: On</b> to enable listen/respond.<br>
               • <b>Interruption rule:</b> if your line ends with an em dash “—”, the partner comes in fast.<br>
@@ -4669,60 +4685,131 @@ const savedStrip = document.getElementById("savedScriptsStrip");
         return true;
       }
 
-      async function step(playMode, opts = {}){
-        const list=filtered(); if(!list.length) return;
-        const immediate = !!opts.immediate;
-        const ln=current(); if(!ln){ playing=false; $("#btnPlay").textContent="Play"; return; }
-        // keep bubble synced even if audio fails
-        highlightCurrent();
+        async function step(playMode, opts = {}){
+          const list=filtered(); if(!list.length) return;
+          const immediate = !!opts.immediate;
+          const ln=current(); if(!ln){ playing=false; $("#btnPlay").textContent="Play"; return; }
+          // keep bubble synced even if audio fails
+          highlightCurrent();
 
-        if(ln.speaker===myName()){
-          if(sr && srToggleOn && srPermGranted){ advanceLock=false; maybeSetMyLineStart(); return; }
-          if(playMode){ playing=false; $("#btnPlay").textContent="Play"; }
-        }else{
-          const i = idx;
-          await playPartnerLine(i, { immediate });
-          if(playing){ idx=Math.min(idx+1,list.length-1); step(true); }
-        }
-      }
-
-  $("#btnPlay")?.addEventListener("click",async ()=>{
-    await ensureAudioContext();
-    try { await window.__OB_READER_EL?.setSinkId?.('default'); } catch {}
-        try{ hardResumeOnGesture().catch(()=>{}); }catch{};
-        playing=!playing;
-        $("#btnPlay").textContent=playing?"Pause":"Play";
-        if(playing){
-          const reader = getReaderEl();
-          if (window.__OB_NEEDS_UNLOCK && getReaderEl() && window.__OB_LAST_READER_URL) {
-            await restoreAudioRoute('play');
-            const _el = getReaderEl();
-            if (_el) {
-              try {
-                await _el.play();
-                window.__OB_NEEDS_UNLOCK = false;
-                if (btnEnableAudio) btnEnableAudio.style.display = 'none';
-              } catch (err) {
-                console.debug('[AUDIO] play blocked; prompting unlock', err);
-                window.__OB_NEEDS_UNLOCK = true;
-                if (btnEnableAudio) btnEnableAudio.style.display = '';
-              }
-            }
+          if(ln.speaker===myName()){
+            if(sr && srToggleOn && srPermGranted){ advanceLock=false; maybeSetMyLineStart(); return; }
+            if(playMode){ playing=false; $("#btnPlay").textContent="Play"; }
+          }else{
+            const i = idx;
+            await playPartnerLine(i, { immediate });
+            if(playing){ idx=Math.min(idx+1,list.length-1); step(true); }
           }
-          try{
-            const cur = current();
-            if(cur && cur.speaker === myName()){
-              const list = filtered();
-              for(let i = idx; i < list.length; i++){
-                if(list[i] && list[i].speaker !== myName()){ idx = i; break; }
-              }
-              highlightCurrent();
-            }
-          }catch{}
-          step(true);
         }
-        else { window.speechSynthesis?.cancel(); try{ sr?.stop(); }catch{}; clearMy(); }
-      });
+
+        async function rehearseCountInIfNeeded(){
+          const sel = document.getElementById("selRehearseCountIn");
+          const secs = Number(sel?.value || 0);
+          if(!secs || secs <= 0) return;
+
+          const overlay = document.getElementById("countdown");
+          const num = document.getElementById("countNum");
+
+          // Use the shared audioCtx used elsewhere in the app
+          await ensureAudioContext();
+          const ctx = window.audioCtx;
+          if(!ctx) return;
+          if(ctx.state !== 'running'){
+            try{ await ctx.resume(); }catch{}
+          }
+
+          if(overlay){
+            overlay.style.display = "flex";
+            overlay.setAttribute("aria-hidden","false");
+          }
+
+          const N = Math.min(10, Math.max(1, secs));
+
+          const playBeep = (freq, durSec = 0.28) => new Promise(res => {
+            try{
+              const o = ctx.createOscillator();
+              const g = ctx.createGain();
+              o.type = 'sine';
+              o.frequency.value = freq;
+              g.gain.value = 0.0001;
+              const now = ctx.currentTime;
+              g.gain.setValueAtTime(0.0001, now);
+              g.gain.exponentialRampToValueAtTime(0.6, now + 0.01);
+              g.gain.exponentialRampToValueAtTime(0.0001, now + durSec);
+              o.connect(g).connect(ctx.destination);
+              o.start(now);
+              o.stop(now + durSec);
+              o.onended = () => {
+                try{ o.disconnect(); g.disconnect(); }catch{}
+                res();
+              };
+            }catch{ res(); }
+          });
+
+          for(let i = N; i >= 1; i--){
+            if(!playing) break; // allow user to cancel during countdown
+            if(num) num.textContent = String(i);
+            await playBeep(i === 1 ? 660 : 880, 0.28);
+            await new Promise(r => setTimeout(r, 720));
+          }
+
+          if(overlay){
+            overlay.style.display = "none";
+            overlay.setAttribute("aria-hidden","true");
+          }
+        }
+
+    $("#btnPlay")?.addEventListener("click",async ()=>{
+      await ensureAudioContext();
+      try { await window.__OB_READER_EL?.setSinkId?.('default'); } catch {}
+          try{ hardResumeOnGesture().catch(()=>{}); }catch{};
+          playing = !playing;
+          $("#btnPlay").textContent = playing ? "Pause" : "Play";
+
+          if(playing){
+            // Optional count-in for Rehearse (0 / 3 / 5 / 10 seconds)
+            await rehearseCountInIfNeeded();
+            // User may have tapped Play again during the countdown
+            if(!playing){
+              $("#btnPlay").textContent = "Play";
+              return;
+            }
+
+            const reader = getReaderEl();
+            if (window.__OB_NEEDS_UNLOCK && getReaderEl() && window.__OB_LAST_READER_URL) {
+              await restoreAudioRoute('play');
+              const _el = getReaderEl();
+              if (_el) {
+                try {
+                  await _el.play();
+                  window.__OB_NEEDS_UNLOCK = false;
+                  if (btnEnableAudio) btnEnableAudio.style.display = 'none';
+                } catch (err) {
+                  console.debug('[AUDIO] play blocked; prompting unlock', err);
+                  window.__OB_NEEDS_UNLOCK = true;
+                  if (btnEnableAudio) btnEnableAudio.style.display = '';
+                }
+              }
+            }
+
+            try{
+              const cur = current();
+              const srReady = !!(sr && srToggleOn && srPermGranted);
+              // If SR is NOT ready, keep legacy behavior and skip ahead to partner line.
+              // If SR IS ready, stay on my line so the app can "listen" and advance on my cue.
+              if(cur && cur.speaker === myName() && !srReady){
+                const list = filtered();
+                for(let i = idx; i < list.length; i++){
+                  if(list[i] && list[i].speaker !== myName()){ idx = i; break; }
+                }
+                highlightCurrent();
+              }
+            }catch{}
+
+            step(true);
+          }
+          else { window.speechSynthesis?.cancel(); try{ sr?.stop(); }catch{}; clearMy(); }
+        });
       $("#btnPrev")?.addEventListener("click",()=>{ const list=filtered(); if(!list.length) return; try{ sr?.stop(); }catch{}; clearMy(); idx=Math.max(0,idx-1); highlightCurrent(); if(playing) step(true); else maybeSetMyLineStart(); });
   $("#btnNext")?.addEventListener("click",async ()=>{
         await ensureAudioContext();
@@ -4764,7 +4851,38 @@ const savedStrip = document.getElementById("savedScriptsStrip");
       document.getElementById('routeWarnMoreRecord')?.addEventListener('click', ()=>{ alert(ROUTE_WARN_ALERT); });
 
       $("#btnToggleEditMode")?.addEventListener("click",()=>{ S.editMode=!S.editMode; applyEditModeUI(); });
-      function applyEditModeUI(){ $("#btnToggleEditMode")?.setAttribute("aria-pressed",S.editMode?"true":"false"); $("#editModeState").textContent=S.editMode?"On":"Off"; $$(".editbar",$("#lines")).forEach(el=>el.style.display=S.editMode?"flex":"none"); $$(".inline-slot",$("#lines")).forEach(el=>el.style.display=S.editMode?"flex":"none"); if(E.inlineForm && E.inlineForm.isConnected){ try{ E.inlineForm.remove(); }catch{}; E.currentSlotPlace=null; } }
+      function applyEditModeUI() {
+        const btn = $("#btnToggleEditMode");
+        const stateEl = $("#editModeState");
+        const linesRoot = $("#lines");
+
+        if (btn) {
+          btn.setAttribute("aria-pressed", S.editMode ? "true" : "false");
+        }
+        if (stateEl) {
+          stateEl.textContent = S.editMode ? "On" : "Off";
+        }
+
+        if (linesRoot) {
+          try {
+            $$(".editbar", linesRoot).forEach(el => {
+              el.style.display = S.editMode ? "flex" : "none";
+            });
+            $$(".inline-slot", linesRoot).forEach(el => {
+              el.style.display = S.editMode ? "flex" : "none";
+            });
+          } catch (_) {
+            // ignore
+          }
+        }
+
+        if (E.inlineForm && E.inlineForm.isConnected) {
+          try {
+            E.inlineForm.remove();
+          } catch (_) {}
+          E.currentSlotPlace = null;
+        }
+      }
 
       // === UI NOTE WIRING ===========================================================
       // Guard against double-binding across hot reloads
