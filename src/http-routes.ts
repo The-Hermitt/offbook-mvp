@@ -6,6 +6,7 @@ import path from "path";
 import fs from "fs";
 import crypto from "crypto";
 import db from "./lib/db";
+import { generateReaderMp3, ttsProvider } from "./lib/tts";
 import { ensureAuditTable, makeAuditMiddleware } from "./lib/audit";
 import { makeRateLimiters } from "./middleware/rateLimit";
 import { noteRenderComplete } from "./routes/auth";
@@ -290,6 +291,34 @@ export function initHttpRoutes(app: Express) {
     script.voiceMap = { ...(script.voiceMap || {}), ...voice_map };
     scripts.set(script_id, script);
     res.json({ ok: true });
+  });
+
+  // POST /debug/preview_voice
+  debug.post("/preview_voice", audit("/debug/preview_voice"), async (req: Request, res: Response) => {
+    try {
+      const { voice } = req.body || {};
+      const v = (typeof voice === "string" && voice.trim()) ? String(voice).trim() : "alloy";
+
+      // If we are in stub mode (no OpenAI key), just return an empty mp3 to keep the flow intact.
+      if (ttsProvider() !== "openai") {
+        res.setHeader("Content-Type", "audio/mpeg");
+        return res.end(Buffer.alloc(0));
+      }
+
+      const sampleText = `This is ${v} speaking in OffBook.`;
+      const lines = [{ character: "DEMO", text: sampleText }];
+      const voiceMap: Record<string, string> = { DEMO: v, UNKNOWN: v };
+
+      const outPath = await generateReaderMp3(lines, voiceMap, "USER", "normal");
+
+      res.setHeader("Content-Type", "audio/mpeg");
+      fs.createReadStream(outPath).pipe(res);
+    } catch (err) {
+      console.error("[preview_voice] error:", err);
+      if (!res.headersSent) {
+        res.status(500).json({ error: "preview_failed" });
+      }
+    }
   });
 
   // POST /debug/render (stub -> silent mp3)
