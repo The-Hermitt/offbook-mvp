@@ -1571,7 +1571,7 @@ JANE: Ready?"></textarea>
 
   <!-- App -->
   <script type="module">
-    import { expectedMinMsFor, AFTER_ADV_COOLDOWN_MS, isSpeaking, endsWithDashy, readyForAdvance } from "./js/speech-timing.js";
+    import { expectedMinMsFor, AFTER_ADV_COOLDOWN_MS, isSpeaking, endsWithDashy, readyForAdvance, progressRatio } from "./js/speech-timing.js";
     const boot = () => {
       const qs = new URLSearchParams(location.search);
       const cookieSecret = (() => {
@@ -3684,7 +3684,6 @@ const savedStrip = document.getElementById("savedScriptsStrip");
       }
 
       function stopAllAudioHard() {
-        try { window.speechSynthesis?.cancel(); } catch {}
         try { E?.rehearseAudio?.pause(); E.rehearseAudio.currentTime = 0; } catch {}
         try { R?.audio?.pause(); R.audio.currentTime = 0; } catch {}
         resetReaderActiveSources();
@@ -4006,20 +4005,6 @@ const savedStrip = document.getElementById("savedScriptsStrip");
       function wireEditTools(){ $$(".chip",$("#lines")).forEach(ch=>ch.onclick=(ev)=>{ ev.stopPropagation(); const act=ch.getAttribute("data-act"); const iF=+ch.getAttribute("data-i"); const sc=getScene(); if(!sc) return; const node=document.querySelector(`.line[data-i="${iF}"]`); const orig=+node.getAttribute("data-orig"); if(Number.isNaN(orig)) return; if(act==="edit"){ if(!S.editMode) return; const t=document.querySelector(`.text[data-i="${iF}"]`); const editing=t.getAttribute("contenteditable")==="true"; if(editing){ t.setAttribute("contenteditable","false"); sc.lines[orig].text=t.innerText.trim(); hydrateRehearse(); } else { t.setAttribute("contenteditable","true"); t.focus(); const r=document.createRange(); r.selectNodeContents(t); r.collapse(false); const s=window.getSelection(); s.removeAllRanges(); s.addRange(r); } } else if(act==="del"){ if(!S.editMode) return; sc.lines.splice(orig,1); hydrateRehearse(); } }); }
       function wireSlots(){ $$('[data-add-button]',$("#lines")).forEach(btn=>btn.onclick=(ev)=>{ if(!S.editMode) return; ev.stopPropagation(); const slot=btn.closest('.inline-slot'); openInlineForm(slot, Number(slot.getAttribute("data-place"))); }); }
       function highlightCurrent(){ $$(".line",$("#lines")).forEach(el=>el.classList.remove("playing")); const cur=document.querySelector(`.line[data-i="${idx}"]`); if(cur){ cur.classList.add("playing"); cur.scrollIntoView({block:"center",behavior:(!S.editMode?"smooth":"auto")}); } }
-
-      // simple native TTS (watchdog)
-      function synthSpeak(text){
-        if(!window.speechSynthesis) return Promise.resolve();
-        window.speechSynthesis.cancel();
-        const u=new SpeechSynthesisUtterance(text);
-        const v=(window.speechSynthesis.getVoices()||[]).find(v=>/en(-|_)?/.test(v.lang));
-        if(v) u.voice=v;
-        u.rate=1.0; u.pitch=1.0;
-        const p=new Promise(res=>{ u.onend=()=>res(); u.onerror=()=>res(); });
-        window.speechSynthesis.speak(u);
-        const maxMs = Math.min(9000, Math.max(1200, text.trim().length*70));
-        return Promise.race([p, new Promise(res=>setTimeout(res,maxMs))]);
-      }
 
       /* Speech Rec (unchanged timings) */
       const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
@@ -4456,6 +4441,8 @@ const savedStrip = document.getElementById("savedScriptsStrip");
           const isFinal=!!last?.isFinal;
           latestTranscript=(alt?.transcript||"").trim();
           lastResultAt=now;
+          const ratio=progressRatio(ln.text, latestTranscript);
+          const sttConfident=ratio>=0.92; // high-confidence transcript match
 
           const elapsed=now-(myLineStartMs||now);
 
@@ -4474,12 +4461,16 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
           // Dash at end = allow fast cut-in once minima met
           if(dashy){
-            if((shouldAdvance && enoughElapsed) || (isFinal && enoughElapsed)){
+            if((shouldAdvance || sttConfident) && enoughElapsed){
               return advanceFromMyLine();
             }
           }else{
-            // Normal lines: require final result OR adequate silence, plus minima
-            if((isFinal && enoughElapsed) || (shouldAdvance && enoughSilence && enoughElapsed)){
+            // Normal lines: allow strong STT match OR final result, even if there was minimal silence
+            if(
+              (isFinal && enoughElapsed) ||                // existing behavior
+              (sttConfident && enoughElapsed) ||           // NEW: strong transcript match
+              (shouldAdvance && enoughSilence && enoughElapsed) // existing timing/silence path
+            ){
               return advanceFromMyLine();
             }
           }
@@ -4747,7 +4738,17 @@ const savedStrip = document.getElementById("savedScriptsStrip");
         }
         try{ preloadReaderBuffers(); }catch{}
       }
-  function clearRehearseRender(){ RR.map.clear(); RR.failures=0; stopDots(); R.readerBuffers = new Map(); resetReaderActiveSources(); R.readerLoading=false; setRehearseRenderStatus("Cleared pre-render.","warn"); }
+  function clearRehearseRender(){
+    RR.map.clear();
+    RR.failures=0;
+    stopDots();
+    R.readerBuffers = new Map();
+    resetReaderActiveSources();
+    R.readerLoading=false;
+    try{ if(E?.rehearseAudio){ E.rehearseAudio.pause(); E.rehearseAudio.removeAttribute("src"); E.rehearseAudio.load(); } }catch{}
+    try{ window.__OB_LAST_READER_URL = null; }catch{}
+    setRehearseRenderStatus("Cleared pre-render.","warn");
+  }
       $("#btnRehearseRender")?.addEventListener("click", renderRehearseVoices);
       $("#btnRehearseClear")?.addEventListener("click", clearRehearseRender);
 
@@ -4806,10 +4807,42 @@ const savedStrip = document.getElementById("savedScriptsStrip");
         if(!ln || ln.speaker === myName()) return false;
         const paceSelect = document.getElementById("selPace");
         let pace = Number((paceSelect && paceSelect.value) || 0);
+        if(Number.isNaN(pace)) pace = 0;
         if(tightMode() || immediate) pace = 0;
         const usedOpenAi = await playOpenAiIfCached(index);
-        if(!usedOpenAi){ await synthSpeak(ln.text); }
-        if(pace > 0){ await new Promise(r=>setTimeout(r, pace)); }
+        if(usedOpenAi){
+          if(pace > 0){ await new Promise(r=>setTimeout(r, pace)); }
+          return true;
+        }
+
+        const readerUrl = (E.rehearseAudio?.src || "").trim() || (window.__OB_LAST_READER_URL || "").trim() || (hasR() ? (R.download_url || "").trim() : "");
+        if(!readerUrl){
+          alert('Please tap "Render for rehearsal (OpenAI)" first to generate the reader audio.');
+          playing = false;
+          $("#btnPlay").textContent = "Play";
+          return false;
+        }
+
+        const audio = E.rehearseAudio || getReaderEl();
+        try{
+          if(audio){
+            if(audio.src !== readerUrl){
+              audio.src = readerUrl;
+              rememberReaderUrl(readerUrl);
+              try{ audio.load(); }catch{}
+            }
+            await new Promise(res=>{
+              const done = ()=>{ audio.onended=null; audio.onerror=null; res(null); };
+              audio.onended = done;
+              audio.onerror = done;
+              try{ audio.play(); }catch{ done(); }
+            });
+          }
+        }catch(e){
+          console.error("Rehearse reader playback failed", e);
+        }
+        playing = false;
+        $("#btnPlay").textContent = "Play";
         return true;
       }
 
@@ -4890,54 +4923,73 @@ const savedStrip = document.getElementById("savedScriptsStrip");
     $("#btnPlay")?.addEventListener("click",async ()=>{
       await ensureAudioContext();
       try { await window.__OB_READER_EL?.setSinkId?.('default'); } catch {}
-          try{ hardResumeOnGesture().catch(()=>{}); }catch{};
-          playing = !playing;
-          $("#btnPlay").textContent = playing ? "Pause" : "Play";
+      try{ hardResumeOnGesture().catch(()=>{}); }catch{};
+      const btnPlayEl = $("#btnPlay");
+      const wantsPlay = !playing;
 
-          if(playing){
-            // Optional count-in for Rehearse (0 / 3 / 5 / 10 seconds)
-            await rehearseCountInIfNeeded();
-            // User may have tapped Play again during the countdown
-            if(!playing){
-              $("#btnPlay").textContent = "Play";
-              return;
+      if(wantsPlay){
+        const hasPerLineClips = (RR?.map && RR.map.size > 0) || (hasR() && R.readerBuffers && R.readerBuffers.size > 0);
+        const knownUrl = (E.rehearseAudio?.src || "").trim() || (window.__OB_LAST_READER_URL || "").trim() || (hasR() ? (R.download_url || "").trim() : "");
+        if(!hasPerLineClips && !knownUrl){
+          playing = false;
+          if(btnPlayEl){ btnPlayEl.textContent = "Play"; }
+          alert('Please tap "Render for rehearsal (OpenAI)" first to generate the reader audio.');
+          return;
+        }
+        if(!hasPerLineClips && knownUrl && E.rehearseAudio && !E.rehearseAudio.src){
+          E.rehearseAudio.src = knownUrl;
+          rememberReaderUrl(knownUrl);
+          try{ E.rehearseAudio.load(); }catch{}
+        }
+      }
+
+      playing = wantsPlay;
+      if(btnPlayEl) btnPlayEl.textContent = playing ? "Pause" : "Play";
+
+      if(playing){
+        // Optional count-in for Rehearse (0 / 3 / 5 / 10 seconds)
+        await rehearseCountInIfNeeded();
+        // User may have tapped Play again during the countdown
+        if(!playing){
+          if(btnPlayEl) btnPlayEl.textContent = "Play";
+          return;
+        }
+
+        const reader = getReaderEl();
+        if (window.__OB_NEEDS_UNLOCK && getReaderEl() && window.__OB_LAST_READER_URL) {
+          await restoreAudioRoute('play');
+          const _el = getReaderEl();
+          if (_el) {
+            try {
+              await _el.play();
+              window.__OB_NEEDS_UNLOCK = false;
+              if (btnEnableAudio) btnEnableAudio.style.display = 'none';
+            } catch (err) {
+              console.debug('[AUDIO] play blocked; prompting unlock', err);
+              window.__OB_NEEDS_UNLOCK = true;
+              if (btnEnableAudio) btnEnableAudio.style.display = '';
             }
-
-            const reader = getReaderEl();
-            if (window.__OB_NEEDS_UNLOCK && getReaderEl() && window.__OB_LAST_READER_URL) {
-              await restoreAudioRoute('play');
-              const _el = getReaderEl();
-              if (_el) {
-                try {
-                  await _el.play();
-                  window.__OB_NEEDS_UNLOCK = false;
-                  if (btnEnableAudio) btnEnableAudio.style.display = 'none';
-                } catch (err) {
-                  console.debug('[AUDIO] play blocked; prompting unlock', err);
-                  window.__OB_NEEDS_UNLOCK = true;
-                  if (btnEnableAudio) btnEnableAudio.style.display = '';
-                }
-              }
-            }
-
-            try{
-              const cur = current();
-              const micOn = !!(srToggleOn && srPermGranted);
-              // If the mic is OFF, keep legacy behavior and skip ahead to the first partner line.
-              // If the mic is ON, stay on my line so the app can listen and advance from my cue.
-              if(cur && cur.speaker === myName() && !micOn){
-                const list = filtered();
-                for(let i = idx; i < list.length; i++){
-                  if(list[i] && list[i].speaker !== myName()){ idx = i; break; }
-                }
-                highlightCurrent();
-              }
-            }catch{}
-
-            step(true);
           }
-          else { window.speechSynthesis?.cancel(); try{ sr?.stop(); }catch{}; clearMy(); }
-        });
+        }
+
+        try{
+          const cur = current();
+          const micOn = !!(srToggleOn && srPermGranted);
+          // If the mic is OFF, keep legacy behavior and skip ahead to the first partner line.
+          // If the mic is ON, stay on my line so the app can listen and advance from my cue.
+          if(cur && cur.speaker === myName() && !micOn){
+            const list = filtered();
+            for(let i = idx; i < list.length; i++){
+              if(list[i] && list[i].speaker !== myName()){ idx = i; break; }
+            }
+            highlightCurrent();
+          }
+        }catch{}
+
+        step(true);
+      }
+      else { try{ E.rehearseAudio?.pause(); }catch{}; try{ sr?.stop(); }catch{}; clearMy(); }
+    });
       $("#btnPrev")?.addEventListener("click",()=>{ const list=filtered(); if(!list.length) return; try{ sr?.stop(); }catch{}; clearMy(); idx=Math.max(0,idx-1); highlightCurrent(); if(playing) step(true); else maybeSetMyLineStart(); });
   $("#btnNext")?.addEventListener("click",async ()=>{
         await ensureAudioContext();
