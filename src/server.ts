@@ -438,6 +438,63 @@ function concatMp3(parts: Buffer[]): Buffer {
   return Buffer.concat(parts);
 }
 
+function getUserIdForRequest(_req: Request): string {
+  // TODO: Wire this to real auth/session when user ids are available.
+  return "solo-tester";
+}
+
+function persistScriptToDb(id: string, title: string, scenes: Scene[]) {
+  try {
+    const scenesJson = JSON.stringify(scenes || []);
+    const sceneCount = Array.isArray(scenes) ? scenes.length : 0;
+
+    const stmt = db.prepare(`
+      INSERT INTO scripts (id, user_id, title, scene_count, scenes_json, created_at, updated_at)
+      VALUES (@id, @user_id, @title, @scene_count, @scenes_json, datetime('now'), datetime('now'))
+      ON CONFLICT(id) DO UPDATE SET
+        user_id = excluded.user_id,
+        title = excluded.title,
+        scene_count = excluded.scene_count,
+        scenes_json = excluded.scenes_json,
+        updated_at = datetime('now')
+    `);
+
+    // TODO: replace "solo-tester" with a real user id from the auth/session once that is wired.
+    stmt.run({
+      id,
+      user_id: "solo-tester",
+      title,
+      scene_count: sceneCount,
+      scenes_json: scenesJson,
+    });
+  } catch (e) {
+    console.error("[scripts] failed to persist script", { id, title, error: (e as any)?.message || e });
+  }
+}
+
+function loadScriptFromDb(scriptId: string, userId: string): { title: string; scenes: Scene[] } | null {
+  try {
+    const stmt = db.prepare(`
+      SELECT title, scenes_json
+      FROM scripts
+      WHERE id = @id AND user_id = @user_id
+    `);
+    const row: any = stmt.get({ id: scriptId, user_id: userId });
+    if (!row || !row.scenes_json) return null;
+
+    const parsed = JSON.parse(row.scenes_json);
+    if (!Array.isArray(parsed)) return null;
+
+    return {
+      title: row.title || "Sides",
+      scenes: parsed as Scene[],
+    };
+  } catch (e: any) {
+    console.error("[scripts] loadScriptFromDb failed", scriptId, e?.message || e);
+    return null;
+  }
+}
+
 /* -------------------- ALWAYS-ON ROUTES -------------------- */
 // 1) TTS health (safe)
 app.get("/debug/tts_check", requireSecret, async (_req: Request, res: Response) => {
@@ -465,6 +522,101 @@ app.post("/debug/tts_line", requireSecret, async (req: Request, res: Response) =
 });
 /* ---------------------------------------------------------- */
 
+app.get("/api/my_scripts", async (req: Request, res: Response) => {
+  try {
+    const userId = getUserIdForRequest(req);
+
+    const stmt = db.prepare(
+      `SELECT id, title, scene_count, updated_at
+       FROM scripts
+       WHERE user_id = @user_id
+       ORDER BY datetime(updated_at) DESC`
+    );
+
+    const rows = stmt.all({ user_id: userId });
+
+    const scripts = rows.map((row: any) => ({
+      id: row.id,
+      title: row.title,
+      sceneCount: typeof row.scene_count === "number" ? row.scene_count : 0,
+      updatedAt: row.updated_at,
+    }));
+
+    res.json({ scripts });
+  } catch (e: any) {
+    console.error("[scripts] /api/my_scripts failed:", e?.message || e);
+    res.status(500).json({ error: "failed_to_list_scripts" });
+  }
+});
+
+app.post("/api/scripts/:id/save", async (req: Request, res: Response) => {
+  try {
+    const userId = getUserIdForRequest(req);
+    const id = (req.params.id || "").trim();
+    if (!id) {
+      return res.status(400).json({ error: "missing_script_id" });
+    }
+
+    const body = req.body || {};
+    const rawTitle =
+      typeof body.title === "string" ? (body.title as string).trim() : "";
+    const scenesRaw = body.scenes;
+    const scenes = Array.isArray(scenesRaw) ? (scenesRaw as Scene[]) : [];
+
+    let existingTitle = "";
+
+    try {
+      const row = db
+        .prepare("SELECT id, title FROM scripts WHERE id = @id AND user_id = @user_id")
+        .get({ id, user_id: userId }) as any;
+      if (!row) {
+        // If there is no existing row for this user+id, treat as not found.
+        return res.status(404).json({ error: "script_not_found" });
+      }
+      existingTitle = (row.title as string) || "";
+    } catch (e: any) {
+      console.error("[scripts] /api/scripts/:id/save ownership check failed:", e?.message || e);
+      // Continue; we still try to persist as a best-effort.
+    }
+
+    const finalTitle = rawTitle || existingTitle || "Sides";
+
+    // Persist new title + scenes to DB
+    persistScriptToDb(id, finalTitle, scenes);
+
+    return res.json({ ok: true });
+  } catch (e: any) {
+    console.error("[scripts] POST /api/scripts/:id/save failed:", e?.message || e);
+    return res.status(500).json({ error: "failed_to_save_script" });
+  }
+});
+
+app.delete("/api/scripts/:id", async (req: Request, res: Response) => {
+  try {
+    const userId = getUserIdForRequest(req);
+    const id = (req.params.id || "").trim();
+
+    if (!id) {
+      return res.status(400).json({ error: "missing_script_id" });
+    }
+
+    const stmt = db.prepare(
+      "DELETE FROM scripts WHERE id = @id AND user_id = @user_id"
+    );
+    const info = stmt.run({ id, user_id: userId });
+
+    if (info.changes === 0) {
+      // Nothing deleted: either it never existed or belongs to another user.
+      return res.status(404).json({ ok: false, error: "script_not_found" });
+    }
+
+    return res.json({ ok: true });
+  } catch (e: any) {
+    console.error("[scripts] DELETE /api/scripts/:id failed:", e?.message || e);
+    return res.status(500).json({ error: "failed_to_delete_script" });
+  }
+});
+
 // ---------- Routes ----------
 function mountFallbackDebugRoutes() {
   app.get("/debug/ping", requireSecret, (_req, res) => res.json({ ok: true }));
@@ -479,6 +631,7 @@ function mountFallbackDebugRoutes() {
     const scenes = parseTextToScenes(title, text);
     const speakers = uniqueSpeakers(scenes[0]);
     mem.scripts.set(id, { id, title, scenes, voices: {} });
+    persistScriptToDb(id, title, scenes);
     res.json({ script_id: id, scene_count: scenes.length, speakers });
   });
 
@@ -506,6 +659,7 @@ function mountFallbackDebugRoutes() {
         const id = genId("scr");
         const scenes: Scene[] = [{ id: genId("scn"), title, lines: [{ speaker: "SYSTEM", text: "PDF appears to be image-only. Paste script text for best parsing (OCR later)." }] }];
         mem.scripts.set(id, { id, title, scenes, voices: {} });
+        persistScriptToDb(id, title, scenes);
         return res.json({ script_id: id, scene_count: scenes.length, note: "image-only", textLen: textLenRaw });
       }
 
@@ -515,6 +669,7 @@ function mountFallbackDebugRoutes() {
 
       const id = genId("scr");
       mem.scripts.set(id, { id, title, scenes, voices: {} });
+      persistScriptToDb(id, title, scenes);
       return res.json({ script_id: id, scene_count: scenes.length, speakers, textLen: text.length });
     } catch (e: any) {
       const msg = (e?.message || String(e)).slice(0, 200);
@@ -522,16 +677,50 @@ function mountFallbackDebugRoutes() {
       const id = genId("scr");
       const scenes: Scene[] = [{ id: genId("scn"), title, lines: [{ speaker: "SYSTEM", text: "Could not parse PDF text. Please paste script text. (Error logged on server.)" }] }];
       mem.scripts.set(id, { id, title, scenes, voices: {} });
+      persistScriptToDb(id, title, scenes);
       return res.json({ script_id: id, scene_count: scenes.length, note: "parse-error", error: msg });
     }
   });
 
-  app.get("/debug/scenes", requireSecret, audit("/debug/scenes"), (req: Request, res: Response) => {
-    const script_id = String(req.query.script_id || "");
-    const s = mem.scripts.get(script_id);
-    if (!s) return res.status(404).json({ error: "not found" });
-    res.json({ script_id, scenes: s.scenes });
-  });
+  app.get(
+    "/debug/scenes",
+    requireSecret,
+    audit("/debug/scenes"),
+    async (req: Request, res: Response) => {
+      const script_id = String(req.query.script_id || "").trim();
+      if (!script_id) {
+        return res.status(400).json({ error: "missing_script_id" });
+      }
+
+      // 1) Try in-memory first
+      let s = mem.scripts.get(script_id);
+      if (s && Array.isArray(s.scenes)) {
+        return res.json({ script_id, scenes: s.scenes });
+      }
+
+      // 2) Fallback: try to load from DB
+      try {
+        const userId = getUserIdForRequest(req);
+        const fromDb = loadScriptFromDb(script_id, userId);
+        if (fromDb && Array.isArray(fromDb.scenes)) {
+          // Optionally repopulate mem.scripts for faster access next time.
+          mem.scripts.set(script_id, {
+            id: script_id,
+            title: fromDb.title,
+            scenes: fromDb.scenes,
+            voices: s?.voices || {},
+          });
+
+          return res.json({ script_id, scenes: fromDb.scenes });
+        }
+      } catch (e) {
+        console.error("[scripts] /debug/scenes DB fallback failed", e);
+      }
+
+      // 3) Nothing found
+      return res.status(404).json({ error: "not_found" });
+    }
+  );
 
   app.post("/debug/set_voice", requireSecret, audit("/debug/set_voice"), (req: Request, res: Response) => {
     const script_id = String((req.body as any)?.script_id || "");

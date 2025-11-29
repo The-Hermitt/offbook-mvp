@@ -193,6 +193,12 @@
     }
     textarea{ min-height:130px; line-height:1.4; resize:vertical }
     select{ appearance:none }
+    .assign-voice-select {
+      min-width: 90px;
+      max-width: 140px;
+      padding-inline: 8px;
+      border-radius: 16px;
+    }
     .btn{
       display:inline-flex;
       align-items:center;
@@ -210,6 +216,10 @@
       box-shadow:0 18px 36px rgba(85,115,255,0.35);
       transition:transform .2s ease, box-shadow .2s ease;
     }
+    .btn.loading {
+      opacity: 0.6;
+      pointer-events: none;
+    }
     .btn:hover{ transform:translateY(-1px); box-shadow:0 20px 40px rgba(85,115,255,0.4) }
     .btn:active{ transform:translateY(0); box-shadow:0 12px 26px rgba(85,115,255,0.28) }
     .btn.secondary{
@@ -225,6 +235,13 @@
       border:1px dashed rgba(150,164,200,0.3);
       box-shadow:none;
     }
+    .btn.danger{
+      background:linear-gradient(135deg, rgba(239,68,68,0.95), rgba(200,48,48,0.95));
+      color:#fff;
+      box-shadow:0 18px 36px rgba(239,68,68,0.35);
+    }
+    .btn.danger:hover{ box-shadow:0 20px 40px rgba(239,68,68,0.4) }
+    .btn.danger:active{ box-shadow:0 12px 26px rgba(239,68,68,0.28) }
     .btn.sm{ padding:8px 12px; font-size:12px; border-radius:12px; min-height:34px }
     .row{ display:flex; gap:10px } .row>*{ flex:1 }
     .spacer6{ height:6px } .spacer8{ height:8px } .spacer12{ height:12px } .spacer16{ height:16px }
@@ -281,6 +298,192 @@
       background:rgba(17,21,34,0.85);
       border-color:var(--focus);
       box-shadow:0 10px 24px rgba(85,115,255,0.25);
+    }
+    .import-saved-scripts {
+      padding: 8px 12px;
+    }
+    .saved-scripts-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 6px;
+    }
+    .saved-scripts-title {
+      font-weight: 600;
+      font-size: 14px;
+    }
+    .saved-scripts-status {
+      font-size: 11px;
+      opacity: 0.7;
+    }
+    .saved-scripts-strip {
+      display: flex;
+      overflow-x: auto;
+      gap: 8px;
+      padding-bottom: 4px;
+    }
+    .saved-script-card {
+      flex: 0 0 auto;
+      min-width: 120px;
+      max-width: 160px;
+      padding: 8px;
+      border-radius: 10px;
+      border: 1px solid rgba(255,255,255,0.12);
+      background-color: rgba(0,0,0,0.3);
+      font-size: 12px;
+    }
+    .saved-script-card,
+    .saved-script-card:active,
+    .saved-script-card:focus {
+      -webkit-tap-highlight-color: transparent;
+      outline: none;
+    }
+    .saved-script-card .script-title {
+      font-weight: 600;
+      margin-bottom: 2px;
+    }
+    .saved-script-card .script-meta {
+      font-size: 11px;
+      opacity: 0.8;
+    }
+    .saved-script-card.saved-script-new {
+      border-style: dashed;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+    }
+    .saved-script-confirm-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.5);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 9999;
+    }
+    .saved-script-confirm-dialog {
+      background: #101018;
+      border-radius: 16px;
+      padding: 16px 20px;
+      max-width: 260px;
+      width: calc(100% - 40px);
+      box-shadow: 0 12px 30px rgba(0, 0, 0, 0.5);
+    }
+    .saved-script-confirm-title {
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+    .saved-script-confirm-text {
+      font-size: 0.85rem;
+      opacity: 0.9;
+      margin-bottom: 12px;
+    }
+    .saved-script-confirm-buttons {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+    /* Prevent long-press text selection in the delete modal */
+    .saved-script-confirm-dialog,
+    .saved-script-confirm-dialog * {
+      -webkit-user-select: none;
+      user-select: none;
+    }
+    /* Avoid text-selection handles on long-press of saved script cards */
+    .saved-script-card,
+    .saved-script-card * {
+      -webkit-user-select: none;
+      user-select: none;
+    }
+    .import-editor {
+      padding: 8px 12px 16px;
+      border-top: 1px solid rgba(255,255,255,0.12);
+      margin-top: 4px;
+    }
+    .import-editor-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      margin-bottom: 6px;
+    }
+    .import-editor-title {
+      font-weight: 600;
+      font-size: 14px;
+    }
+    .import-editor-meta {
+      font-size: 11px;
+      opacity: 0.8;
+    }
+    .import-scene-selector {
+      display: flex;
+      flex-wrap: nowrap;
+      overflow-x: auto;
+      gap: 6px;
+      margin-bottom: 8px;
+    }
+    .import-scene-chip {
+      flex: 0 0 auto;
+      padding: 4px 8px;
+      border-radius: 999px;
+      border: 1px solid rgba(255,255,255,0.18);
+      font-size: 11px;
+      opacity: 0.9;
+      background: transparent;
+      color: inherit;
+    }
+    .import-scene-chip.active {
+      background-color: rgba(255,255,255,0.12);
+      border-color: rgba(255,255,255,0.4);
+    }
+    .import-lines-list {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      max-height: 260px;
+      overflow-y: auto;
+      padding-right: 2px;
+    }
+    .import-line-textarea {
+      flex: 1 1 0;
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,0.16);
+      background-color: rgba(0,0,0,0.2);
+      color: inherit;
+      font: inherit;
+      padding: 6px 8px;
+      resize: none;
+      overflow: hidden;
+      min-height: 2.4rem;
+      max-height: none;
+      line-height: 1.5;
+      height: auto;
+      box-sizing: border-box;
+    }
+    /* MVP: hide bottom "Add line" control in Import editor */
+    .import-editor-add-row,
+    .import-line-add {
+      display: none !important;
+    }
+    .import-editor-footer {
+      margin-top: 10px;
+    }
+    .import-editor-hint {
+      margin-bottom: 8px;
+      max-width: 100%;
+      font-size: 11px;
+      opacity: 0.7;
+    }
+    .import-editor-actions {
+      display: flex;
+      gap: 8px;
+    }
+    .import-editor-actions .btn {
+      flex: 1 1 0;
+    }
+    .import-editor-empty {
+      font-size: 12px;
+      opacity: 0.7;
     }
     pre.status{
       white-space:pre-wrap;
@@ -1018,18 +1221,33 @@
       .auth-actions{ grid-template-columns:1fr 1fr; }
     }
 
-    .auth-actions .btn{
-      min-height:48px; font-size:15px; border-radius:16px;
-    }
-    /* Dev tools: compact but readable */
-    #devEntButtons .btn { min-height: 40px; font-size: 14px; }
+      .auth-actions .btn{
+        min-height:48px; font-size:15px; border-radius:16px;
+      }
+      /* Dev tools: compact but readable */
+      #devEntButtons .btn { min-height: 40px; font-size: 14px; }
+
+      /* Rehearse: make Count-in pill compact instead of full-width */
+      #selRehearseCountIn {
+        flex: 0 0 auto;
+        width: auto;
+        min-width: 64px;
+        max-width: 88px;
+        text-align: center;
+        padding-inline: 10px;
+      }
+
+      /* On very small screens, keep it from stretching */
+      .toolbar .right #selRehearseCountIn {
+        align-self: center;
+      }
   </style>
 </head>
 <body>
   <div id="errbar" class="errbar" role="alert"></div>
   <main>
     <!-- IMPORT -->
-    <section id="screen-import" class="screen active">
+  <section id="screen-import" class="screen active">
       <div class="card">
         <h3>Import</h3>
         <p class="hint">Two ways to import. <b>Paste Script Text</b> is most reliable; <b>Upload PDF</b> extracts text with an OCR fallback for scanned PDFs.</p>
@@ -1049,7 +1267,7 @@ GABE: Hey.
 JANE: Ready?"></textarea>
           <div class="spacer8"></div>
           <div class="row">
-            <button id="btnTextUpload" class="btn">Continue → Assign</button>
+            <button id="btnTextUpload" class="btn">Upload & Continue</button>
             <button id="btnTextClear" class="btn secondary">Clear</button>
           </div>
           <div class="spacer12"></div>
@@ -1073,6 +1291,38 @@ JANE: Ready?"></textarea>
           <pre id="statusPdf" class="status"></pre>
           <div class="small">Tip: OCR processes the first 3 pages for speed.</div>
         </div>
+        <div id="savedScriptsContainer" class="import-saved-scripts">
+          <div class="saved-scripts-header">
+            <div class="saved-scripts-title">Your Scripts</div>
+            <div id="savedScriptsStatus" class="saved-scripts-status"></div>
+          </div>
+          <div id="savedScriptsStrip" class="saved-scripts-strip">
+            <!-- Filled by renderSavedScriptsStrip() -->
+          </div>
+        </div>
+        <div id="importEditorContainer" class="import-editor">
+          <div class="import-editor-header">
+            <div class="import-editor-title">Script Viewer</div>
+            <div id="importEditorMeta" class="import-editor-meta"></div>
+          </div>
+          <div id="importSceneSelector" class="import-scene-selector"></div>
+          <div id="importLinesList" class="import-lines-list"></div>
+            <div class="import-editor-footer">
+              <div class="small import-editor-hint">
+                Edits here update this device's copy. AI audio may still follow the original script until sync is added.
+              </div>
+              <div id="importPersistenceDebug" class="small import-editor-hint"></div>
+              <div class="import-editor-actions">
+                <button id="importSaveEdits" type="button" class="btn sm">
+                  Save Changes
+                </button>
+              <button id="importGoAssign" type="button" class="btn sm secondary">
+                Continue → Assign
+              </button>
+            </div>
+          </div>
+        </div>
+
       </div>
     </section>
 
@@ -1103,13 +1353,7 @@ JANE: Ready?"></textarea>
           </div>
         </div>
 
-        <div class="hint" id="rehearseBanner"><b>Review and edit your script first</b> before rendering for rehearsal. When ready, press “Render for rehearsal (OpenAI)” to pre-load partner voices for perfect timing.</div>
-        <div class="spacer8"></div>
-
-        <div class="row">
-          <button id="btnToggleEditMode" class="btn secondary" aria-pressed="false">Edit Script</button>
-          <span class="badge">Edit mode: <span id="editModeState">Off</span></span>
-        </div>
+        <div class="hint" id="rehearseBanner"><b>Review and edit your script in the Import tab</b> before rendering for rehearsal. When ready, press "Render for rehearsal (OpenAI)" to pre-load partner voices for perfect timing.</div>
         <div class="spacer8"></div>
 
         <div class="row">
@@ -1145,10 +1389,17 @@ JANE: Ready?"></textarea>
                 <option value="300">+300 ms</option>
               </select>
             </div>
-            <div class="right">
-              <button id="btnMic" class="btn secondary" aria-pressed="false">Mic: Off</button>
-              <span id="micBadge" class="badge warn">off</span>
-            </div>
+                <div class="right">
+                  <label for="selRehearseCountIn" class="small">Count-in</label>
+                  <select id="selRehearseCountIn" title="Rehearse count-in">
+                    <option value="0" selected>0s</option>
+                    <option value="3">3s</option>
+                    <option value="5">5s</option>
+                    <option value="10">10s</option>
+                  </select>
+                  <button id="btnMic" class="btn secondary" aria-pressed="false">Mic: Off</button>
+                  <span id="micBadge" class="badge warn">off</span>
+                </div>
           </div>
         </div>
 
@@ -1261,7 +1512,7 @@ JANE: Ready?"></textarea>
           <div class="spacer8"></div>
           <li><b>Rehearse</b>
             <div class="small">
-              • Toggle <b>Edit Script</b> to tweak or delete lines; add with the inline “+ Add here”.<br>
+              • Scripts are read-only here. To change lines, go back to <b>Import</b>, adjust your script, then return to Rehearse.<br>
               • Press <b>Render for rehearsal (OpenAI)</b> to pre-load partner clips. Choose Fast/HD.<br>
               • Use <b>Play / Prev / Next</b>. Turn <b>Mic: On</b> to enable listen/respond.<br>
               • <b>Interruption rule:</b> if your line ends with an em dash “—”, the partner comes in fast.<br>
@@ -1344,6 +1595,19 @@ JANE: Ready?"></textarea>
         try { delete window.__OB_SECRET__; } catch { window.__OB_SECRET__ = undefined; }
       }
       const JSON_HDRS = { "Content-Type":"application/json" };
+      // OpenAI TTS / audio voices we support
+      const OPENAI_VOICES = [
+        "alloy",
+        "ash",
+        "ballad",
+        "coral",
+        "echo",
+        "fable",
+        "onyx",
+        "nova",
+        "sage",
+        "shimmer"
+      ];
       const isNgrokHost = /ngrok/i.test(location.hostname);
       function withSecretHeaders(init = {}) {
         const next = { ...(init || {}) };
@@ -1455,6 +1719,28 @@ JANE: Ready?"></textarea>
       function show(el, on) {
         if (el) el.style.display = on ? "" : "none";
       }
+      function clearCurrentScriptView() {
+        try {
+          // Reset in-memory script state
+          S.script_id = null;
+          S.scenes = [];
+          S.currentSceneIndex = 0;
+
+          // Re-render Import editor in its empty state
+          if (typeof hydrateImportEditor === "function") {
+            hydrateImportEditor();
+          }
+
+          // Optionally clear any Import-specific status text
+          const savedStatus = document.getElementById("savedScriptsStatus");
+          if (savedStatus) {
+            // Do not override a more specific message set by auth; just leave as-is.
+            // savedStatus.textContent = savedStatus.textContent || "";
+          }
+        } catch (e) {
+          console.warn("clearCurrentScriptView failed", e);
+        }
+      }
       async function refreshAuthUI() {
         try {
           const s = await getSession();
@@ -1500,7 +1786,7 @@ JANE: Ready?"></textarea>
           const ent = s?.entitlement || {};
           const elEnt = document.getElementById("entitlementLine");
           if (elEnt) {
-          const isSignedIn = Boolean(s?.passkey?.loggedIn);
+            const isSignedIn = Boolean(s?.passkey?.loggedIn);
             const used = Number.isFinite(ent.renders_used) ? ent.renders_used : 0;
             const credits = Number.isFinite(ent.credits_available) ? ent.credits_available : 0;
 
@@ -1510,6 +1796,28 @@ JANE: Ready?"></textarea>
               elEnt.textContent = `Used: ${used} • Credits: ${credits}`;
             }
             elEnt.style.display = "";
+          }
+
+          // Toggle visibility of saved scripts based on sign-in state
+          const savedContainer = document.getElementById("savedScriptsContainer");
+          const savedStatus = document.getElementById("savedScriptsStatus");
+          const isSignedInForScripts = Boolean(s?.passkey?.loggedIn);
+
+          if (savedContainer) {
+            // Hide the whole "Your Scripts" block when signed out
+            savedContainer.style.display = isSignedInForScripts ? "" : "none";
+          }
+
+          // Optional friendly hint when signed out (only if block exists)
+          if (savedStatus && !isSignedInForScripts) {
+            savedStatus.textContent = "Sign in to access your saved scripts.";
+          }
+
+          // NEW: when signed out, also clear any currently loaded script from the viewer
+          if (!isSignedInForScripts) {
+            if (typeof clearCurrentScriptView === "function") {
+              clearCurrentScriptView();
+            }
           }
 
           // Dev entitlement controls (Grant 200 test credits)
@@ -2346,6 +2654,14 @@ JANE: Ready?"></textarea>
       function showScreen(name){
   $$(".countdown").forEach(x=>x.classList.remove("show"));
   stopAllAudioHard();
+        const prevTab = S?.activeTab || "import";
+        if (prevTab === "import" && name !== "import" && typeof saveImportEdits === "function") {
+          try {
+            saveImportEdits();
+          } catch (e) {
+            console.warn("Auto-save from Import failed on tab change", e);
+          }
+        }
         try{
           if(name==="rehearse" || name==="record") acquireWakeLock();
           else releaseWakeLock();
@@ -2360,6 +2676,9 @@ JANE: Ready?"></textarea>
         $$(".tabbar button").forEach(b=>b.classList.remove("active"));
         const btn=document.querySelector(`.tabbar button[data-tab="${name}"]`);
         if(btn) btn.classList.add("active");
+        if (S) {
+          S.activeTab = name;
+        }
         if(name==="rehearse"){
           // Route inference on tab enter
           (async () => {
@@ -2390,17 +2709,780 @@ JANE: Ready?"></textarea>
       $$(".tabbar button").forEach(b=>b.addEventListener("click",()=>showScreen(b.dataset.tab)));
 
       // inner tabs
-      const tabText=$("#tab-text"), tabPdf=$("#tab-pdf"), panelText=$("#panel-text"), panelPdf=$("#panel-pdf");
+const tabText=$("#tab-text"), tabPdf=$("#tab-pdf"), panelText=$("#panel-text"), panelPdf=$("#panel-pdf");
       tabText?.addEventListener("click",()=>{ tabText.classList.add("active"); tabPdf.classList.remove("active"); panelText.hidden=false; panelPdf.hidden=true; });
       tabPdf?.addEventListener("click",()=>{ tabPdf.classList.add("active"); tabText.classList.remove("active"); panelPdf.hidden=false; panelText.hidden=true; });
+const savedStrip = document.getElementById("savedScriptsStrip");
+      if (savedStrip) {
+        savedStrip.addEventListener("click", async (evt) => {
+          const target = evt.target;
+          const card =
+            target && typeof target.closest === "function"
+              ? target.closest(".saved-script-card")
+              : null;
+          if (!card) return;
+
+          const id = card.dataset.scriptId;
+          const status = document.getElementById("savedScriptsStatus");
+
+          // --- New script card: show hint + SFX ---
+          if (id === "__new__") {
+            try { UINotes.pingFor(card, "saved-script-new"); } catch {}
+
+            if (status) {
+              status.textContent = "New script: use Paste Script Text or Upload PDF below.";
+            }
+            const textPanelVisible = panelText ? !panelText.hidden : true;
+            if (textPanelVisible) {
+              document.getElementById("titleText")?.focus();
+            } else {
+              document.getElementById("titlePdf")?.focus();
+            }
+            return;
+          }
+
+          // --- Existing saved script: load + SFX ---
+          try { UINotes.pingFor(card, "saved-script"); } catch {}
+
+          S.script_id = id;
+          const meta = S.savedScripts.find((s) => s.id === id) || null;
+          if (status) {
+            status.textContent = meta
+              ? `Loading: ${meta.title}…`
+              : "Loading saved script…";
+          }
+          try {
+            await loadScenes();
+            if (status) {
+              const count =
+                meta && typeof meta.sceneCount === "number"
+                  ? meta.sceneCount
+                  : (S.scenes?.length || 0);
+              const countLabel =
+                count > 0
+                  ? `${count} scene${count === 1 ? "" : "s"}`
+                  : "Scenes not loaded";
+              status.textContent = meta
+                ? `${meta.title} • ${countLabel}`
+                : countLabel;
+            }
+          } catch (_) {
+            if (status) status.textContent = "Couldn’t load saved script.";
+          }
+        });
+      document.addEventListener("click",(evt)=>{
+        const target = evt.target;
+        if(!target || typeof target.closest !== "function") return;
+        const chip = target.closest(".import-scene-chip");
+        if(!chip) return;
+        const idxStr = chip.dataset.sceneIndex;
+        if(typeof idxStr !== "string") return;
+        const idx = parseInt(idxStr,10);
+        if(Number.isNaN(idx)) return;
+        if(idx < 0 || idx >= (S.scenes?.length || 0)) return;
+        S.currentSceneIndex = idx;
+        hydrateImportEditor();
+      });
+      const saveEditsBtn=document.getElementById("importSaveEdits");
+      if(saveEditsBtn){
+        saveEditsBtn.addEventListener("click",()=>{ saveImportEdits(); });
+      }
+      }
+      const goAssignBtn=document.getElementById("importGoAssign");
+      if(goAssignBtn){
+        goAssignBtn.addEventListener("click",()=>{
+          if(!S.script_id){
+            const status=document.getElementById("savedScriptsStatus");
+            if(status){
+              status.textContent="Import or select a script first.";
+            }
+            return;
+          }
+          showScreen("assign");
+        });
+      }
 
       // state
-      const S={ script_id:"", scenes:[], role:"", voice_map:{}, editMode:false, supportedVoices:["alloy"] };
-  if(typeof window !== "undefined") window.currentSceneId = S.script_id || null;
+      const S = {
+        script_id: "",
+        scenes: [],
+        role: "",
+        voice_map: {},
+        editMode: false,
+        supportedVoices: OPENAI_VOICES.slice(),
+        savedScripts: [],
+        currentSceneIndex: 0,
+        activeTab: "import"
+      };
+      // savedScripts: { id: string; title: string; sceneCount: number; createdAt: number; updatedAt: number }[]
+      if (typeof window !== "undefined") window.currentSceneId = S.script_id || null;
 
-      // helpers
-      const setStatus = msg => $("#status").textContent = msg || "";
-      const setStatusPdf = msg => $("#statusPdf").textContent = msg || "";
+        // Load saved script metadata from this device
+        loadSavedScriptsFromStorage();
+        renderSavedScriptsStrip();
+        updateImportPersistenceDebug();
+
+        // Debug + UX: show how many saved scripts we see on this device
+        const savedStatus = document.getElementById("savedScriptsStatus");
+      if (savedStatus && !savedStatus.textContent) {
+        const count = Array.isArray(S.savedScripts) ? S.savedScripts.length : 0;
+        if (count > 0) {
+          savedStatus.textContent = `This device has ${count} saved script${count === 1 ? "" : "s"}.`;
+        } else {
+          savedStatus.textContent = "No saved scripts on this device yet.";
+        }
+      }
+
+        // Then, if possible, refresh from the server (account-level scripts).
+        if (typeof fetchSavedScriptsFromServer === "function") {
+          try { fetchSavedScriptsFromServer(); } catch (e) { console.warn(e); }
+        }
+
+      // On startup, auto-restore the most recently used script (if any)
+      (async () => {
+        // Only auto-load if we don't already have an active script
+        if (!S.script_id && Array.isArray(S.savedScripts) && S.savedScripts.length > 0) {
+          const last = S.savedScripts
+            .slice()
+            .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))[0];
+
+          if (last && last.id) {
+            S.script_id = last.id;
+
+            const status = document.getElementById("savedScriptsStatus");
+            if (status) {
+              status.textContent = `Loading: ${last.title || "Sides"}…`;
+            }
+
+            try {
+              await loadScenes();
+
+              if (status) {
+                const count = typeof last.sceneCount === "number"
+                  ? last.sceneCount
+                  : (S.scenes?.length || 0);
+                const label = count > 0
+                  ? `${count} scene${count === 1 ? "" : "s"}`
+                  : "Scenes not loaded";
+                status.textContent = `Loaded: ${last.title || "Sides"} • ${label}`;
+              }
+            } catch (e) {
+              console.warn("Auto-load last saved script failed", e);
+              // Fall back to a neutral viewer state
+              try { hydrateImportEditor(); } catch {}
+            }
+
+            return; // Don’t call hydrateImportEditor() again; loadScenes already did it
+          }
+        }
+
+        // No saved scripts, or nothing to auto-load → show empty state
+        try { hydrateImportEditor(); } catch {}
+      })();
+
+        // helpers
+        const setStatus = msg => $("#status").textContent = msg || "";
+        const setStatusPdf = msg => $("#statusPdf").textContent = msg || "";
+        function hasDebugPersistFlag() {
+          try {
+            const params = new URLSearchParams(window.location.search || "");
+            return params.has("debug_persist");
+          } catch {
+            return false;
+          }
+        }
+        const SAVED_SCRIPTS_META_KEY = "offbook_saved_scripts_v1";
+        const SAVED_SCRIPTS_KEY = SAVED_SCRIPTS_META_KEY; // backward compat
+        const SAVED_SCRIPTS_PAYLOAD_KEY = "offbook_saved_script_payloads_v1";
+
+      function loadSavedScriptsFromStorage() {
+        try {
+          const raw = localStorage.getItem(SAVED_SCRIPTS_META_KEY);
+          if (!raw) {
+            S.savedScripts = [];
+            return;
+          }
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed)) {
+            S.savedScripts = parsed;
+          } else {
+            S.savedScripts = [];
+          }
+        } catch (e) {
+          S.savedScripts = [];
+          try {
+            console.warn("Saved scripts unavailable:", e);
+          } catch (_) {}
+        }
+      }
+
+      async function fetchSavedScriptsFromServer() {
+        try {
+          const res = await fetch("/api/my_scripts", {
+            method: "GET",
+            credentials: "include",
+          });
+
+          if (!res.ok) {
+            console.warn("fetchSavedScriptsFromServer: non-OK status", res.status);
+            return;
+          }
+
+          const data = await res.json();
+          const list = Array.isArray(data?.scripts) ? data.scripts : [];
+
+          // If server has nothing, keep whatever localSaved scripts we already have.
+          if (!list.length) {
+            return;
+          }
+
+          // Normalize server rows into a standard meta shape.
+          const serverMapped = list.map((row) => {
+            const updatedRaw = row.updatedAt || row.updated_at || null;
+            const updatedTs = updatedRaw ? Date.parse(updatedRaw) : Date.now();
+            return {
+              id: row.id,
+              title: row.title || "Sides",
+              sceneCount:
+                typeof row.sceneCount === "number"
+                  ? row.sceneCount
+                  : typeof row.scene_count === "number"
+                  ? row.scene_count
+                  : 0,
+              createdAt: updatedTs,
+              updatedAt: updatedTs,
+            };
+          });
+
+          const existing = Array.isArray(S.savedScripts) ? S.savedScripts : [];
+          const byId = new Map();
+
+          // Start with existing local meta (including any local titles).
+          for (const meta of existing) {
+            if (meta && meta.id) {
+              byId.set(meta.id, { ...meta });
+            }
+          }
+
+          // Merge server meta in, but always prefer the local title if present.
+          for (const serverMeta of serverMapped) {
+            if (!serverMeta || !serverMeta.id) continue;
+            const current = byId.get(serverMeta.id);
+
+            if (!current) {
+              byId.set(serverMeta.id, serverMeta);
+            } else {
+              const merged = { ...serverMeta, ...current };
+
+              const localTitle =
+                typeof current.title === "string" && current.title.trim()
+                  ? current.title.trim()
+                  : "";
+              const serverTitle =
+                typeof serverMeta.title === "string" && serverMeta.title.trim()
+                  ? serverMeta.title.trim()
+                  : "Sides";
+
+              merged.title = localTitle || serverTitle;
+
+              // Keep the freshest updatedAt we know about.
+              const localUpdated =
+                typeof current.updatedAt === "number" ? current.updatedAt : 0;
+              const serverUpdated =
+                typeof serverMeta.updatedAt === "number" ? serverMeta.updatedAt : 0;
+              merged.updatedAt = Math.max(localUpdated, serverUpdated);
+
+              byId.set(serverMeta.id, merged);
+            }
+          }
+
+          const mergedList = Array.from(byId.values()).sort(
+            (a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)
+          );
+
+          if (!mergedList.length) {
+            return;
+          }
+
+          S.savedScripts = mergedList;
+
+          // Persist merged list as cache.
+          if (typeof saveSavedScriptsToStorage === "function") {
+            try {
+              saveSavedScriptsToStorage();
+            } catch (e) {
+              console.warn(e);
+            }
+          }
+
+          if (typeof renderSavedScriptsStrip === "function") {
+            try {
+              renderSavedScriptsStrip();
+            } catch (e) {
+              console.warn(e);
+            }
+          }
+
+          // Update the status line to reflect server-backed scripts.
+          const savedStatus = document.getElementById("savedScriptsStatus");
+          if (savedStatus) {
+            const count = mergedList.length;
+            savedStatus.textContent =
+              count > 0
+                ? `Loaded ${count} script${count === 1 ? "" : "s"} from your account.`
+                : savedStatus.textContent || "";
+          }
+        } catch (e) {
+          console.warn("fetchSavedScriptsFromServer: failed", e);
+        }
+      }
+
+      async function deleteScriptOnServer(id) {
+        if (!id) return;
+        try {
+          const res = await fetch(`/api/scripts/${encodeURIComponent(id)}`, {
+            method: "DELETE",
+            credentials: "include",
+          });
+          if (!res.ok) {
+            console.warn("deleteScriptOnServer: non-OK status", res.status);
+          }
+        } catch (e) {
+          console.warn("deleteScriptOnServer: failed", e);
+        }
+      }
+
+      async function saveScriptEditsToServer(scriptId, title, scenes) {
+        if (!scriptId) return;
+        try {
+          const payload = {
+            scenes: Array.isArray(scenes) ? scenes : [],
+          };
+          if (typeof title === "string") {
+            const trimmed = title.trim();
+            if (trimmed) {
+              payload.title = trimmed;
+            }
+          }
+
+          const res = await fetch(`/api/scripts/${encodeURIComponent(scriptId)}/save`, {
+            method: "POST",
+            credentials: "include",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify(payload),
+          });
+
+          if (!res.ok) {
+            console.warn("saveScriptEditsToServer: non-OK status", res.status);
+          }
+        } catch (e) {
+          console.warn("saveScriptEditsToServer: failed", e);
+        }
+      }
+
+        function getSavedScriptPayloadsFromStorage() {
+          try {
+            const raw = localStorage.getItem(SAVED_SCRIPTS_PAYLOAD_KEY);
+            if (!raw) return {};
+            const parsed = JSON.parse(raw);
+            return parsed && typeof parsed === "object" ? parsed : {};
+          } catch (e) {
+            console.warn("Failed to read saved script payloads", e);
+            return {};
+          }
+        }
+
+        function updateImportPersistenceDebug() {
+          if (!hasDebugPersistFlag()) return;
+          const el = document.getElementById("importPersistenceDebug");
+          if (!el) return;
+
+          try {
+            const meta = Array.isArray(S.savedScripts) ? S.savedScripts : [];
+            const payloads = getSavedScriptPayloadsFromStorage();
+            const activeId = S.script_id || "(none)";
+            const activeMeta = meta.find(m => m.id === S.script_id) || null;
+            const activeTitle = activeMeta?.title || "";
+            const activeScenes = Array.isArray(S.scenes) ? S.scenes.length : 0;
+
+            const metaCount = meta.length;
+            const payloadKeys = payloads ? Object.keys(payloads).length : 0;
+
+            el.textContent =
+              `Debug (this device): meta=${metaCount}, payloads=${payloadKeys}, ` +
+              `activeId=${activeId}` +
+              (activeTitle ? ` ("${activeTitle}")` : "") +
+              `, scenes=${activeScenes}`;
+
+            try {
+              console.log("[OffBook] persistenceDebug", {
+                metaCount,
+                payloadKeys,
+                activeId,
+                activeTitle,
+                activeScenes
+              });
+            } catch {}
+          } catch (e) {
+            el.textContent = "Debug: error reading persistence.";
+          }
+        }
+
+        function saveSavedScriptPayloadsToStorage(map) {
+          try {
+            localStorage.setItem(SAVED_SCRIPTS_PAYLOAD_KEY, JSON.stringify(map || {}));
+          } catch (e) {
+            console.warn("Failed to persist saved script payloads", e);
+        }
+      }
+
+      function persistCurrentScriptScenesToStorage() {
+        if (!S.script_id || !Array.isArray(S.scenes)) return;
+
+        const payloads = getSavedScriptPayloadsFromStorage() || {};
+
+        // Try to get the best current title for this script
+        let title = "";
+        const meta = Array.isArray(S.savedScripts)
+          ? S.savedScripts.find(s => s.id === S.script_id)
+          : null;
+        if (meta && typeof meta.title === "string" && meta.title.trim()) {
+          title = meta.title.trim();
+        } else {
+          // Fallback: read from the active Import title input
+          const panelText = document.getElementById("panelText");
+          const panelPdf = document.getElementById("panelPdf");
+          let titleInput = null;
+          if (panelText && !panelText.hasAttribute("hidden")) {
+            titleInput = document.getElementById("titleText");
+          } else if (panelPdf && !panelPdf.hasAttribute("hidden")) {
+            titleInput = document.getElementById("titlePdf");
+          }
+          if (titleInput && typeof titleInput.value === "string" && titleInput.value.trim()) {
+            title = titleInput.value.trim();
+          }
+        }
+
+        const nextPayload = {
+          scenes: S.scenes,
+          updatedAt: Date.now()
+        };
+        if (title) {
+          nextPayload.title = title;
+        }
+
+        payloads[S.script_id] = nextPayload;
+
+        try {
+          localStorage.setItem(SAVED_SCRIPTS_PAYLOAD_KEY, JSON.stringify(payloads));
+        } catch (_) {
+          // best-effort; if storage fails we just don't persist
+        }
+      }
+
+        function saveSavedScriptsToStorage() {
+          try {
+            localStorage.setItem(SAVED_SCRIPTS_META_KEY, JSON.stringify(S.savedScripts));
+        } catch (e) {
+          const status = document.getElementById("savedScriptsStatus");
+          if (status) {
+            status.textContent = "Could not save scripts (storage full?).";
+          }
+        }
+
+        // Trim stored payloads to match existing script ids (cap stays in sync)
+        const ids = new Set((S.savedScripts || []).map(s => s.id));
+        const payloads = getSavedScriptPayloadsFromStorage();
+        const nextPayloads = {};
+          Object.keys(payloads || {}).forEach(id => {
+            if (ids.has(id)) {
+              nextPayloads[id] = payloads[id];
+            }
+          });
+          saveSavedScriptPayloadsToStorage(nextPayloads);
+          updateImportPersistenceDebug();
+        }
+
+        function deleteSavedScriptById(id) {
+          if (!id) return;
+
+        const before = Array.isArray(S.savedScripts) ? S.savedScripts : [];
+        const after = before.filter(s => s.id !== id);
+        S.savedScripts = after;
+
+        try {
+          saveSavedScriptsToStorage();
+        } catch (e) {
+          console.warn("Failed to persist saved scripts after delete", e);
+        }
+
+        // Also remove stored scenes for this script
+        const payloads = getSavedScriptPayloadsFromStorage();
+        if (payloads[id]) {
+          delete payloads[id];
+          saveSavedScriptPayloadsToStorage(payloads);
+        }
+
+        const wasActive = S.script_id === id;
+        if (wasActive) {
+          S.script_id = null;
+          S.scenes = [];
+          S.currentSceneIndex = 0;
+
+          if (typeof hydrateImportEditor === "function") {
+            try { hydrateImportEditor(); } catch (e) { console.warn(e); }
+          }
+          if (typeof hydrateAssign === "function") {
+            try { hydrateAssign(); } catch (e) { console.warn(e); }
+          }
+          if (typeof hydrateRehearse === "function") {
+            try { hydrateRehearse(); } catch (e) { console.warn(e); }
+          }
+        }
+
+        if (typeof renderSavedScriptsStrip === "function") {
+          try { renderSavedScriptsStrip(); } catch (e) { console.warn(e); }
+        }
+
+        deleteScriptOnServer(id);
+      }
+
+      function showSavedScriptDeleteConfirm(id, title) {
+        if (!id) return;
+
+        // Clear any focused/active element so its visual highlight doesn't "stick"
+        const active = document.activeElement;
+        if (active && typeof active.blur === "function") {
+          try { active.blur(); } catch (e) { /* ignore */ }
+        }
+
+        const existing = document.getElementById("savedScriptDeleteConfirm");
+        if (existing) existing.remove();
+
+        const overlay = document.createElement("div");
+        overlay.id = "savedScriptDeleteConfirm";
+        overlay.className = "saved-script-confirm-overlay";
+
+        const dialog = document.createElement("div");
+        dialog.className = "saved-script-confirm-dialog";
+
+        const heading = document.createElement("div");
+        heading.className = "saved-script-confirm-title";
+        heading.textContent = "Delete script?";
+
+        const message = document.createElement("div");
+        message.className = "saved-script-confirm-text";
+        message.textContent = title
+          ? `Remove "${title}" from this device?`
+          : "Remove this script from this device?";
+
+        const buttons = document.createElement("div");
+        buttons.className = "saved-script-confirm-buttons";
+
+        const deleteBtn = document.createElement("button");
+        deleteBtn.type = "button";
+        deleteBtn.className = "btn danger sm";
+        deleteBtn.textContent = "Delete";
+
+        const cancelBtn = document.createElement("button");
+        cancelBtn.type = "button";
+        cancelBtn.className = "btn ghost sm";
+        cancelBtn.textContent = "Cancel";
+
+        deleteBtn.addEventListener("click", (ev) => {
+          ev.stopPropagation();
+          deleteSavedScriptById(id);
+          overlay.remove();
+        });
+
+        cancelBtn.addEventListener("click", (ev) => {
+          ev.stopPropagation();
+          overlay.remove();
+        });
+
+        buttons.appendChild(deleteBtn);
+        buttons.appendChild(cancelBtn);
+        dialog.appendChild(heading);
+        dialog.appendChild(message);
+        dialog.appendChild(buttons);
+        overlay.appendChild(dialog);
+
+        overlay.addEventListener("click", (ev) => {
+          if (ev.target === overlay) {
+            overlay.remove();
+          }
+        });
+
+        document.body.appendChild(overlay);
+      }
+
+      function upsertSavedScriptMeta(scriptId, title, sceneCount) {
+        const now = Date.now();
+        let existing = S.savedScripts.find(s => s.id === scriptId);
+        if (existing) {
+          existing.title = title || existing.title;
+          if (typeof sceneCount === "number") {
+            existing.sceneCount = sceneCount;
+          }
+          existing.updatedAt = now;
+        } else {
+          const meta = {
+            id: scriptId,
+            title: title || "Sides",
+            sceneCount: typeof sceneCount === "number" ? sceneCount : 0,
+            createdAt: now,
+            updatedAt: now
+          };
+          S.savedScripts.push(meta);
+          if (S.savedScripts.length > 10) {
+            S.savedScripts.sort((a, b) => a.createdAt - b.createdAt);
+            S.savedScripts = S.savedScripts.slice(-10);
+          }
+        }
+        saveSavedScriptsToStorage();
+        renderSavedScriptsStrip();
+        hydrateImportEditor();
+      }
+
+      function renderSavedScriptsStrip() {
+        const strip = document.getElementById("savedScriptsStrip");
+        if (!strip) return;
+
+        strip.innerHTML = "";
+
+        const status = document.getElementById("savedScriptsStatus");
+
+        const newCard = document.createElement("div");
+        newCard.className = "saved-script-card saved-script-new";
+        newCard.dataset.scriptId = "__new__";
+        newCard.textContent = "+ New Script";
+        newCard.addEventListener("click", (ev) => {
+          ev.preventDefault();
+          ev.stopPropagation();
+
+          // 🔊 Play normal click SFX for "+ New Script"
+          try { UINotes.pingFor(newCard, "click"); } catch {}
+
+          // Reset current script state
+          S.script_id = null;
+          S.scenes = [];
+          S.currentSceneIndex = 0;
+
+          // Clear import fields
+          const titleText = document.getElementById("titleText");
+          const scriptText = document.getElementById("scriptText");
+          const titlePdf = document.getElementById("titlePdf");
+          const pdfInput = document.getElementById("pdfFile");
+
+          if (titleText) titleText.value = "";
+          if (scriptText) scriptText.value = "";
+          if (titlePdf) titlePdf.value = "";
+          if (pdfInput) pdfInput.value = "";
+
+          // Status nudge
+          if (status) {
+            status.textContent = "New script: use Paste Script Text or Upload PDF below.";
+          }
+
+          // Rehydrate views
+          if (typeof hydrateImportEditor === "function") {
+            try { hydrateImportEditor(); } catch (e) { console.warn(e); }
+          }
+          if (typeof hydrateAssign === "function") {
+            try { hydrateAssign(); } catch (e) { console.warn(e); }
+          }
+          if (typeof hydrateRehearse === "function") {
+            try { hydrateRehearse(); } catch (e) { console.warn(e); }
+          }
+
+          // Focus current tab title input
+          const textPanelVisible = panelText ? !panelText.hidden : true;
+          if (textPanelVisible) {
+            document.getElementById("titleText")?.focus();
+          } else {
+            document.getElementById("titlePdf")?.focus();
+          }
+        });
+        strip.appendChild(newCard);
+
+        S.savedScripts
+          .slice()
+          .sort((a, b) => b.updatedAt - a.updatedAt)
+          .forEach(meta => {
+            const card = document.createElement("div");
+            card.className = "saved-script-card";
+            card.dataset.scriptId = meta.id;
+
+            const title = document.createElement("div");
+            title.className = "script-title";
+            title.textContent = meta.title || "Sides";
+
+            const metaLine = document.createElement("div");
+            metaLine.className = "script-meta";
+            const count = typeof meta.sceneCount === "number" ? meta.sceneCount : 0;
+            metaLine.textContent = count > 0 ? `${count} scene${count === 1 ? "" : "s"}` : "Scenes not loaded";
+
+            card.appendChild(title);
+            card.appendChild(metaLine);
+
+            let longPressTimer = null;
+            let longPressTriggered = false;
+            const holdMs = 700;
+
+            card.addEventListener("pointerdown", () => {
+              longPressTriggered = false;
+              if (longPressTimer) {
+                clearTimeout(longPressTimer);
+                longPressTimer = null;
+              }
+              longPressTimer = window.setTimeout(() => {
+                longPressTriggered = true;
+                longPressTimer = null;
+                showSavedScriptDeleteConfirm(meta.id, meta.title);
+              }, holdMs);
+            });
+
+            ["pointerup", "pointerleave", "pointercancel"].forEach(eventName => {
+              card.addEventListener(eventName, () => {
+                if (longPressTimer) {
+                  clearTimeout(longPressTimer);
+                  longPressTimer = null;
+                }
+              });
+            });
+
+            card.addEventListener("click", async (ev) => {
+              if (longPressTriggered) {
+                ev.preventDefault();
+                return;
+              }
+
+              try { UINotes.pingFor(card, "saved-script"); } catch {}
+
+              S.script_id = meta.id;
+              const metaRef = S.savedScripts.find(s => s.id === meta.id) || null;
+              if (status) {
+                status.textContent = metaRef ? `Loading: ${metaRef.title}...` : "Loading saved script...";
+              }
+              try {
+                await loadScenes();
+                if (status) {
+                  const countVal = metaRef && typeof metaRef.sceneCount === "number" ? metaRef.sceneCount : (S.scenes?.length || 0);
+                  const countLabel = countVal > 0 ? `${countVal} scene${countVal === 1 ? "" : "s"}` : "Scenes not loaded";
+                  status.textContent = metaRef ? `Loaded: ${metaRef.title} - ${countLabel}` : `Loaded saved script - ${countLabel}`;
+                }
+              } catch (e) {
+                if (status) {
+                  status.textContent = "Could not load scenes for this script. You can still re-import it from Import.";
+                }
+              }
+            });
+
+            strip.appendChild(card);
+          });
+      }
 
       // --- Route/Ringer Inference (iOS + BT + HFP narrowband) ---------------------
       const _route = {
@@ -2654,10 +3736,41 @@ JANE: Ready?"></textarea>
           if(handleUnauthorized(r)) return;
           const j=await safeJson(r); if(!r.ok) return;
           S.scenes=j.scenes||[];
+          S.currentSceneIndex = 0;
+
+          // Override with locally-edited scenes if present
+          if (S.script_id) {
+            const payloads = getSavedScriptPayloadsFromStorage();
+            const local = payloads[S.script_id];
+            if (local && Array.isArray(local.scenes)) {
+              S.scenes = local.scenes;
+            }
+
+            // If the payload also has a better title, sync it back into savedScripts
+            if (local && typeof local.title === "string" && local.title.trim()) {
+              const meta = Array.isArray(S.savedScripts)
+                ? S.savedScripts.find(s => s.id === S.script_id)
+                : null;
+              if (meta) {
+                meta.title = local.title.trim();
+                try {
+                  if (typeof saveSavedScriptsToStorage === "function") {
+                    saveSavedScriptsToStorage();
+                  }
+                } catch (_) {}
+                try {
+                  if (typeof renderSavedScriptsStrip === "function") {
+                    renderSavedScriptsStrip();
+                  }
+                } catch (_) {}
+              }
+            }
+          }
+
           if(typeof window !== "undefined") window.currentSceneId = S.script_id || null;
           await loadSupportedVoices();
-          hydrateAssign(); hydrateRehearse(); applyEditModeUI();
-        }catch(e){ showErr("Init warning: couldn’t load scenes. You can still re-import."); }
+          hydrateAssign(); hydrateRehearse(); applyEditModeUI(); hydrateImportEditor();
+        }catch(e){ showErr("Init warning: couldn't load scenes. You can still re-import."); }
       }
 
       function sanitizeScriptText(raw){
@@ -2674,40 +3787,50 @@ JANE: Ready?"></textarea>
         try{
           const r=await fetch("/debug/upload_script_text", withSecretHeaders({method:"POST",headers:{...JSON_HDRS},body:JSON.stringify({title,text})}));
           if(handleUnauthorized(r)){ setStatus("Locked."); return; }
-          const j=await safeJson(r);
-          if(!r.ok){ setStatus("Error "+r.status+": "+JSON.stringify(j)); return; }
-          setStatus(`OK scenes=${j.scene_count} speakers=${(j.speakers||[]).join(", ")}`);
-          S.script_id=j.script_id; await loadScenes(); showScreen("assign");
+        const j=await safeJson(r);
+        if(!r.ok){ setStatus("Error "+r.status+": "+JSON.stringify(j)); return; }
+        const scriptId=j.script_id;
+        const sceneCount=typeof j.scene_count==="number"?j.scene_count:0;
+        setStatus(`OK scenes=${j.scene_count} speakers=${(j.speakers||[]).join(", ")}`);
+        S.script_id=scriptId;
+        upsertSavedScriptMeta(scriptId, title, sceneCount);
+        await loadScenes();
         }catch(e){ setStatus("Network error: "+e); }
       });
       $("#btnTextClear")?.addEventListener("click",()=>{ $("#titleText").value=""; $("#scriptText").value=""; setStatus(""); });
 
       // Import: PDF
       $("#btnPdfUpload")?.addEventListener("click", async ()=>{
-        const title=$("#titlePdf").value||"PDF Sides";
+        const titleInput=$("#titlePdf");
+        const title=titleInput?.value||"PDF Sides";
+        const statusPdf=$("#statusPdf");
         const pdfInput=$("#pdfFile");
         const f=pdfInput?.files?.[0];
-        if(!f){ setStatusPdf("No file selected"); return; }
+        if(!f){ if(statusPdf) statusPdf.textContent="No file selected"; return; }
         const fd=new FormData();
         fd.append("title",title);
         fd.append("pdf",f,f.name); // enforce field name
-        setStatusPdf("Uploading PDF…");
+        if(statusPdf) statusPdf.textContent="Uploading PDF…";
         try{
           const r=await fetch("/debug/upload_script_upload",withSecretHeaders({method:"POST",body:fd}));
-          if(handleUnauthorized(r)){ setStatusPdf("Locked."); return; }
-          const j=await safeJson(r);
-          if(!r.ok){ setStatusPdf("Error "+r.status+": "+JSON.stringify(j)); return; }
-          const sp=(j.speakers||[]).join(", "); const note=j.note?(" note="+j.note):"";
-          setStatusPdf(`OK scenes=${j.scene_count} speakers=${sp||"(none)"} textLen=${j.textLen||0}${note}`);
-          if(j.note==="image-only"||j.note==="parse-error"){ $("#btnPdfOcr").disabled=false; $("#btnPdfOcr").focus(); return; }
-          S.script_id=j.script_id; await loadScenes(); showScreen("assign");
-        }catch(e){ setStatusPdf("Network error: "+e); }
+          if(handleUnauthorized(r)){ if(statusPdf) statusPdf.textContent="Locked."; return; }
+        const j=await safeJson(r);
+        if(!r.ok){ if(statusPdf) statusPdf.textContent=j?.error||`Error ${r.status}: ${JSON.stringify(j)}`; return; }
+        const sp=(j.speakers||[]).join(", "); const note=j.note?(" note="+j.note):"";
+        if(statusPdf) statusPdf.textContent=`OK scenes=${j.scene_count} speakers=${sp||"(none)"} textLen=${j.textLen||0}${note}`;
+        if(j.note==="image-only"||j.note==="parse-error"){ $("#btnPdfOcr").disabled=false; $("#btnPdfOcr").focus(); return; }
+        const scriptId=j.script_id;
+        const sceneCount=typeof j.scene_count==="number"?j.scene_count:0;
+        S.script_id=scriptId;
+        upsertSavedScriptMeta(scriptId, title, sceneCount);
+        await loadScenes();
+        }catch(e){ if(statusPdf) statusPdf.textContent="Network error: "+e; }
       });
 
       // Assign
       function uniqueRoles(){ const names=new Set(); for(const sc of (S.scenes||[])) for(const ln of (sc.lines||[])) names.add(ln.speaker); return Array.from(names).filter(n=>n&&n!=="SYSTEM"&&n!=="NARRATOR"); }
       function hydrateAssign(){
-        $("#pillScript").textContent="script: "+(S.script_id||"—");
+        $("#pillScript").textContent="script: "+(S.script_id||"-");
         $("#pillScenes").textContent="scenes: "+(S.scenes?.length||0);
         const roles=uniqueRoles(); const sel=$("#selectRole");
         sel.innerHTML=roles.map(r=>`<option value="${r}">${r}</option>`).join("");
@@ -2716,30 +3839,131 @@ JANE: Ready?"></textarea>
         sel.onchange=()=>{ S.role=sel.value; buildVoicePickers(); hydrateRehearse(); applyEditModeUI(); };
         buildVoicePickers();
       }
+      let voicePreviewAudio = null;
+      async function previewVoiceSample(voice, btn){
+        const fallbackVoice = OPENAI_VOICES[0] || "alloy";
+        const chosenVoice = voice || fallbackVoice;
+        const sampleText = "Hi, would you be interested in me being your scene partner? Do you like the sound of my voice?";
+
+        // Try to reuse the same model selector Rehearse uses, fallback to tts-1
+        const modelSel = document.getElementById("selTtsModel");
+        const model = (modelSel && modelSel.value) || "tts-1";
+
+        let originalLabel = btn && btn.textContent;
+
+        try {
+          if (!voicePreviewAudio) {
+            const a = document.createElement("audio");
+            a.preload = "auto";
+            a.setAttribute("playsinline", "");
+            a.style.display = "none";
+            document.body.appendChild(a);
+            voicePreviewAudio = a;
+          }
+
+          // Stop any prior preview
+          try {
+            voicePreviewAudio.pause();
+            voicePreviewAudio.currentTime = 0;
+          } catch {}
+
+          // Simple loading cue on the button
+          if (btn) {
+            btn.disabled = true;
+            btn.textContent = "Loading…";
+          }
+
+          // Ask server for a single TTS line (same route Rehearse uses)
+          const r = await fetch("/debug/tts_line", withSecretHeaders({
+            method: "POST",
+            headers: { ...JSON_HDRS, "Accept": "application/json" },
+            body: JSON.stringify({
+              voice: chosenVoice,
+              model,
+              text: sampleText
+            })
+          }));
+
+          if (!r.ok) return;
+
+          const txt = await r.text();
+          let j = {};
+          try { j = JSON.parse(txt); } catch { /* non-JSON body */ }
+
+          if (!j || !j.url) return;
+
+          // Fetch the actual audio and play it in the preview <audio>
+          const audioResp = await fetch(j.url, { cache: "no-store" });
+          if (!audioResp.ok) return;
+
+          const blob = await audioResp.blob();
+          const url = URL.createObjectURL(blob);
+          voicePreviewAudio.src = url;
+          await voicePreviewAudio.play();
+        } catch (err) {
+          console.error("[Assign] previewVoiceSample error:", err);
+        } finally {
+          if (btn) {
+            btn.disabled = false;
+            btn.textContent = originalLabel || "Test";
+          }
+        }
+      }
       function buildVoicePickers(){
         const box=$("#voicePickers"); box.innerHTML="";
         const partners=uniqueRoles().filter(n=>n!==S.role);
-        partners.forEach(name=>{
+        const defaultVoice = OPENAI_VOICES[0] || "alloy";
+        partners.forEach(roleName=>{
           const wrap=document.createElement("div");
           wrap.className="card"; wrap.style.marginTop="8px";
-          wrap.innerHTML=`<div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
-            <strong>${name}</strong>
-            <select data-name="${name}">
-              ${S.supportedVoices.map(v=>`<option value="${v}" ${((S.voice_map[name]||S.supportedVoices[0])===v)?"selected":""}>${v}</option>`).join("")}
-            </select>
-          </div>`;
+          wrap.innerHTML = `<div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+        <strong>${roleName}</strong>
+        <div style="display:flex;align-items:center;gap:8px">
+          <button type="button" class="btn ghost sm assign-voice-test" data-name="${roleName}">Test</button>
+          <select class="assign-voice-select" data-name="${roleName}">
+            ${S.supportedVoices.map(v=>`<option value="${v}" ${((S.voice_map[roleName]||S.supportedVoices[0])===v)?"selected":""}>${v}</option>`).join("")}
+          </select>
+        </div>
+      </div>`;
+          const sel = wrap.querySelector(`select[data-name="${roleName}"]`);
+          if(sel){
+            const currentVoice = sel.value || defaultVoice;
+            S.voice_map[roleName] = OPENAI_VOICES.includes(currentVoice) ? currentVoice : defaultVoice;
+          }
           box.appendChild(wrap);
         });
         box.querySelectorAll("select").forEach(el=>el.addEventListener("change",(e)=>{
           const sel = e.target; S.voice_map[sel.getAttribute("data-name")] = sel.value;
         }));
+        box.querySelectorAll(".assign-voice-test").forEach(btn => {
+          btn.addEventListener("click", async () => {
+            const roleName = btn.getAttribute("data-name");
+            const sel = box.querySelector(`select[data-name="${roleName}"]`);
+            const voice = (sel && sel.value) || (roleName && S.voice_map[roleName]) || (S.supportedVoices[0] || "alloy");
+            await previewVoiceSample(voice, btn);
+          });
+        });
       }
       $("#btnSaveAssign")?.addEventListener("click", async ()=>{
         if(!S.script_id) return;
+        const voiceMap = {};
+        const defaultVoice = OPENAI_VOICES[0] || "alloy";
+        document.querySelectorAll(".assign-voice-select").forEach(sel=>{
+          const role  = sel.getAttribute("data-name") || sel.dataset.name;
+          const voice = sel.value || defaultVoice;
+          if(role) voiceMap[role] = voice;
+        });
         const roles=uniqueRoles().filter(r=>r!==S.role);
-        for(const r of roles) if(!S.voice_map[r]) S.voice_map[r]=S.supportedVoices[0] || "alloy";
+        for(const r of roles){
+          if(!voiceMap[r]) voiceMap[r]=defaultVoice;
+        }
+        S.voice_map = voiceMap;
         try{
-          const r=await fetch("/debug/set_voice",withSecretHeaders({method:"POST",headers:{...JSON_HDRS},body:JSON.stringify({script_id:S.script_id,voice_map:S.voice_map})}));
+          const r=await fetch("/debug/set_voice", withSecretHeaders({
+            method: "POST",
+            headers: { ...JSON_HDRS },
+            body: JSON.stringify({ script_id:S.script_id, voice_map:voiceMap })
+          }));
           if(handleUnauthorized(r)) return;
         }catch{}
         showScreen("rehearse");
@@ -3420,10 +4644,14 @@ JANE: Ready?"></textarea>
                   return;
                 }
 
+                // On final attempt, force a safe fallback voice
+                const useFallbackVoice = (n === MAX_ATTEMPTS);
+                const voiceName = useFallbackVoice ? "alloy" : voiceFor(ln.speaker);
+
                 const r = await fetch("/debug/tts_line", withSecretHeaders({
                   method: "POST",
                   headers: { ...JSON_HDRS, "Accept": "application/json" },
-                  body: JSON.stringify({ voice: voiceFor(ln.speaker), model, text: cleanText }),
+                  body: JSON.stringify({ voice: voiceName, model, text: cleanText }),
                   signal: ctrl.signal
                 }));
                 if(handleUnauthorized(r)){
@@ -3585,60 +4813,131 @@ JANE: Ready?"></textarea>
         return true;
       }
 
-      async function step(playMode, opts = {}){
-        const list=filtered(); if(!list.length) return;
-        const immediate = !!opts.immediate;
-        const ln=current(); if(!ln){ playing=false; $("#btnPlay").textContent="Play"; return; }
-        // keep bubble synced even if audio fails
-        highlightCurrent();
+        async function step(playMode, opts = {}){
+          const list=filtered(); if(!list.length) return;
+          const immediate = !!opts.immediate;
+          const ln=current(); if(!ln){ playing=false; $("#btnPlay").textContent="Play"; return; }
+          // keep bubble synced even if audio fails
+          highlightCurrent();
 
-        if(ln.speaker===myName()){
-          if(sr && srToggleOn && srPermGranted){ advanceLock=false; maybeSetMyLineStart(); return; }
-          if(playMode){ playing=false; $("#btnPlay").textContent="Play"; }
-        }else{
-          const i = idx;
-          await playPartnerLine(i, { immediate });
-          if(playing){ idx=Math.min(idx+1,list.length-1); step(true); }
-        }
-      }
-
-  $("#btnPlay")?.addEventListener("click",async ()=>{
-    await ensureAudioContext();
-    try { await window.__OB_READER_EL?.setSinkId?.('default'); } catch {}
-        try{ hardResumeOnGesture().catch(()=>{}); }catch{};
-        playing=!playing;
-        $("#btnPlay").textContent=playing?"Pause":"Play";
-        if(playing){
-          const reader = getReaderEl();
-          if (window.__OB_NEEDS_UNLOCK && getReaderEl() && window.__OB_LAST_READER_URL) {
-            await restoreAudioRoute('play');
-            const _el = getReaderEl();
-            if (_el) {
-              try {
-                await _el.play();
-                window.__OB_NEEDS_UNLOCK = false;
-                if (btnEnableAudio) btnEnableAudio.style.display = 'none';
-              } catch (err) {
-                console.debug('[AUDIO] play blocked; prompting unlock', err);
-                window.__OB_NEEDS_UNLOCK = true;
-                if (btnEnableAudio) btnEnableAudio.style.display = '';
-              }
-            }
+          if(ln.speaker===myName()){
+            if(sr && srToggleOn && srPermGranted){ advanceLock=false; maybeSetMyLineStart(); return; }
+            if(playMode){ playing=false; $("#btnPlay").textContent="Play"; }
+          }else{
+            const i = idx;
+            await playPartnerLine(i, { immediate });
+            if(playing){ idx=Math.min(idx+1,list.length-1); step(true); }
           }
-          try{
-            const cur = current();
-            if(cur && cur.speaker === myName()){
-              const list = filtered();
-              for(let i = idx; i < list.length; i++){
-                if(list[i] && list[i].speaker !== myName()){ idx = i; break; }
-              }
-              highlightCurrent();
-            }
-          }catch{}
-          step(true);
         }
-        else { window.speechSynthesis?.cancel(); try{ sr?.stop(); }catch{}; clearMy(); }
-      });
+
+        async function rehearseCountInIfNeeded(){
+          const sel = document.getElementById("selRehearseCountIn");
+          const secs = Number(sel?.value || 0);
+          if(!secs || secs <= 0) return;
+
+          const overlay = document.getElementById("countdown");
+          const num = document.getElementById("countNum");
+
+          // Use the shared audioCtx used elsewhere in the app
+          await ensureAudioContext();
+          const ctx = window.audioCtx;
+          if(!ctx) return;
+          if(ctx.state !== 'running'){
+            try{ await ctx.resume(); }catch{}
+          }
+
+          if(overlay){
+            overlay.style.display = "flex";
+            overlay.setAttribute("aria-hidden","false");
+          }
+
+          const N = Math.min(10, Math.max(1, secs));
+
+          const playBeep = (freq, durSec = 0.28) => new Promise(res => {
+            try{
+              const o = ctx.createOscillator();
+              const g = ctx.createGain();
+              o.type = 'sine';
+              o.frequency.value = freq;
+              g.gain.value = 0.0001;
+              const now = ctx.currentTime;
+              g.gain.setValueAtTime(0.0001, now);
+              g.gain.exponentialRampToValueAtTime(0.6, now + 0.01);
+              g.gain.exponentialRampToValueAtTime(0.0001, now + durSec);
+              o.connect(g).connect(ctx.destination);
+              o.start(now);
+              o.stop(now + durSec);
+              o.onended = () => {
+                try{ o.disconnect(); g.disconnect(); }catch{}
+                res();
+              };
+            }catch{ res(); }
+          });
+
+          for(let i = N; i >= 1; i--){
+            if(!playing) break; // allow user to cancel during countdown
+            if(num) num.textContent = String(i);
+            await playBeep(i === 1 ? 660 : 880, 0.28);
+            await new Promise(r => setTimeout(r, 720));
+          }
+
+          if(overlay){
+            overlay.style.display = "none";
+            overlay.setAttribute("aria-hidden","true");
+          }
+        }
+
+    $("#btnPlay")?.addEventListener("click",async ()=>{
+      await ensureAudioContext();
+      try { await window.__OB_READER_EL?.setSinkId?.('default'); } catch {}
+          try{ hardResumeOnGesture().catch(()=>{}); }catch{};
+          playing = !playing;
+          $("#btnPlay").textContent = playing ? "Pause" : "Play";
+
+          if(playing){
+            // Optional count-in for Rehearse (0 / 3 / 5 / 10 seconds)
+            await rehearseCountInIfNeeded();
+            // User may have tapped Play again during the countdown
+            if(!playing){
+              $("#btnPlay").textContent = "Play";
+              return;
+            }
+
+            const reader = getReaderEl();
+            if (window.__OB_NEEDS_UNLOCK && getReaderEl() && window.__OB_LAST_READER_URL) {
+              await restoreAudioRoute('play');
+              const _el = getReaderEl();
+              if (_el) {
+                try {
+                  await _el.play();
+                  window.__OB_NEEDS_UNLOCK = false;
+                  if (btnEnableAudio) btnEnableAudio.style.display = 'none';
+                } catch (err) {
+                  console.debug('[AUDIO] play blocked; prompting unlock', err);
+                  window.__OB_NEEDS_UNLOCK = true;
+                  if (btnEnableAudio) btnEnableAudio.style.display = '';
+                }
+              }
+            }
+
+            try{
+              const cur = current();
+              const micOn = !!(srToggleOn && srPermGranted);
+              // If the mic is OFF, keep legacy behavior and skip ahead to the first partner line.
+              // If the mic is ON, stay on my line so the app can listen and advance from my cue.
+              if(cur && cur.speaker === myName() && !micOn){
+                const list = filtered();
+                for(let i = idx; i < list.length; i++){
+                  if(list[i] && list[i].speaker !== myName()){ idx = i; break; }
+                }
+                highlightCurrent();
+              }
+            }catch{}
+
+            step(true);
+          }
+          else { window.speechSynthesis?.cancel(); try{ sr?.stop(); }catch{}; clearMy(); }
+        });
       $("#btnPrev")?.addEventListener("click",()=>{ const list=filtered(); if(!list.length) return; try{ sr?.stop(); }catch{}; clearMy(); idx=Math.max(0,idx-1); highlightCurrent(); if(playing) step(true); else maybeSetMyLineStart(); });
   $("#btnNext")?.addEventListener("click",async ()=>{
         await ensureAudioContext();
@@ -3680,7 +4979,38 @@ JANE: Ready?"></textarea>
       document.getElementById('routeWarnMoreRecord')?.addEventListener('click', ()=>{ alert(ROUTE_WARN_ALERT); });
 
       $("#btnToggleEditMode")?.addEventListener("click",()=>{ S.editMode=!S.editMode; applyEditModeUI(); });
-      function applyEditModeUI(){ $("#btnToggleEditMode")?.setAttribute("aria-pressed",S.editMode?"true":"false"); $("#editModeState").textContent=S.editMode?"On":"Off"; $$(".editbar",$("#lines")).forEach(el=>el.style.display=S.editMode?"flex":"none"); $$(".inline-slot",$("#lines")).forEach(el=>el.style.display=S.editMode?"flex":"none"); if(E.inlineForm && E.inlineForm.isConnected){ try{ E.inlineForm.remove(); }catch{}; E.currentSlotPlace=null; } }
+      function applyEditModeUI() {
+        const btn = $("#btnToggleEditMode");
+        const stateEl = $("#editModeState");
+        const linesRoot = $("#lines");
+
+        if (btn) {
+          btn.setAttribute("aria-pressed", S.editMode ? "true" : "false");
+        }
+        if (stateEl) {
+          stateEl.textContent = S.editMode ? "On" : "Off";
+        }
+
+        if (linesRoot) {
+          try {
+            $$(".editbar", linesRoot).forEach(el => {
+              el.style.display = S.editMode ? "flex" : "none";
+            });
+            $$(".inline-slot", linesRoot).forEach(el => {
+              el.style.display = S.editMode ? "flex" : "none";
+            });
+          } catch (_) {
+            // ignore
+          }
+        }
+
+        if (E.inlineForm && E.inlineForm.isConnected) {
+          try {
+            E.inlineForm.remove();
+          } catch (_) {}
+          E.currentSlotPlace = null;
+        }
+      }
 
       // === UI NOTE WIRING ===========================================================
       // Guard against double-binding across hot reloads
@@ -4600,6 +5930,205 @@ JANE: Ready?"></textarea>
             if(G.filter !== sel){ G.filter = sel; renderGallery().catch(()=>{}); }
           };
         });
+      }
+
+      function autoSizeImportTextareas() {
+        document.querySelectorAll(".import-line-textarea").forEach(ta => {
+          ta.style.height = "auto";
+          ta.style.height = ta.scrollHeight + "px";
+        });
+      }
+
+      function markImportEdited() {
+        const metaEl = document.getElementById("importEditorMeta");
+        if (!metaEl) return;
+        const base = metaEl.textContent || "";
+        metaEl.textContent = base.replace(/ • Local changes applied$/, "") + " • Local changes applied";
+      }
+
+      function hydrateImportEditor() {
+        const container = document.getElementById("importEditorContainer");
+        const metaEl = document.getElementById("importEditorMeta");
+        const sceneSelector = document.getElementById("importSceneSelector");
+        const linesList = document.getElementById("importLinesList");
+        if (!container || !metaEl || !sceneSelector || !linesList) return;
+
+        if (!S.script_id || !Array.isArray(S.scenes) || S.scenes.length === 0) {
+          metaEl.textContent = "No script loaded yet.";
+          sceneSelector.innerHTML = "";
+          linesList.innerHTML = "";
+          const empty = document.createElement("div");
+          empty.className = "import-editor-empty";
+          empty.textContent = "Import or select a script to preview its scenes here.";
+          linesList.appendChild(empty);
+          return;
+        }
+
+        if (S.currentSceneIndex < 0 || S.currentSceneIndex >= S.scenes.length) {
+          S.currentSceneIndex = 0;
+        }
+
+        const scenes = S.scenes;
+        const activeScene = scenes[S.currentSceneIndex] || null;
+        const meta = S.savedScripts.find(s => s.id === S.script_id) || null;
+        const title = meta?.title || "Sides";
+        const countLabel = `${scenes.length} scene${scenes.length === 1 ? "" : "s"}`;
+        metaEl.textContent = `${title} • ${countLabel}`;
+
+        sceneSelector.innerHTML = "";
+        scenes.forEach((scene, idx) => {
+          const chip = document.createElement("button");
+          chip.type = "button";
+          chip.className = "import-scene-chip" + (idx === S.currentSceneIndex ? " active" : "");
+          const label = scene?.title || `Scene ${idx + 1}`;
+          chip.textContent = label;
+          chip.dataset.sceneIndex = String(idx);
+          sceneSelector.appendChild(chip);
+        });
+
+        const filteredLines = activeScene ? buildFiltered(activeScene) : [];
+        linesList.innerHTML = "";
+        if (!filteredLines.length) {
+          const emptyLine = document.createElement("div");
+          emptyLine.className = "import-editor-empty";
+          emptyLine.textContent = "No dialogue lines found for this scene.";
+          linesList.appendChild(emptyLine);
+        } else {
+          filteredLines.forEach((ln, idx) => {
+            const row = document.createElement("div");
+            row.className = "line";
+            row.dataset.orig = String(ln.orig ?? idx);
+
+            const speakerEl = document.createElement("div");
+            speakerEl.className = "who";
+            speakerEl.textContent = ln?.speaker || "";
+
+            const textArea = document.createElement("textarea");
+            textArea.className = "import-line-textarea text";
+            textArea.value = ln?.text || "";
+            textArea.dataset.orig = String(ln.orig ?? idx);
+            textArea.addEventListener("input", () => {
+              textArea.style.height = "auto";
+              textArea.style.height = textArea.scrollHeight + "px";
+            });
+
+            const deleteBtn = document.createElement("button");
+            deleteBtn.type = "button";
+            deleteBtn.className = "btn sm secondary import-line-delete";
+            deleteBtn.textContent = "Delete";
+            deleteBtn.addEventListener("click", () => {
+              const scene = S.scenes[S.currentSceneIndex];
+              if (!scene || !Array.isArray(scene.lines)) return;
+              const origStr = row.dataset.orig;
+              const origIdx = origStr ? Number(origStr) : NaN;
+              if (Number.isNaN(origIdx)) return;
+              if (!scene.lines[origIdx]) return;
+              scene.lines.splice(origIdx, 1);
+              hydrateImportEditor();
+              markImportEdited();
+            });
+
+            row.appendChild(speakerEl);
+            row.appendChild(textArea);
+            row.appendChild(deleteBtn);
+            linesList.appendChild(row);
+          });
+
+          // Add line control at the bottom
+          const addRow = document.createElement("div");
+          addRow.className = "import-editor-add-row";
+
+          const addBtn = document.createElement("button");
+          addBtn.type = "button";
+          addBtn.className = "btn ghost sm import-line-add";
+          addBtn.textContent = "+ Add line";
+          addBtn.addEventListener("click", () => {
+            const scene = S.scenes[S.currentSceneIndex];
+            if (!scene || !Array.isArray(scene.lines)) return;
+
+            // Default speaker: reuse last non-empty speaker from this scene, if any
+            let speaker = "";
+            for (let i = scene.lines.length - 1; i >= 0; i--) {
+              const ln = scene.lines[i];
+              if (ln && typeof ln.speaker === "string" && ln.speaker.trim()) {
+                speaker = ln.speaker;
+                break;
+              }
+            }
+
+            scene.lines.push({ speaker, text: "[New line]" });
+            hydrateImportEditor();
+            markImportEdited();
+          });
+
+            addRow.appendChild(addBtn);
+            linesList.appendChild(addRow);
+          }
+          autoSizeImportTextareas();
+          updateImportPersistenceDebug();
+        }
+        function saveImportEdits() {
+          if (!S.scenes || !Array.isArray(S.scenes) || S.scenes.length === 0) return;
+          if (S.currentSceneIndex < 0 || S.currentSceneIndex >= S.scenes.length) return;
+
+        let titleInput = null;
+        const panelText = document.getElementById("panel-text");
+        const panelPdf = document.getElementById("panel-pdf");
+        if (panelText && !panelText.hasAttribute("hidden")) {
+          titleInput = document.getElementById("titleText");
+        } else if (panelPdf && !panelPdf.hasAttribute("hidden")) {
+          titleInput = document.getElementById("titlePdf");
+        }
+
+        if (titleInput && typeof titleInput.value === "string") {
+          const newTitle = titleInput.value.trim();
+          const meta = S.savedScripts && S.script_id
+            ? S.savedScripts.find(s => s.id === S.script_id)
+            : null;
+          if (meta && newTitle) {
+            meta.title = newTitle;
+            saveSavedScriptsToStorage();
+            renderSavedScriptsStrip();
+          }
+        }
+
+        const scene = S.scenes[S.currentSceneIndex];
+        if (!scene || !Array.isArray(scene.lines)) return;
+
+        const linesList = document.getElementById("importLinesList");
+        if (!linesList) return;
+
+        const textareas = linesList.querySelectorAll(".import-line-textarea");
+        textareas.forEach(ta => {
+          const origStr = ta.dataset.orig;
+          const origIdx = origStr ? Number(origStr) : NaN;
+          if (Number.isNaN(origIdx)) return;
+          if (!scene.lines[origIdx]) return;
+          scene.lines[origIdx].text = ta.value || "";
+        });
+
+        hydrateImportEditor();
+        if (typeof hydrateRehearse === "function") {
+          try {
+            hydrateRehearse();
+          } catch (e) {
+            console.warn("hydrateRehearse failed after Import save", e);
+          }
+        }
+        // Persist full scenes for this script to localStorage
+        persistCurrentScriptScenesToStorage();
+        const scriptId = S.script_id;
+        let titleForSave = null;
+        if (titleInput && typeof titleInput.value === "string") {
+          titleForSave = titleInput.value;
+        } else if (Array.isArray(S.savedScripts)) {
+          const metaForTitle = S.savedScripts.find(s => s.id === scriptId) || null;
+          titleForSave = metaForTitle?.title || null;
+        }
+        if (scriptId) {
+          saveScriptEditsToServer(scriptId, titleForSave, S.scenes);
+        }
+        markImportEdited();
       }
 
       function bindGalleryCards(root, map){

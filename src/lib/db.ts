@@ -28,6 +28,22 @@ try {
   console.error("[db] failed to ensure user_credits table", e);
 }
 
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS scripts (
+      id           TEXT PRIMARY KEY,
+      user_id      TEXT NOT NULL,
+      title        TEXT NOT NULL,
+      scene_count  INTEGER NOT NULL,
+      scenes_json  TEXT NOT NULL,
+      created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `);
+} catch (e) {
+  console.error("[db] failed to ensure scripts table", e);
+}
+
 export default db;
 
 export function getDB() {
