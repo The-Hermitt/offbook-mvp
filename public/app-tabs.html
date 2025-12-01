@@ -517,8 +517,27 @@
         grid-template-columns: repeat(4, 1fr);
       }
     }
+
+    #screen-settings .settings-row{
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:10px;
+      padding:6px 0;
+    }
+    #screen-settings .settings-label{
+      font-size:13px;
+      color:var(--muted);
+      letter-spacing:.2px;
+    }
+    #screen-settings .settings-value{
+      font-size:14px;
+      font-weight:700;
+      text-align:right;
+      word-break:break-word;
+    }
     
-    /* Rehearse render status — keep visible and readable */
+    /* Rehearse render status - keep visible and readable */
     #rehearseRenderStatus{
       display:block;
       margin-top:6px;
@@ -1481,6 +1500,10 @@ JANE: Ready?"></textarea>
         <div class="spacer8"></div>
         <pre id="authStatus" class="status" aria-live="polite"></pre>
         <div id="authStatusFriendly" class="small" style="display:none"></div>
+        <div class="settings-row">
+          <div class="settings-label">Signed in as</div>
+          <div class="settings-value" id="settings-session-user-id">Checking...</div>
+        </div>
         <div id="entitlementLine" class="small" style="display:none"></div>
         <div id="devEntButtons" style="display:none; margin-top:6px;">
           <button id="btnDevGrantCredits" class="btn">Grant 200 test credits</button>
@@ -1746,6 +1769,35 @@ JANE: Ready?"></textarea>
           const s = await getSession();
           const inviteBlock = document.getElementById("inviteBlock");
           show(inviteBlock, Boolean(s?.hasInviteCode));
+
+          const userIdEl = document.getElementById("settings-session-user-id");
+          if (userIdEl) {
+            const rawUserId =
+              (s && s.userId) ||
+              (s && s.user_id) ||
+              (s && s.user && (s.user.id || s.user.email)) ||
+              null;
+
+            let displayText = "Not signed in";
+
+            if (rawUserId) {
+              const rawStr = String(rawUserId);
+
+              // For passkey-style IDs (e.g. "passkey:LGluR9jLzKorF-…"),
+              // show a clean, human label instead of the long token.
+              if (rawStr.startsWith("passkey:")) {
+                displayText = "Passkey (this device)";
+              } else {
+                // For any other kind of ID (email, etc.), show it as-is.
+                displayText = rawStr;
+              }
+            }
+
+            userIdEl.textContent = displayText;
+
+            // Optional: keep the raw ID available for debugging (not visible in UI)
+            userIdEl.setAttribute("data-raw-user-id", rawUserId || "");
+          }
 
           // Decide whether we're in dev view (also used for debugging output)
           const isDev = new URLSearchParams(location.search).has("dev");
@@ -2242,7 +2294,10 @@ JANE: Ready?"></textarea>
               console.warn("redirect to checkout failed", e);
             }
           } else {
-            toast.textContent = "Billing not configured yet. (Stripe test.)";
+            const errMsg =
+              (data && (data.error || data.message)) ||
+              "Billing not configured yet. (Stripe test.)";
+            toast.textContent = "Billing error: " + errMsg;
           }
           } catch (e) {
             console.warn("billing/create_checkout failed", e);

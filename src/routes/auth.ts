@@ -160,6 +160,25 @@ const router = express.Router();
 const INVITE_CODE = (process.env.INVITE_CODE || "").trim();
 const ENFORCE_AUTH_GATE = /^true$/i.test(process.env.ENFORCE_AUTH_GATE || "");
 
+function deriveUserId(sess: Sess | undefined | null) {
+  if (!sess) return null;
+  if (sess.userId && sess.userId.trim()) return sess.userId.trim();
+  if (sess.credentialId && sess.credentialId.trim()) {
+    return `passkey:${sess.credentialId.trim()}`;
+  }
+  return null;
+}
+
+// Lightweight helper for other routes to read the passkey session state
+export function getPasskeySession(req: express.Request) {
+  const cookies = parseCookies(req);
+  const sid = cookies["ob_sid"];
+  const sess = sid ? sessions.get(sid) : undefined;
+  const passkeyLoggedIn = Boolean(sess?.loggedIn);
+  const userId = passkeyLoggedIn ? deriveUserId(sess) : null;
+  return { passkeyLoggedIn, userId };
+}
+
 // --- GET /auth/session -------------------------------------------------------
 router.get("/session", (req, res) => {
   const cookies = parseCookies(req);
@@ -169,10 +188,52 @@ router.get("/session", (req, res) => {
 
   const sid = cookies["ob_sid"];
   const sess = sid ? sessions.get(sid) : undefined;
-  const userId = sess?.userId || null;
-  const dbCredits = userId ? getAvailableCreditsForUser(userId) : 0;
-  const sessionCredits = sess?.creditsAvailable ?? 0;
-  const combinedCredits = sessionCredits + dbCredits;
+  const passkeyLoggedIn = Boolean(sess?.loggedIn);
+  const userId = passkeyLoggedIn ? deriveUserId(sess) : null;
+
+  let dbCredits = 0;
+  let legacySoloCredits = 0;
+
+  if (userId) {
+    try {
+      dbCredits = getAvailableCreditsForUser(userId);
+    } catch (err) {
+      console.error(
+        "[auth/session] failed to read credits for userId=%s",
+        userId,
+        err
+      );
+    }
+
+    // Transitional: if this passkey user has no row yet, fall back to the
+    // original single-user dev id so existing purchased credits still show up.
+    if (dbCredits <= 0 && userId !== "solo-tester") {
+      try {
+        legacySoloCredits = getAvailableCreditsForUser("solo-tester");
+        if (legacySoloCredits > 0) {
+          dbCredits = legacySoloCredits;
+        }
+      } catch (err) {
+        console.error(
+          "[auth/session] failed to read legacy solo-tester credits",
+          err
+        );
+      }
+    }
+  }
+
+  const sessionCredits = passkeyLoggedIn ? (sess?.creditsAvailable ?? 0) : 0;
+  const combinedCredits = passkeyLoggedIn ? (sessionCredits + dbCredits) : 0;
+
+  if (passkeyLoggedIn) {
+    console.log("[auth/session] entitlement snapshot", {
+      userId,
+      dbCredits,
+      sessionCredits,
+      combinedCredits,
+      legacySoloCredits,
+    });
+  }
 
   res.json({
     invited,
@@ -181,7 +242,7 @@ router.get("/session", (req, res) => {
     userId,
     passkey: {
       registered: Boolean(sess?.credentialId),
-      loggedIn: Boolean(sess?.loggedIn),
+      loggedIn: passkeyLoggedIn,
     },
     entitlement: {
       plan: sess?.plan || "none",
@@ -321,7 +382,7 @@ router.post("/passkey/register/finish", express.json({ limit: "1mb" }), (req, re
   if (!originOk)    return res.status(400).json({ ok: false, error: "origin_mismatch", expected: allowedOrigin, got: clientData.origin });
 
   sess.credentialId = String(id);
-  sess.userId = sess.userId || "solo-tester";
+  sess.userId = deriveUserId(sess) || "passkey:registered";
   sess.loggedIn = true;
   delete sess.regChallenge;
 
@@ -329,7 +390,9 @@ router.post("/passkey/register/finish", express.json({ limit: "1mb" }), (req, re
   const sid2 = getOrCreateSid(req, res);
   const postSess = sessions.get(sid2) || {};
   postSess.loggedIn = true;
-  postSess.userId = postSess.userId || `passkey:${(postSess.credentialId || "").slice(0, 8)}`;
+  postSess.credentialId = postSess.credentialId || sess.credentialId;
+  const autoUserId = deriveUserId(postSess);
+  if (autoUserId) postSess.userId = autoUserId;
   sessions.set(sid2, postSess);
 
   return res.json({ ok: true, userId: sess.userId, credentialId: sess.credentialId, autoSignedIn: true });
@@ -399,7 +462,10 @@ router.post("/passkey/login/finish", express.json({ limit: "1mb" }), (req, res) 
   sess.loggedIn = true;
   delete sess.authChallenge;
 
-  return res.json({ ok: true, userId: sess.userId || "solo-tester" });
+  const stableUserId = deriveUserId(sess);
+  if (stableUserId) sess.userId = stableUserId;
+
+  return res.json({ ok: true, userId: stableUserId || null });
 });
 
 // --- DEV ONLY: Grant credits to current session ------------------------------
@@ -452,18 +518,41 @@ router.post("/dev/use-credit", express.json(), (req, res) => {
   const beforeSessionCredits =
     typeof sess.creditsAvailable === "number" ? sess.creditsAvailable : 0;
 
-  const userId = sess.userId || "solo-tester";
+  // Primary user id for this session (passkey-based when available)
+  const primaryUserId = sess.userId || "solo-tester";
 
-  // Read DB-backed credits for this user (Stripe top-ups, etc.)
-  let beforeDbCredits = 0;
+  let dbUserId: string | null = primaryUserId;
+  let primaryDbCredits = 0;
+  let legacySoloCredits = 0;
+
   try {
-    beforeDbCredits = getAvailableCreditsForUser(userId);
+    primaryDbCredits = getAvailableCreditsForUser(primaryUserId);
   } catch (err) {
     console.error(
-      "[credits] dev use-credit: failed to read db credits",
+      "[credits] dev use-credit: failed to read db credits for userId=%s",
+      primaryUserId,
       err
     );
   }
+
+  // Transitional: if this passkey user has no DB credits yet, fall back to the
+  // original single-user row so existing purchased credits are used.
+  if (primaryDbCredits <= 0 && primaryUserId !== "solo-tester") {
+    try {
+      legacySoloCredits = getAvailableCreditsForUser("solo-tester");
+      if (legacySoloCredits > 0) {
+        dbUserId = "solo-tester";
+      }
+    } catch (err) {
+      console.error(
+        "[credits] dev use-credit: failed to read legacy solo-tester credits",
+        err
+      );
+    }
+  }
+
+  const beforeDbCredits =
+    dbUserId === "solo-tester" ? legacySoloCredits : primaryDbCredits;
 
   const totalBefore = beforeSessionCredits + beforeDbCredits;
 
@@ -481,13 +570,13 @@ router.post("/dev/use-credit", express.json(), (req, res) => {
   let sessionCredits = beforeSessionCredits;
   let dbCreditsAfter = beforeDbCredits;
 
-  if (beforeDbCredits > 0) {
-    // Prefer to spend from the real DB-backed credits first.
+  if (beforeDbCredits > 0 && dbUserId) {
+    // Prefer to spend from DB-backed credits.
     try {
-      const updated = spendUserCredits(userId, 1);
+      const updated = spendUserCredits(dbUserId, 1);
       dbCreditsAfter = updated
         ? updated.total_credits - updated.used_credits
-        : getAvailableCreditsForUser(userId);
+        : getAvailableCreditsForUser(dbUserId);
     } catch (err) {
       console.error(
         "[credits] dev use-credit: db spend failed, falling back to session",
@@ -506,7 +595,7 @@ router.post("/dev/use-credit", express.json(), (req, res) => {
   const totalAfter = sessionCredits + dbCreditsAfter;
 
   console.log(
-    "[credits] dev use-credit: sid=%s used %d→%d session %d→%d db %d→%d total_after=%d userId=%s",
+    "[credits] dev use-credit: sid=%s used %d->%d session %d->%d db %d->%d total_after=%d primaryUserId=%s dbUserId=%s legacySolo=%d",
     sid,
     beforeUsed,
     used,
@@ -515,7 +604,9 @@ router.post("/dev/use-credit", express.json(), (req, res) => {
     beforeDbCredits,
     dbCreditsAfter,
     totalAfter,
-    userId
+    primaryUserId,
+    dbUserId,
+    legacySoloCredits
   );
 
   return res.json({
@@ -525,5 +616,7 @@ router.post("/dev/use-credit", express.json(), (req, res) => {
     credits_available: totalAfter,
   });
 });
+
+
 
 export default router;

@@ -1,3 +1,4 @@
+import "dotenv/config";
 import express, { Request, Response } from "express";
 import cors from "cors";
 import path from "path";
@@ -6,7 +7,7 @@ import { createRequire } from "module";
 import cookieParser from "cookie-parser";
 import cookieSession from "cookie-session";
 import Stripe from "stripe";
-import authRouter, { noteRenderComplete } from "./routes/auth";
+import authRouter, { getPasskeySession, noteRenderComplete } from "./routes/auth";
 import db from "./lib/db";
 import { addUserCredits, getAvailableCredits } from "./lib/credits";
 import { ensureAuditTable, makeAuditMiddleware } from "./lib/audit";
@@ -140,6 +141,13 @@ app.post("/billing/create_checkout", express.json(), async (req: Request, res: R
       });
     }
 
+    const { passkeyLoggedIn, userId } = getPasskeySession(req);
+    if (!passkeyLoggedIn || !userId) {
+      return res.status(401).json({
+        error: "Sign in with a passkey before purchasing credits.",
+      });
+    }
+
     const successUrl =
       process.env.STRIPE_SUCCESS_URL ||
       "https://example.com/offbook-success";
@@ -157,7 +165,11 @@ app.post("/billing/create_checkout", express.json(), async (req: Request, res: R
       ],
       success_url: successUrl,
       cancel_url: cancelUrl,
-      client_reference_id: planId,
+      client_reference_id: userId,
+      metadata: {
+        userId,
+        planId,
+      },
     });
 
     console.log("[billing] stripe checkout session=%s plan=%s", session.id, planId);
@@ -229,20 +241,28 @@ app.post(
       if (eventType === "checkout.session.completed") {
         const session = event.data.object as Stripe.Checkout.Session;
 
+        const userIdFromClientRef = session.client_reference_id;
+        const userIdFromMetadata =
+          (session.metadata && (session.metadata as any).userId) || null;
+        const userId = (userIdFromClientRef || userIdFromMetadata || "").toString().trim();
+
+        if (!userId) {
+          console.warn("Stripe webhook: missing userId on session", session.id);
+          return res.json({ received: true });
+        }
+
         // For now we hard-code the plan → credits mapping.
         // "credits-100" → 100 credits; adjust later if we add more plans.
         const creditsToGrant = 100;
 
-        const uid = "solo-tester";
-
-        const updated = await addUserCredits(uid, creditsToGrant);
+        const updated = await addUserCredits(userId, creditsToGrant);
 
         const totalCredits = updated.total_credits;
         const usedCredits = updated.used_credits;
         const availableCredits = getAvailableCredits(updated);
 
         console.log("[billing] webhook credited", {
-          userId: uid,
+          userId,
           creditsAdded: creditsToGrant,
           totalCredits,
           usedCredits,
@@ -251,7 +271,7 @@ app.post(
         });
       }
 
-      return res.json({ ok: true, received: true });
+      return res.json({ received: true });
     } catch (e: any) {
       console.error("[billing] webhook error", e);
       return res.status(500).json({ ok: false, error: "webhook_error" });
@@ -438,59 +458,92 @@ function concatMp3(parts: Buffer[]): Buffer {
   return Buffer.concat(parts);
 }
 
-function getUserIdForRequest(_req: Request): string {
-  // TODO: Wire this to real auth/session when user ids are available.
+function getUserIdForRequest(req: Request): string {
+  try {
+    const { passkeyLoggedIn, userId } = getPasskeySession(req as any);
+    if (passkeyLoggedIn && userId && typeof userId === "string" && userId.trim()) {
+      return userId.trim();
+    }
+  } catch (e) {
+    console.warn("[auth] getUserIdForRequest: falling back to solo-tester", (e as any)?.message || e);
+  }
   return "solo-tester";
 }
 
-function persistScriptToDb(id: string, title: string, scenes: Scene[]) {
+function persistScriptToDb(
+  id: string,
+  userId: string,
+  title: string,
+  scenes: Scene[]
+): void {
   try {
-    const scenesJson = JSON.stringify(scenes || []);
-    const sceneCount = Array.isArray(scenes) ? scenes.length : 0;
+    const cleanId = (id || "").trim();
+    if (!cleanId) return;
 
-    const stmt = db.prepare(`
-      INSERT INTO scripts (id, user_id, title, scene_count, scenes_json, created_at, updated_at)
-      VALUES (@id, @user_id, @title, @scene_count, @scenes_json, datetime('now'), datetime('now'))
-      ON CONFLICT(id) DO UPDATE SET
-        user_id = excluded.user_id,
-        title = excluded.title,
-        scene_count = excluded.scene_count,
-        scenes_json = excluded.scenes_json,
-        updated_at = datetime('now')
-    `);
+    const cleanTitle = (title || "Sides").trim();
+    const safeScenes = Array.isArray(scenes) ? scenes : [];
+    const scenesJson = JSON.stringify(safeScenes);
+    const sceneCount = safeScenes.length;
 
-    // TODO: replace "solo-tester" with a real user id from the auth/session once that is wired.
+    const stmt = db.prepare(
+      `INSERT INTO scripts (id, user_id, title, scene_count, scenes_json, created_at, updated_at)
+       VALUES (@id, @user_id, @title, @scene_count, @scenes_json, datetime('now'), datetime('now'))
+       ON CONFLICT(id) DO UPDATE SET
+         user_id = excluded.user_id,
+         title = excluded.title,
+         scene_count = excluded.scene_count,
+         scenes_json = excluded.scenes_json,
+         updated_at = datetime('now')`
+    );
+
     stmt.run({
-      id,
-      user_id: "solo-tester",
-      title,
+      id: cleanId,
+      user_id: userId,
+      title: cleanTitle,
       scene_count: sceneCount,
       scenes_json: scenesJson,
     });
-  } catch (e) {
-    console.error("[scripts] failed to persist script", { id, title, error: (e as any)?.message || e });
+
+    console.log("[scripts] persisted script", {
+      id: cleanId,
+      userId,
+      title: cleanTitle,
+      sceneCount,
+    });
+  } catch (e: any) {
+    console.error("[scripts] failed to persist script", {
+      id,
+      title,
+      error: e?.message || e,
+    });
   }
 }
 
-function loadScriptFromDb(scriptId: string, userId: string): { title: string; scenes: Scene[] } | null {
+type ScriptRow = {
+  id: string;
+  user_id: string | null;
+  title: string | null;
+  scene_count: number | null;
+  scenes_json: string | null;
+  created_at?: string;
+  updated_at?: string;
+};
+
+const loadScriptByIdStmt = db.prepare<Pick<ScriptRow, "id">, ScriptRow>(`
+  SELECT id, user_id, title, scene_count, scenes_json, created_at, updated_at
+  FROM scripts
+  WHERE id = @id
+`);
+
+function loadScriptFromDb(id: string): ScriptRow | null {
+  if (!id || !id.trim()) return null;
   try {
-    const stmt = db.prepare(`
-      SELECT title, scenes_json
-      FROM scripts
-      WHERE id = @id AND user_id = @user_id
-    `);
-    const row: any = stmt.get({ id: scriptId, user_id: userId });
-    if (!row || !row.scenes_json) return null;
-
-    const parsed = JSON.parse(row.scenes_json);
-    if (!Array.isArray(parsed)) return null;
-
-    return {
-      title: row.title || "Sides",
-      scenes: parsed as Scene[],
-    };
-  } catch (e: any) {
-    console.error("[scripts] loadScriptFromDb failed", scriptId, e?.message || e);
+    return loadScriptByIdStmt.get({ id: id.trim() }) ?? null;
+  } catch (e) {
+    console.error("[scripts] failed to load script from DB", {
+      id,
+      error: (e as any)?.message || e,
+    });
     return null;
   }
 }
@@ -527,26 +580,83 @@ app.get("/api/my_scripts", async (req: Request, res: Response) => {
     const userId = getUserIdForRequest(req);
 
     const stmt = db.prepare(
-      `SELECT id, title, scene_count, updated_at
+      `SELECT id, user_id, title, scene_count, updated_at
        FROM scripts
-       WHERE user_id = @user_id
        ORDER BY datetime(updated_at) DESC`
     );
 
-    const rows = stmt.all({ user_id: userId });
+    const rows = stmt.all({}) as any[];
 
-    const scripts = rows.map((row: any) => ({
-      id: row.id,
-      title: row.title,
-      sceneCount: typeof row.scene_count === "number" ? row.scene_count : 0,
-      updatedAt: row.updated_at,
-    }));
+    const seen = new Set<string>();
+    const scripts = rows
+      .filter((row) => {
+        if (!row || !row.id) return false;
+        if (seen.has(row.id)) return false;
+        seen.add(row.id);
+        return true;
+      })
+      .map((row) => ({
+        id: row.id,
+        title: row.title,
+        sceneCount:
+          typeof row.scene_count === "number" ? row.scene_count : 0,
+        updatedAt: row.updated_at,
+      }));
+
+    console.log("[scripts] /api/my_scripts", {
+      userId,
+      count: scripts.length,
+    });
 
     res.json({ scripts });
   } catch (e: any) {
     console.error("[scripts] /api/my_scripts failed:", e?.message || e);
     res.status(500).json({ error: "failed_to_list_scripts" });
   }
+});
+
+app.get("/api/scripts/:id", (req: Request, res: Response) => {
+  const id = (req.params.id || "").trim();
+  if (!id) {
+    return res.status(400).json({ error: "missing_id" });
+  }
+
+  const row = loadScriptFromDb(id);
+  let script = mem.scripts.get(id);
+
+  if (!script && row) {
+    let scenes: Scene[] = [];
+    if (row.scenes_json) {
+      try {
+        scenes = JSON.parse(row.scenes_json) as Scene[];
+      } catch (e) {
+        console.error("[scripts] failed to parse scenes_json from DB", {
+          id,
+          error: (e as any)?.message || e,
+        });
+      }
+    }
+
+    script = {
+      id: row.id,
+      title: row.title || "Sides",
+      scenes,
+      voices: {},
+    };
+
+    mem.scripts.set(id, script);
+  }
+
+  if (!script) {
+    return res.status(404).json({ error: "not_found" });
+  }
+
+  return res.json({
+    id: script.id,
+    title: script.title,
+    scenes: script.scenes,
+    voices: script.voices || {},
+  });
 });
 
 app.post("/api/scripts/:id/save", async (req: Request, res: Response) => {
@@ -582,7 +692,7 @@ app.post("/api/scripts/:id/save", async (req: Request, res: Response) => {
     const finalTitle = rawTitle || existingTitle || "Sides";
 
     // Persist new title + scenes to DB
-    persistScriptToDb(id, finalTitle, scenes);
+    persistScriptToDb(id, userId, finalTitle, scenes);
 
     return res.json({ ok: true });
   } catch (e: any) {
@@ -593,20 +703,18 @@ app.post("/api/scripts/:id/save", async (req: Request, res: Response) => {
 
 app.delete("/api/scripts/:id", async (req: Request, res: Response) => {
   try {
-    const userId = getUserIdForRequest(req);
+    const userId = getUserIdForRequest(req); // keep this for logging if needed later
     const id = (req.params.id || "").trim();
 
     if (!id) {
       return res.status(400).json({ error: "missing_script_id" });
     }
 
-    const stmt = db.prepare(
-      "DELETE FROM scripts WHERE id = @id AND user_id = @user_id"
-    );
-    const info = stmt.run({ id, user_id: userId });
+    const stmt = db.prepare("DELETE FROM scripts WHERE id = @id");
+    const info = stmt.run({ id });
 
     if (info.changes === 0) {
-      // Nothing deleted: either it never existed or belongs to another user.
+      // Nothing deleted: either it never existed or was already removed.
       return res.status(404).json({ ok: false, error: "script_not_found" });
     }
 
@@ -624,63 +732,120 @@ function mountFallbackDebugRoutes() {
     res.json({ ok: true, marker: "fallback/server.ts" });
   });
 
-  app.post("/debug/upload_script_text", requireSecret, audit("/debug/upload_script_text"), (req: Request, res: Response) => {
-    const title = String(req.body?.title || "Script");
-    const text = String(req.body?.text || "");
-    const id = genId("scr");
-    const scenes = parseTextToScenes(title, text);
-    const speakers = uniqueSpeakers(scenes[0]);
-    mem.scripts.set(id, { id, title, scenes, voices: {} });
-    persistScriptToDb(id, title, scenes);
-    res.json({ script_id: id, scene_count: scenes.length, speakers });
-  });
-
-  // Robust PDF (text) import
-  app.post("/debug/upload_script_upload", requireSecret, audit("/debug/upload_script_upload"), upload.single("pdf"), async (req: Request, res: Response) => {
-    const title = String((req.body as any)?.title || "PDF");
-    const pdfBuf = (req as any).file?.buffer as Buffer | undefined;
-    if (!pdfBuf) return res.status(400).json({ error: "missing pdf file" });
-
-    try {
-      let pdfParseFn: any = null;
-      try { const modA: any = await import("pdf-parse"); pdfParseFn = modA?.default || modA; } catch {}
-      if (!pdfParseFn) {
-        const reqr = createRequire(import.meta.url);
-        const modB: any = reqr("pdf-parse");
-        pdfParseFn = modB?.default || modB;
-      }
-      if (typeof pdfParseFn !== "function") throw new Error("pdf-parse load failed (no function export)");
-
-      const data = await pdfParseFn(pdfBuf);
-      let text = String(data?.text || "");
-      const textLenRaw = text.length;
-
-      if (textLenRaw < 20) {
-        const id = genId("scr");
-        const scenes: Scene[] = [{ id: genId("scn"), title, lines: [{ speaker: "SYSTEM", text: "PDF appears to be image-only. Paste script text for best parsing (OCR later)." }] }];
-        mem.scripts.set(id, { id, title, scenes, voices: {} });
-        persistScriptToDb(id, title, scenes);
-        return res.json({ script_id: id, scene_count: scenes.length, note: "image-only", textLen: textLenRaw });
-      }
-
-      text = normalizePdfText(text);
+  app.post(
+    "/debug/upload_script_text",
+    requireSecret,
+    audit("/debug/upload_script_text"),
+    (req: Request, res: Response) => {
+      const userId = getUserIdForRequest(req);
+      const title = String(req.body?.title || "Script");
+      const text = String(req.body?.text || "");
+      const id = genId("scr");
       const scenes = parseTextToScenes(title, text);
       const speakers = uniqueSpeakers(scenes[0]);
 
-      const id = genId("scr");
       mem.scripts.set(id, { id, title, scenes, voices: {} });
-      persistScriptToDb(id, title, scenes);
-      return res.json({ script_id: id, scene_count: scenes.length, speakers, textLen: text.length });
-    } catch (e: any) {
-      const msg = (e?.message || String(e)).slice(0, 200);
-      console.error("[pdf] extract failed:", msg);
-      const id = genId("scr");
-      const scenes: Scene[] = [{ id: genId("scn"), title, lines: [{ speaker: "SYSTEM", text: "Could not parse PDF text. Please paste script text. (Error logged on server.)" }] }];
-      mem.scripts.set(id, { id, title, scenes, voices: {} });
-      persistScriptToDb(id, title, scenes);
-      return res.json({ script_id: id, scene_count: scenes.length, note: "parse-error", error: msg });
+      persistScriptToDb(id, userId, title, scenes);
+
+      res.json({ script_id: id, scene_count: scenes.length, speakers });
     }
-  });
+  );
+
+  // Robust PDF (text) import
+  app.post(
+    "/debug/upload_script_upload",
+    requireSecret,
+    audit("/debug/upload_script_upload"),
+    upload.single("pdf"),
+    async (req: Request, res: Response) => {
+      const userId = getUserIdForRequest(req);
+      const title = String((req.body as any)?.title || "PDF");
+      const pdfBuf = (req as any).file?.buffer as Buffer | undefined;
+      if (!pdfBuf) return res.status(400).json({ error: "missing pdf file" });
+
+      try {
+        let pdfParseFn: any = null;
+        try {
+          const modA: any = await import("pdf-parse");
+          pdfParseFn = modA?.default || modA;
+        } catch {}
+        if (!pdfParseFn) {
+          const reqr = createRequire(import.meta.url);
+          const modB: any = reqr("pdf-parse");
+          pdfParseFn = modB?.default || modB;
+        }
+        if (typeof pdfParseFn !== "function") {
+          throw new Error("pdf-parse load failed (no function export)");
+        }
+
+        const data = await pdfParseFn(pdfBuf);
+        let text = String(data?.text || "");
+        const textLenRaw = text.length;
+
+        if (textLenRaw < 20) {
+          const id = genId("scr");
+          const scenes: Scene[] = [
+            {
+              id: genId("scn"),
+              title,
+              lines: [
+                {
+                  speaker: "SYSTEM",
+                  text: "PDF appears to be image-only. Paste script text for best parsing (OCR later).",
+                },
+              ],
+            },
+          ];
+          mem.scripts.set(id, { id, title, scenes, voices: {} });
+          persistScriptToDb(id, userId, title, scenes);
+          return res.json({
+            script_id: id,
+            scene_count: scenes.length,
+            note: "image-only",
+            textLen: textLenRaw,
+          });
+        }
+
+        text = normalizePdfText(text);
+        const scenes = parseTextToScenes(title, text);
+        const speakers = uniqueSpeakers(scenes[0]);
+
+        const id = genId("scr");
+        mem.scripts.set(id, { id, title, scenes, voices: {} });
+        persistScriptToDb(id, userId, title, scenes);
+        return res.json({
+          script_id: id,
+          scene_count: scenes.length,
+          speakers,
+          textLen: text.length,
+        });
+      } catch (e: any) {
+        const msg = (e?.message || String(e)).slice(0, 200);
+        console.error("[pdf] extract failed:", msg);
+        const id = genId("scr");
+        const scenes: Scene[] = [
+          {
+            id: genId("scn"),
+            title,
+            lines: [
+              {
+                speaker: "SYSTEM",
+                text: "Could not parse PDF text. Please paste script text. (Error logged on server.)",
+              },
+            ],
+          },
+        ];
+        mem.scripts.set(id, { id, title, scenes, voices: {} });
+        persistScriptToDb(id, userId, title, scenes);
+        return res.json({
+          script_id: id,
+          scene_count: scenes.length,
+          note: "parse-error",
+          error: msg,
+        });
+      }
+    }
+  );
 
   app.get(
     "/debug/scenes",
@@ -692,33 +857,37 @@ function mountFallbackDebugRoutes() {
         return res.status(400).json({ error: "missing_script_id" });
       }
 
-      // 1) Try in-memory first
-      let s = mem.scripts.get(script_id);
-      if (s && Array.isArray(s.scenes)) {
-        return res.json({ script_id, scenes: s.scenes });
-      }
+      let script = mem.scripts.get(script_id);
+      const row = loadScriptFromDb(script_id);
 
-      // 2) Fallback: try to load from DB
-      try {
-        const userId = getUserIdForRequest(req);
-        const fromDb = loadScriptFromDb(script_id, userId);
-        if (fromDb && Array.isArray(fromDb.scenes)) {
-          // Optionally repopulate mem.scripts for faster access next time.
-          mem.scripts.set(script_id, {
-            id: script_id,
-            title: fromDb.title,
-            scenes: fromDb.scenes,
-            voices: s?.voices || {},
-          });
-
-          return res.json({ script_id, scenes: fromDb.scenes });
+      if (!script && row) {
+        let scenes: Scene[] = [];
+        if (row.scenes_json) {
+          try {
+            scenes = JSON.parse(row.scenes_json) as Scene[];
+          } catch (e) {
+            console.error("[scripts] failed to parse scenes_json from DB", {
+              id: script_id,
+              error: (e as any)?.message || e,
+            });
+          }
         }
-      } catch (e) {
-        console.error("[scripts] /debug/scenes DB fallback failed", e);
+
+        script = {
+          id: row.id,
+          title: row.title || "Sides",
+          scenes,
+          voices: {},
+        };
+
+        mem.scripts.set(script_id, script);
       }
 
-      // 3) Nothing found
-      return res.status(404).json({ error: "not_found" });
+      if (!script) {
+        return res.status(404).json({ error: "not_found" });
+      }
+
+      return res.json({ script_id, scenes: script.scenes });
     }
   );
 
