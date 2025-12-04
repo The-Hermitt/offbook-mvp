@@ -1593,8 +1593,12 @@ JANE: Ready?"></textarea>
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 
   <!-- App -->
-  <script type="module">
+    <script type="module">
     import { expectedMinMsFor, AFTER_ADV_COOLDOWN_MS, isSpeaking, endsWithDashy, readyForAdvance, progressRatio } from "./js/speech-timing.js";
+    // Maximum time we’ll sit on a single “my” line once we’ve heard speech
+    // before we force an advance. Shared by Rehearse and Record so they
+    // behave the same. Tuned to stop “ghosting” without feeling rushed.
+    const MAX_MY_LINE_MS = 9000; // ~9s safety net
     const boot = () => {
       const qs = new URLSearchParams(location.search);
       const cookieSecret = (() => {
@@ -1637,16 +1641,108 @@ JANE: Ready?"></textarea>
         const baseHeaders = init?.headers instanceof Headers ? init.headers : init?.headers;
         const headers = new Headers(baseHeaders || {});
         const activeSecret = window.__OB_SECRET__;
-        if (activeSecret) headers.set("X-Shared-Secret", activeSecret);
-        if (isNgrokHost) headers.set("ngrok-skip-browser-warning", "true");
-        next.headers = headers;
-        return next;
+      if (activeSecret) headers.set("X-Shared-Secret", activeSecret);
+      if (isNgrokHost) headers.set("ngrok-skip-browser-warning", "true");
+      next.headers = headers;
+      return next;
+    }
+    async function sendSttChunkToServer(opts = {}) {
+      // opts: { audioBlob | audioBuffer, mime?, scriptId?, sceneId?, lineId? }
+      const audioBlob = opts.audioBlob || null;
+      const audioBuffer = opts.audioBuffer || null;
+      const mime = opts.mime || "audio/webm";
+
+      let blob;
+      if (audioBlob instanceof Blob) {
+        blob = audioBlob;
+      } else if (audioBuffer instanceof ArrayBuffer || ArrayBuffer.isView(audioBuffer)) {
+        blob = new Blob([audioBuffer], { type: mime });
+      } else {
+        console.warn("[stt] sendSttChunkToServer called without audio");
+        return null;
       }
-      async function getSession() {
-        const res = await fetch("/auth/session", withSecretHeaders());
-        if (!res.ok) throw new Error("session_fetch_failed");
-        return await res.json();
+
+      try {
+        const buf = await blob.arrayBuffer();
+        const bytes = new Uint8Array(buf);
+
+        // Browser-safe base64 encode
+        let binary = "";
+        for (let i = 0; i < bytes.length; i++) {
+          binary += String.fromCharCode(bytes[i]);
+        }
+        const audio_b64 = btoa(binary);
+
+        const payload = {
+          audio_b64,
+          mime: blob.type || mime
+        };
+        if (opts.scriptId) payload.script_id = opts.scriptId;
+        if (opts.sceneId) payload.scene_id = opts.sceneId;
+        if (opts.lineId) payload.line_id = opts.lineId;
+
+        const res = await fetch(
+          "/debug/stt_transcribe_chunk",
+          withSecretHeaders({
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
+          })
+        );
+
+        if (!res.ok) {
+          console.error("[stt] HTTP", res.status);
+          return null;
+        }
+        const data = await res.json();
+        if (!data || data.ok !== true) {
+          console.warn("[stt] bad payload", data);
+          return null;
+        }
+        return data; // { ok, transcript, confidence, isGoodCue }
+      } catch (err) {
+        console.error("[stt] sendSttChunkToServer failed", err);
+        return null;
       }
+    }
+    async function callServerSttStub(opts = {}){
+      const scriptId = opts.scriptId || opts.script_id || null;
+      const sceneId  = opts.sceneId  || opts.scene_id  || null;
+      const lineId   = opts.lineId   || opts.line_id   || null;
+      const text     = typeof opts.text === "string" ? opts.text : "";
+      const audioMs  = (typeof opts.audioMs === "number" && Number.isFinite(opts.audioMs))
+        ? opts.audioMs
+        : null;
+
+      try{
+        const res = await fetch(
+          "/debug/stt",
+          withSecretHeaders({
+            method: "POST",
+            headers: { "Content-Type":"application/json" },
+            body: JSON.stringify({
+              script_id: scriptId,
+              scene_id:  sceneId,
+              line_id:   lineId,
+              text,
+              audio_ms:  audioMs
+            })
+          })
+        );
+        if(!res.ok) throw new Error("stt_http_failed");
+        const data = await res.json();
+        if(!data || data.ok !== true) return null;
+        return data; // { ok, script_id, scene_id, line_id, transcript, confidence, ... }
+      }catch(err){
+        console.error("[stt] stub failed", err);
+        return null;
+      }
+    }
+    async function getSession() {
+      const res = await fetch("/auth/session", withSecretHeaders());
+      if (!res.ok) throw new Error("session_fetch_failed");
+      return await res.json();
+    }
       function openPaywall(message){
         const m = document.getElementById("paywallMsg");
         if (m && message) m.textContent = message;
@@ -2651,7 +2747,8 @@ JANE: Ready?"></textarea>
       // --- Belt & suspenders guard (safe checks for the Record state object) ---
       const hasR = () => !!(typeof R !== "undefined" && R && typeof R === "object");
       // Tight mode when recording
-      const tightMode = () => (typeof R !== "undefined" && R && R.recording === true);
+      // For now, disable tight mode so Record uses the same timing as Rehearse.
+      const tightMode = () => false;
       const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform==='MacIntel' && navigator.maxTouchPoints>1);
 
       const mqlPortrait = window.matchMedia('(orientation: portrait)');
@@ -4145,18 +4242,18 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
       function minElapsedFor(text){
         const base = expectedMinMsFor(text || "");
-        // Slightly tighter so we can advance as soon as you finish
-        return tightMode()
-          ? Math.max(160, Math.round(base * 0.62))
-          : Math.round(base * 0.98);
+        // Rehearse is the timing source of truth; use the same minima in both tabs.
+        return Math.round(base * 0.98);
       }
+
       function silenceDebounceFor(text){
         const base = expectedMinMsFor(text || "");
-        // Aim for ~0.45–0.55s typical "after last energy" window
-        const scaled = tightMode()
-          ? Math.round(base * 0.48)
-          : Math.round(base * 0.58);
-        return Math.min(Math.max(140, scaled), 900);
+        // Medium setting: a bit more patient than the original,
+        // but not as slow as the last pass so lines don't feel ignored.
+        const scaled = Math.round(base * 0.65);
+        // Slightly lower floor so short lines can advance,
+        // but still enough to avoid micro-pause jumps.
+        return Math.min(Math.max(180, scaled), 1100);
       }
 
 
@@ -4402,47 +4499,73 @@ const savedStrip = document.getElementById("savedScriptsStrip");
       }
 
       function advanceFromMyLine(){
-        const now=performance.now();
-        // DO NOT TUNE in Record; Rehearse is the source of truth.
-        const cooldown = tightMode() ? Math.max(80, Math.round(AFTER_ADV_COOLDOWN_MS * 0.35)) : AFTER_ADV_COOLDOWN_MS;
-        if(advanceLock || (now - lastAdvanceAt) < cooldown) return;
-        if(!onMyLine()) return;
+        const now = performance.now();
+        // Rehearse is the timing source of truth; use the same cooldown in all tabs.
+        const cooldown = AFTER_ADV_COOLDOWN_MS;
+        if (advanceLock || (now - lastAdvanceAt) < cooldown) return;
+        if (!onMyLine()) return;
         const ln = current();
-        if(!ln) return;
-        const elapsed=now-(myLineStartMs||now);
-        if(elapsed < minElapsedFor(ln.text||"")) return;
+        if (!ln) return;
+        const elapsed = now - (myLineStartMs || now);
+        if (elapsed < minElapsedFor(ln.text || "")) return;
 
-        advanceLock=true;
-        const list=filtered(); if(!list.length){ advanceLock=false; return; }
-        idx=Math.min(idx+1,list.length-1);
+        advanceLock = true;
+        const list = filtered();
+        if (!list.length) { advanceLock = false; return; }
+
+        idx = Math.min(idx + 1, list.length - 1);
         highlightCurrent();
         clearMy();
         lastAdvanceAt = now;
-        try{ sr?.stop(); }catch{}
-        if(R?.rec && typeof R.rec.state === "string" && R.rec.state === "inactive"){
-          try{ R.rec.start(); R.recording = true; setRailStates(); }
-          catch{}
-        }
-        const next=current();
-        if(next && next.speaker===myName()){
-          if(srToggleOn && srPermGranted){ setTimeout(()=>{ if(sr && !srActive) try{ sr.start(); }catch{}; },80); }
-        }else if(next){
-          playing = true;
-          Promise.resolve(step(true, { immediate: true })).catch(()=>{});
-        }
-        advanceLock=false;
-      }
 
+        try { sr?.stop(); } catch {}
+
+        // If we are on the Record tab and have a recorder, start capturing this segment.
+        if (R?.rec && typeof R.rec.state === "string" && R.rec.state === "inactive") {
+          try {
+            R.rec.start();
+            R.recording = true;
+            setRailStates();
+          } catch {}
+        }
+
+        const next = current();
+        if (next && next.speaker === myName()) {
+          // Next line is yours: re-arm speech recognition if enabled.
+          if (srToggleOn && srPermGranted) {
+            setTimeout(() => {
+              if (sr && !srActive) {
+                try { sr.start(); } catch {}
+              }
+            }, 80);
+          }
+        } else if (next) {
+          // Partner line: keep the reader moving.
+          playing = true;
+          Promise.resolve(step(true, { immediate: true })).catch(() => {});
+        }
+
+        advanceLock = false;
+      }
       function armSilenceDebounce(){
-        if(silenceTimer) clearTimeout(silenceTimer);
+        if (silenceTimer) clearTimeout(silenceTimer);
         const ln = current();
-        if(!ln) return;
-        const need = silenceDebounceFor(ln.text||"");
+        if (!ln) return;
+        const need = silenceDebounceFor(ln.text || "");
         silenceTimer = setTimeout(()=>{
-          if(!onMyLine()) return;
+          if (!onMyLine()) return;
           const now = performance.now();
-          const elapsed = now - (myLineStartMs||now);
-          if(!firstEnergyAt || elapsed < 60) return;
+          const elapsed = now - (myLineStartMs || now);
+          if (!firstEnergyAt || elapsed < 60) return;
+          // Safety net: if we've been on this line for a long time after
+          // hearing speech, force an advance so the reader never "vanishes"
+          // permanently on tricky lines (especially in Record).
+          if (elapsed >= MAX_MY_LINE_MS) {
+            silenceTimer = null;
+            advanceFromMyLine();
+            return;
+          }
+
           const shouldAdvance = readyForAdvance({
             text: ln.text,
             interim: latestTranscript,
@@ -4451,16 +4574,53 @@ const savedStrip = document.getElementById("savedScriptsStrip");
             lastAdvanceAt,
             dashyMode: endsWithDashy(ln.text)
           });
+
           const timeSinceEnergy = now - (lastEnergyAt || now);
-          const enoughSilence = timeSinceEnergy >= Math.min(900, Math.max(140, silenceDebounceFor(ln.text)));
+          const enoughSilence = timeSinceEnergy >= Math.min(
+            900,
+            Math.max(140, silenceDebounceFor(ln.text))
+          );
           const enoughElapsed = elapsed >= minElapsedFor(ln.text);
           const dashy = endsWithDashy(ln.text);
-          if( (dashy && shouldAdvance && enoughElapsed) ||
-              (!dashy && shouldAdvance && enoughSilence && enoughElapsed) ){
+
+          // Let the timing / silence model decide, same as the older behavior,
+          // but shared for Rehearse and Record.
+          if (
+            (dashy && shouldAdvance && enoughElapsed) ||
+            (!dashy && shouldAdvance && enoughSilence && enoughElapsed)
+          ){
             silenceTimer = null;
             advanceFromMyLine();
           }
         }, need);
+      }
+
+      // Normalize a string into lowercased word tokens with punctuation stripped.
+      function normalizeWords(str){
+        return (str || "")
+          .toLowerCase()
+          .replace(/[\u2014\u2013]/g, " ")      // em/en dash → space
+          .replace(/[^a-z0-9\s']/gi, " ")      // strip punctuation, keep letters/numbers/apostrophes
+          .split(/\s+/)
+          .filter(Boolean);
+      }
+
+      // Check if the last N words of the current line match the last N words
+      // that STT heard from the user. This is our "did they really finish the line?"
+      function hasEndingWordMatch(lineText, transcript, count = 2){
+        const lineWords = normalizeWords(lineText);
+        const heardWords = normalizeWords(transcript);
+
+        if (!lineWords.length || !heardWords.length) return false;
+
+        const n = Math.min(count, lineWords.length, heardWords.length);
+
+        for (let i = 0; i < n; i++){
+          const lw = lineWords[lineWords.length - n + i];
+          const hw = heardWords[heardWords.length - n + i];
+          if (lw !== hw) return false;
+        }
+        return true;
       }
 
       if(sr){
@@ -4486,20 +4646,21 @@ const savedStrip = document.getElementById("savedScriptsStrip");
           updateMicBadge();
         };
         sr.onresult=(ev)=>{
-          if(!(onMyLine() && srToggleOn && srPermGranted)) return;
+          if (!(onMyLine() && srToggleOn && srPermGranted)) return;
           maybeSetMyLineStart();
-          const now=performance.now();
-          const ln=current(); if(!ln) return;
+          const now = performance.now();
+          const ln = current(); if (!ln) return;
 
-          const last=ev.results?.[ev.results.length-1];
-          const alt=last?.[0];
-          const isFinal=!!last?.isFinal;
-          latestTranscript=(alt?.transcript||"").trim();
-          lastResultAt=now;
-          const ratio=progressRatio(ln.text, latestTranscript);
-          const sttConfident=ratio>=0.92; // high-confidence transcript match
+          const last = ev.results?.[ev.results.length - 1];
+          const alt = last?.[0];
+          const isFinal = !!last?.isFinal;
+          latestTranscript = (alt?.transcript || "").trim();
+          lastResultAt = now;
 
-          const elapsed=now-(myLineStartMs||now);
+          const ratio = progressRatio(ln.text, latestTranscript);
+          const sttConfident = ratio >= 0.92; // high-confidence transcript match
+
+          const elapsed = now - (myLineStartMs || now);
 
           const dashy = endsWithDashy(ln.text); // only end-dash matters
           const shouldAdvance = readyForAdvance({
@@ -4512,26 +4673,54 @@ const savedStrip = document.getElementById("savedScriptsStrip");
           });
           const enoughElapsed = elapsed >= minElapsedFor(ln.text);
           const timeSinceEnergy = now - (lastEnergyAt || now);
-          const enoughSilence = timeSinceEnergy >= Math.min(1100, Math.max(180, silenceDebounceFor(ln.text)));
+          const enoughSilence = timeSinceEnergy >= Math.min(
+            1100,
+            Math.max(180, silenceDebounceFor(ln.text))
+          );
 
-          // Dash at end = allow fast cut-in once minima met
-          if(dashy){
-            if((shouldAdvance || sttConfident) && enoughElapsed){
+          // Treat long / multi-sentence lines more cautiously so they don't
+          // advance as soon as the first short phrase ("Yeah. Me too.") gets
+          // a final STT result.
+          const text = (ln.text || "");
+          const words = text.split(/\s+/).filter(Boolean);
+          const sentenceCount = text.split(/[.?!]/).filter(s => s.trim().length > 0).length;
+          const isLongOrMultiSentence = (words.length >= 10) || (sentenceCount >= 2);
+
+          // For long/multi-sentence lines, ignore bare "isFinal" unless we either
+          // have strong coverage (sttConfident) or a real silence gap.
+          let allowFinal = isFinal;
+          if (isLongOrMultiSentence && !sttConfident && !enoughSilence) {
+            allowFinal = false;
+          }
+
+          // Line length buckets
+          const isShortLine = words.length <= 3;
+          const goodCoverage = ratio >= 0.72; // enough of the line has been spoken
+
+          // On-result auto-advance now applies to *all* user lines (dash or not).
+          if (isShortLine) {
+            // Very short lines stay snappy but don't require the exact last word.
+            if (
+              shouldAdvance &&
+              enoughElapsed &&
+              (allowFinal || enoughSilence || sttConfident)
+            ) {
               return advanceFromMyLine();
             }
-          }else{
-            // Normal lines: allow strong STT match OR final result, even if there was minimal silence
-            if(
-              (isFinal && enoughElapsed) ||                // existing behavior
-              (sttConfident && enoughElapsed) ||           // NEW: strong transcript match
-              (shouldAdvance && enoughSilence && enoughElapsed) // existing timing/silence path
-            ){
+          } else {
+            // Longer lines: need decent coverage and either a real silence gap
+            // or a high-confidence STT match, but no strict last-word match.
+            if (
+              shouldAdvance &&
+              enoughElapsed &&
+              goodCoverage &&
+              (allowFinal || enoughSilence || sttConfident)
+            ) {
               return advanceFromMyLine();
             }
           }
 
-          // For non-dashy user lines we wait slightly longer before auto-advance.
-          // Dashy end ("—" at end) still advances fast via readyForAdvance().
+          // Always arm the silence debounce as a safety net.
           armSilenceDebounce();
         };
       }
@@ -4541,20 +4730,11 @@ const savedStrip = document.getElementById("savedScriptsStrip");
         if(!(onMyLine()) || (E.inlineForm&&E.inlineForm.isConnected)) return;
         if(!srActive){ try{ sr.start(); }catch{} }
       }, 300);
-
-      // Re-start SR if it ever drops while on your line (Record only)
-      setInterval(()=>{
-        if(!tightMode()) return;
-        if(!(onMyLine()) || (E.inlineForm&&E.inlineForm.isConnected)) return;
-        if(sr && srToggleOn && srPermGranted && !srActive){
-          try{ sr.start(); }catch{}
-        }
-      }, 250);
-
-      $("#btnMic")?.addEventListener("click", async ()=>{
-        const srAvailable = !!sr;
-        if(!srAvailable){
-          if(!srToggleOn){
+  
+        $("#btnMic")?.addEventListener("click", async ()=>{
+          const srAvailable = !!sr;
+          if(!srAvailable){
+            if(!srToggleOn){
             try{ await navigator.mediaDevices.getUserMedia({audio:true}); await startMicMonitor(); srPermGranted = true; srToggleOn = true; }
             catch{ srToggleOn = false; }
           }else{ srToggleOn = false; stopMicMonitor(); }

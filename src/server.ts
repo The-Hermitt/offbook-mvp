@@ -573,6 +573,48 @@ app.post("/debug/tts_line", requireSecret, async (req: Request, res: Response) =
     return res.status(500).json({ error: msg.slice(0, 200) });
   }
 });
+
+// STT stub: accept a small audio chunk and return a dummy transcript.
+// This does NOT call OpenAI yet; it's only to prove wiring.
+app.post(
+  "/debug/stt_transcribe_chunk",
+  requireSecret,
+  express.json({ limit: "2mb" }),
+  async (req: Request, res: Response) => {
+    try {
+      const body = (req.body || {}) as {
+        audio_b64?: string;
+        mime?: string;
+      };
+
+      const { audio_b64, mime } = body;
+
+      if (!audio_b64 || typeof audio_b64 !== "string") {
+        return res
+          .status(400)
+          .json({ ok: false, error: "missing_audio" });
+      }
+
+      const buf = Buffer.from(audio_b64, "base64");
+
+      console.log("[stt] stub received chunk", {
+        bytes: buf.length,
+        mime: mime || null,
+      });
+
+      // Dummy response; client won’t rely on this yet.
+      return res.json({
+        ok: true,
+        transcript: "",
+        confidence: 0,
+        isGoodCue: false,
+      });
+    } catch (err) {
+      console.error("[stt] stub error", err);
+      return res.status(500).json({ ok: false, error: "stt_failed" });
+    }
+  }
+);
 /* ---------------------------------------------------------- */
 
 app.get("/api/my_scripts", async (req: Request, res: Response) => {
@@ -888,6 +930,45 @@ function mountFallbackDebugRoutes() {
       }
 
       return res.json({ script_id, scenes: script.scenes });
+    }
+  );
+
+  app.post(
+    "/debug/stt",
+    requireSecret,
+    audit("/debug/stt"),
+    (req: Request, res: Response) => {
+      try {
+        const body = (req.body || {}) as any;
+        const script_id =
+          typeof body.script_id === "string" ? body.script_id.trim() : "";
+        const scene_id =
+          typeof body.scene_id === "string" ? body.scene_id.trim() : "";
+        const line_id =
+          typeof body.line_id === "string" ? body.line_id.trim() : "";
+        const text = typeof body.text === "string" ? body.text : "";
+        const audio_ms =
+          typeof body.audio_ms === "number" && Number.isFinite(body.audio_ms)
+            ? body.audio_ms
+            : null;
+
+        // For now, pretend STT heard exactly the provided text, or a stub.
+        const transcript = text.trim() || "stub transcript";
+
+        return res.json({
+          ok: true,
+          script_id,
+          scene_id,
+          line_id,
+          transcript,
+          confidence: 0.9,
+          received_ms: audio_ms,
+          decided_at: Date.now(),
+        });
+      } catch (err) {
+        console.error("[debug/stt] error:", err);
+        return res.status(500).json({ ok: false, error: "stt_stub_failed" });
+      }
     }
   );
 
