@@ -10,6 +10,7 @@ import Stripe from "stripe";
 import authRouter, { getPasskeySession, noteRenderComplete } from "./routes/auth";
 import db from "./lib/db";
 import { addUserCredits, getAvailableCredits } from "./lib/credits";
+import { isSttEnabled, transcribeChunk } from "./lib/stt";
 import { ensureAuditTable, makeAuditMiddleware } from "./lib/audit";
 import { makeRateLimiters } from "./middleware/rateLimit";
 
@@ -22,6 +23,28 @@ const stripe =
     ? new Stripe(STRIPE_SECRET_KEY)
     : null;
 const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || "";
+
+function stripDataUrlPrefix(data: string): { base64: string; mimeFromHeader?: string } {
+  const trimmed = data.trim();
+  if (!trimmed.startsWith("data:")) {
+    return { base64: trimmed };
+  }
+
+  const commaIndex = trimmed.indexOf(",");
+  if (commaIndex === -1) {
+    // Malformed data URL; just return as-is
+    return { base64: trimmed };
+  }
+
+  const header = trimmed.slice(5, commaIndex); // between "data:" and ","
+  // header example: "audio/webm;codecs=opus;base64"
+  const parts = header.split(";");
+  const mimePart = parts[0]?.trim();
+  const mimeFromHeader = mimePart && mimePart.length > 0 ? mimePart : undefined;
+
+  const base64 = trimmed.slice(commaIndex + 1);
+  return { base64, mimeFromHeader };
+}
 
 // --- tiny helper: safe fetch with timeout ---
 async function fetchWithTimeout(input: RequestInfo, init: RequestInit & { timeoutMs?: number } = {}) {
@@ -579,39 +602,126 @@ app.post("/debug/tts_line", requireSecret, async (req: Request, res: Response) =
 app.post(
   "/debug/stt_transcribe_chunk",
   requireSecret,
+  audit("/debug/stt_transcribe_chunk"),
   express.json({ limit: "2mb" }),
   async (req: Request, res: Response) => {
     try {
-      const body = (req.body || {}) as {
-        audio_b64?: string;
-        mime?: string;
-      };
+      const body = (req as any).body || {};
+      const rawAudioB64 = typeof body.audio_b64 === "string" ? body.audio_b64.trim() : "";
 
-      const { audio_b64, mime } = body;
-
-      if (!audio_b64 || typeof audio_b64 !== "string") {
-        return res
-          .status(400)
-          .json({ ok: false, error: "missing_audio" });
+      if (!rawAudioB64) {
+        return res.status(400).json({
+          ok: false,
+          error: "missing_audio",
+        });
       }
 
-      const buf = Buffer.from(audio_b64, "base64");
+      const { base64: cleanBase64, mimeFromHeader } = stripDataUrlPrefix(rawAudioB64);
 
-      console.log("[stt] stub received chunk", {
-        bytes: buf.length,
-        mime: mime || null,
+      const mimeRaw =
+        typeof body.mime === "string" && body.mime.trim() ? (body.mime as string) : mimeFromHeader;
+
+      const mime = mimeRaw && mimeRaw.trim().length > 0 ? mimeRaw.trim() : "audio/webm";
+
+      const audioBuffer = Buffer.from(cleanBase64, "base64");
+      if (!audioBuffer || audioBuffer.length === 0) {
+        return res.status(400).json({
+          ok: false,
+          error: "invalid_audio",
+        });
+      }
+
+      console.log("[stt] /stt_transcribe_chunk request:", {
+        rawMime: body.mime || null,
+        headerMime: mimeFromHeader || null,
+        effectiveMime: mime,
+        hasDataUrlPrefix: rawAudioB64.startsWith("data:"),
+        base64Length: cleanBase64.length,
+        bytes: audioBuffer.length,
       });
 
-      // Dummy response; client won’t rely on this yet.
-      return res.json({
-        ok: true,
-        transcript: "",
-        confidence: 0,
-        isGoodCue: false,
+      if (!isSttEnabled()) {
+        return res.status(200).json({
+          ok: false,
+          error: "stt_disabled",
+        });
+      }
+
+      const script_id =
+        typeof body.script_id === "string" ? body.script_id.trim() : "";
+      const scene_id =
+        typeof body.scene_id === "string" ? body.scene_id.trim() : "";
+      const line_id =
+        typeof body.line_id === "string" ? body.line_id.trim() : "";
+      void script_id;
+      void scene_id;
+      void line_id;
+
+      try {
+        const result = await transcribeChunk({
+          audio: audioBuffer,
+          mime,
+        });
+
+        return res.status(200).json({
+          ok: true,
+          text: result.text,
+          partial: false,
+        });
+      } catch (err: any) {
+        let code = "stt_failed";
+        let message: string | undefined;
+
+        const anyErr: any = err || {};
+        const oaiErr = anyErr.error || anyErr.response?.data?.error;
+
+        if (typeof oaiErr?.code === "string") {
+          code = oaiErr.code;
+        } else if (typeof anyErr.code === "string") {
+          code = anyErr.code;
+        } else if (typeof anyErr.message === "string") {
+          code = anyErr.message;
+        }
+
+        if (typeof oaiErr?.message === "string") {
+          message = oaiErr.message;
+        } else if (typeof anyErr.message === "string") {
+          message = anyErr.message;
+        }
+
+        console.error("[stt] transcribe_chunk error:", {
+          code,
+          message,
+          mime,
+          bytes: audioBuffer.length,
+          raw: anyErr,
+        });
+
+        return res.status(500).json({
+          ok: false,
+          error: code,
+          message,
+          meta: {
+            mime,
+            bytes: audioBuffer.length,
+          },
+        });
+      }
+    } catch (err: any) {
+      console.error("[stt] transcribe_chunk error:", err);
+      const code =
+        err?.code ||
+        err?.error?.code ||
+        err?.status ||
+        "stt_failed";
+      const message =
+        err?.error?.message || err?.message || "Audio file might be corrupted or unsupported";
+
+      res.json({
+        ok: false,
+        error: code,
+        message,
       });
-    } catch (err) {
-      console.error("[stt] stub error", err);
-      return res.status(500).json({ ok: false, error: "stt_failed" });
     }
   }
 );

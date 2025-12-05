@@ -7,6 +7,7 @@ import fs from "fs";
 import crypto from "crypto";
 import db from "./lib/db";
 import { generateReaderMp3, ttsProvider } from "./lib/tts";
+import { isSttEnabled, transcribeChunk } from "./lib/stt";
 import { ensureAuditTable, makeAuditMiddleware } from "./lib/audit";
 import { makeRateLimiters } from "./middleware/rateLimit";
 import { noteRenderComplete } from "./routes/auth";
@@ -318,6 +319,106 @@ export function initHttpRoutes(app: Express) {
       if (!res.headersSent) {
         res.status(500).json({ error: "preview_failed" });
       }
+    }
+  });
+
+  // --- STT (speech-to-text) debug route ---
+  debug.post("/stt_transcribe_chunk", audit("/debug/stt_transcribe_chunk"), async (req: Request, res: Response) => {
+    try {
+      // If STT is not configured, respond gracefully.
+      if (!isSttEnabled()) {
+        return res.status(200).json({
+          ok: false,
+          error: "stt_disabled",
+        });
+      }
+
+      const body = (req as any).body || {};
+      const audio_b64 = typeof body.audio_b64 === "string" ? body.audio_b64 : "";
+      const mime =
+        typeof body.mime === "string" && body.mime.trim()
+          ? (body.mime as string)
+          : "audio/webm";
+
+      if (!audio_b64.trim()) {
+        return res.status(400).json({
+          ok: false,
+          error: "missing_audio",
+        });
+      }
+
+      // Decode the base64 payload into a raw Buffer for STT2
+      const audioBuffer = Buffer.from(audio_b64, "base64");
+      if (!audioBuffer || audioBuffer.length === 0) {
+        return res.status(400).json({
+          ok: false,
+          error: "invalid_audio",
+        });
+      }
+
+      console.log("[stt] /stt_transcribe_chunk request:", {
+        mime,
+        base64Length: audio_b64.length,
+        bytes: audioBuffer.length,
+      });
+
+      try {
+        const result = await transcribeChunk({
+          audio: audioBuffer,
+          mime,
+        });
+
+        return res.status(200).json({
+          ok: true,
+          text: result.text,
+          partial: false,
+        });
+      } catch (err: any) {
+        // Try to pull out useful details from OpenAI-style errors
+        let code = "stt_failed";
+        let message: string | undefined;
+
+        const anyErr: any = err || {};
+        const oaiErr = anyErr.error || anyErr.response?.data?.error;
+
+        if (typeof oaiErr?.code === "string") {
+          code = oaiErr.code;
+        } else if (typeof anyErr.code === "string") {
+          code = anyErr.code;
+        } else if (typeof anyErr.message === "string") {
+          code = anyErr.message;
+        }
+
+        if (typeof oaiErr?.message === "string") {
+          message = oaiErr.message;
+        } else if (typeof anyErr.message === "string") {
+          message = anyErr.message;
+        }
+
+        console.error("[stt] transcribe_chunk error:", {
+          code,
+          message,
+          mime,
+          bytes: audioBuffer.length,
+          raw: anyErr,
+        });
+
+        return res.status(500).json({
+          ok: false,
+          error: code,
+          message,
+          meta: {
+            mime,
+            bytes: audioBuffer.length,
+          },
+        });
+      }
+    } catch (err) {
+      console.error("[stt] unexpected error:", err);
+      return res.status(500).json({
+        ok: false,
+        error: "stt_failed",
+      });
     }
   });
 

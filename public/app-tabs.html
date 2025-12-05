@@ -1646,6 +1646,47 @@ JANE: Ready?"></textarea>
       next.headers = headers;
       return next;
     }
+    // --- Dev flag: enable server STT plumbing when ?stt2=1 is present ---
+    const STT2_ENABLED = new URLSearchParams(window.location.search).has("stt2");
+    // Rolling mic recorder for STT2 debug (audio → /debug/stt_transcribe_chunk)
+    let stt2Recorder = null;
+    // Safari / MediaRecorder usually puts the WebM header in the first chunk.
+    // We keep that header chunk forever and only roll the *body* chunks.
+    let stt2HeaderChunk = null;
+    let stt2BodyChunks = [];
+    let stt2Mime = "";
+
+    let sttOverlayEl = null;
+    function ensureSttOverlay() {
+      if (!STT2_ENABLED) return null;
+      if (sttOverlayEl) return sttOverlayEl;
+      const el = document.createElement("div");
+      el.id = "stt-debug-overlay";
+      el.style.position = "fixed";
+      el.style.left = "0";
+      el.style.right = "0";
+      el.style.bottom = "0";
+      el.style.padding = "6px 10px";
+      el.style.fontSize = "12px";
+      el.style.background = "rgba(0,0,0,0.85)";
+      el.style.color = "#fff";
+      el.style.zIndex = "9999";
+      el.style.pointerEvents = "none";
+      el.style.maxHeight = "35vh";
+      el.style.overflow = "auto";
+      el.style.fontFamily = "system-ui, -apple-system, BlinkMacSystemFont, sans-serif";
+      el.style.whiteSpace = "pre-wrap";
+      document.body.appendChild(el);
+      sttOverlayEl = el;
+      return el;
+    }
+
+    function updateSttOverlay(text) {
+      if (!STT2_ENABLED) return;
+      const el = ensureSttOverlay();
+      if (!el) return;
+      el.textContent = text || "";
+    }
     async function sendSttChunkToServer(opts = {}) {
       // opts: { audioBlob | audioBuffer, mime?, scriptId?, sceneId?, lineId? }
       const audioBlob = opts.audioBlob || null;
@@ -1690,16 +1731,34 @@ JANE: Ready?"></textarea>
           })
         );
 
+        // Always try to return a payload so the overlay can show details.
+        let data;
+        try {
+          data = await res.json();
+        } catch (err) {
+          console.error("[stt] failed to parse JSON", err);
+          data = null;
+        }
+
         if (!res.ok) {
-          console.error("[stt] HTTP", res.status);
-          return null;
+          console.error("[stt] HTTP", res.status, data);
+          return {
+            ok: false,
+            error: `http_${res.status}`,
+            message: (data && data.message) || "Non-200 HTTP from /debug/stt_transcribe_chunk",
+          };
         }
-        const data = await res.json();
-        if (!data || data.ok !== true) {
+
+        if (!data || typeof data.ok !== "boolean") {
           console.warn("[stt] bad payload", data);
-          return null;
+          return {
+            ok: false,
+            error: "bad_payload",
+            message: "Missing or invalid { ok, text } in STT response",
+          };
         }
-        return data; // { ok, transcript, confidence, isGoodCue }
+
+        return data; // e.g. { ok: true, text, partial } or { ok: false, error, message }
       } catch (err) {
         console.error("[stt] sendSttChunkToServer failed", err);
         return null;
@@ -2438,6 +2497,8 @@ JANE: Ready?"></textarea>
         if(typeof window.__OB_MIC_TRACK === "undefined") window.__OB_MIC_TRACK = null;
         if(typeof window.__OB_AP === "undefined") window.__OB_AP = null;
         if(typeof window.isRecording === "undefined") window.isRecording = false;
+        if(typeof window.__OB_STT2_RECORDER === "undefined") window.__OB_STT2_RECORDER = null;
+        if(typeof window.__OB_STT2_LAST_BLOB === "undefined") window.__OB_STT2_LAST_BLOB = null;
       }
       // Reader element singleton (idempotent)
       window.__OB_READER_EL = window.__OB_READER_EL
@@ -4181,6 +4242,57 @@ const savedStrip = document.getElementById("savedScriptsStrip");
           const track = (typeof stream?.getAudioTracks === "function") ? stream.getAudioTracks()[0] : null;
           window.__OB_MIC_TRACK = track || null;
           logRouteCheck('startMicMonitor');
+          // When STT2 is enabled, keep a small rolling recorder on the mic stream
+          // so we can send recent audio chunks to the server for debug-only STT.
+          if (STT2_ENABLED && window.MediaRecorder && !stt2Recorder) {
+            try {
+              let mime = "";
+              if (typeof MediaRecorder.isTypeSupported === "function") {
+                if (MediaRecorder.isTypeSupported("audio/webm;codecs=opus")) {
+                  mime = "audio/webm;codecs=opus";
+                } else if (MediaRecorder.isTypeSupported("audio/webm")) {
+                  mime = "audio/webm";
+                }
+              }
+
+              const rec = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
+              stt2Recorder = rec;
+              window.__OB_STT2_RECORDER = rec;
+
+              // Reset rolling buffer whenever we (re)start the recorder.
+              stt2HeaderChunk = null;
+              stt2BodyChunks = [];
+              stt2Mime = mime || "";
+
+              rec.ondataavailable = (e) => {
+                if (!e.data || e.data.size === 0) return;
+
+                // First non-empty chunk: treat as the WebM header and keep it forever.
+                if (!stt2HeaderChunk) {
+                  stt2HeaderChunk = e.data;
+                  return;
+                }
+
+                // Subsequent chunks are "body" audio. We keep a small rolling window.
+                stt2BodyChunks.push(e.data);
+
+                // Optional safety: keep at most ~10s of recent audio body (~2-3 chunks).
+                const maxBodyChunks = 3;
+                if (stt2BodyChunks.length > maxBodyChunks) {
+                  stt2BodyChunks.splice(0, stt2BodyChunks.length - maxBodyChunks);
+                }
+              };
+
+              // Use a small timeslice so we always have recent audio.
+              try {
+                rec.start(4000); // ~4s rolling window
+              } catch (err) {
+                console.warn("[stt2] recorder start failed", err);
+              }
+            } catch (err) {
+              console.warn("[stt2] recorder init failed", err);
+            }
+          }
           try{
             const bt = window.__OB_BT_IN || await hasBluetoothInput();
             window.__OB_BT_IN = bt;
@@ -4624,6 +4736,22 @@ const savedStrip = document.getElementById("savedScriptsStrip");
       }
 
       if(sr){
+      // If STT2 flag is present, show a debug overlay immediately
+      if (STT2_ENABLED) {
+        updateSttOverlay(
+          [
+            "STT2 flag ON",
+            `SpeechRecognition: ${(window.SpeechRecognition || window.webkitSpeechRecognition) ? "available" : "NOT available"}`,
+            "Waiting for first final transcript…",
+            "",
+            "Steps to trigger:",
+            "1) Go to Rehearse or Record.",
+            "2) Turn Mic: On.",
+            "3) Speak one of your lines until STT produces a final result."
+          ].join("\n")
+        );
+      }
+
         sr.continuous=false; sr.interimResults=true; sr.lang="en-US";
         sr.onstart=()=>{
           srActive=true;
@@ -4661,6 +4789,113 @@ const savedStrip = document.getElementById("savedScriptsStrip");
           const sttConfident = ratio >= 0.92; // high-confidence transcript match
 
           const elapsed = now - (myLineStartMs || now);
+          // When STT2 is enabled, mirror final transcripts + recent audio to the server.
+          // This does NOT change cue timing; it's purely for debugging the pipeline.
+          if (STT2_ENABLED && isFinal) {
+            try {
+              const activeMode = (S && S.activeTab) ? S.activeTab : "";
+              // Only care in Rehearse / Record where listen/respond matters.
+              if (activeMode === "rehearse" || activeMode === "record") {
+                const safeScriptId = (S && S.script_id) ? S.script_id : null;
+                const safeSceneId =
+                  typeof window.currentSceneId !== "undefined"
+                    ? window.currentSceneId
+                    : null;
+                const safeLineId =
+                  ln && typeof ln.id === "string"
+                    ? ln.id
+                    : `${safeSceneId || "scene"}:${idx}`;
+
+                const textForServer = (latestTranscript || "").trim();
+
+                // Build a merged Blob from our rolling chunks, if we have any.
+                // We always try to prepend the original header chunk so the file
+                // is a valid WebM for Whisper and media players.
+                let audioBlob = null;
+                const header = stt2HeaderChunk;
+                const body = stt2BodyChunks;
+
+                if (header || (Array.isArray(body) && body.length > 0)) {
+                  const parts = [];
+                  if (header) parts.push(header);
+                  if (Array.isArray(body)) parts.push(...body);
+
+                  const type =
+                    stt2Mime ||
+                    (header && header.type) ||
+                    (body && body[0] && body[0].type) ||
+                    "audio/webm";
+
+                  audioBlob = new Blob(parts, { type });
+                }
+
+                // If we somehow have no text, nothing useful to send or show.
+                if (!textForServer) {
+                  return;
+                }
+
+                // If STT2 is on but we never captured audio, surface that explicitly.
+                // This is what we expect on iPhone Safari where MediaRecorder audio
+                // support is limited.
+                if (!audioBlob) {
+                  updateSttOverlay(
+                    [
+                      "STT2 (client) no-audio",
+                      `line: ${ln?.speaker || "?"}`,
+                      `local: ${textForServer}`,
+                      "note: no audio blob — MediaRecorder/audio capture not available in this browser"
+                    ].join("\n")
+                  );
+                  // Still do normal local cueing; this is debug-only.
+                  return;
+                }
+
+                // Normal server path when we *do* have audio.
+                (async () => {
+                  const startedAt = performance.now();
+                  const resp = await sendSttChunkToServer({
+                    audioBlob,
+                    scriptId: safeScriptId || undefined,
+                    sceneId: safeSceneId || undefined,
+                    lineId: safeLineId || undefined
+                  });
+                  const dur = Math.round(performance.now() - startedAt);
+
+                  if (!resp || resp.ok !== true) {
+                    const errCode = resp && typeof resp.error === "string" ? resp.error : "unknown";
+                    const msg =
+                      resp && typeof resp.message === "string"
+                        ? resp.message
+                        : "";
+                    updateSttOverlay(
+                      [
+                        "STT2 (server) error",
+                        `line: ${ln?.speaker || "?"}`,
+                        `local: ${textForServer}`,
+                        `error: ${errCode}`,
+                        msg ? `message: ${msg.slice(0, 160)}` : "",
+                        `latency: ${dur} ms`,
+                      ].filter(Boolean).join("\n")
+                    );
+                    return;
+                  }
+
+                  const remoteText = String(resp.text || resp.transcript || "").trim();
+                  updateSttOverlay(
+                    [
+                      "STT2 (server) OK",
+                      `line: ${ln?.speaker || "?"}`,
+                      `local: ${textForServer}`,
+                      `server: ${remoteText || "(empty)"}`,
+                      `latency: ${dur} ms`,
+                    ].join("\n")
+                  );
+                })();
+              }
+            } catch (err) {
+              console.error("[stt2] mirror error", err);
+            }
+          }
 
           const dashy = endsWithDashy(ln.text); // only end-dash matters
           const shouldAdvance = readyForAdvance({
