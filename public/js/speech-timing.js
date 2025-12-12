@@ -43,17 +43,48 @@ export function readyForAdvance({
   lastAdvanceAt = 0,
   dashyMode = false
 } = {}) {
-  const min = expectedMinMsFor(text);
   const since = performance.now() - (lastAdvanceAt || 0);
   if (since <= AFTER_ADV_COOLDOWN_MS) return false;
 
-  const silentOk = isSilentNow && elapsedMs > Math.min(min, 800);
-  const timeOk = elapsedMs > min;
+  const t = (text || "").trim();
+  const min = expectedMinMsFor(t);
 
-  const ratio = progressRatio(text, interim);
-  const dashAtEnd = dashyMode && endsWithDashy(text);
-  const dashCutIn = dashAtEnd && ratio >= 0.30 && isSilentNow && elapsedMs > 140;
+  const interimNorm = (interim || "").trim();
+  const hasTranscript = interimNorm.length > 0;
+
+  const charLen = t.length;
+  const sentenceCount = t.split(/[.!?]/).filter(s => s.trim().length > 0).length;
+  const isComplex = charLen > 60 || sentenceCount > 1;
+
+  let silentThreshold;
+  let timeThreshold;
+
+  if (!isComplex) {
+    // Preserve previous behavior for short/simple lines.
+    silentThreshold = Math.min(min, 800);
+    timeThreshold = min;
+  } else if (hasTranscript) {
+    // We have speech recognition: be slightly stricter but still responsive.
+    silentThreshold = Math.max(min, 900);
+    timeThreshold = Math.round(min * 1.2);
+  } else {
+    // No transcript (iOS case): be conservative to avoid cutting off multi-sentence lines.
+    silentThreshold = Math.max(Math.round(min * 1.4), 1400);
+    timeThreshold = Math.round(min * 1.6);
+  }
+
+  const silentOk = isSilentNow && elapsedMs > silentThreshold;
+  const timeOk = hasTranscript && elapsedMs > timeThreshold;
+
+  const ratio = progressRatio(t, interimNorm);
+
+  // Treat dash-ending lines the same as everything else for now.
+  // This avoids "hanging" on lines like:
+  //   "Or happier. A time when you were—"
+  //
+  // If we want a special dash rule later, we can reintroduce it with
+  // much softer thresholds; but the priority is never getting stuck.
   const interimOk = ratio >= 0.72;
 
-  return dashCutIn || silentOk || timeOk || interimOk;
+  return silentOk || timeOk || interimOk;
 }

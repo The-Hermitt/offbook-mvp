@@ -1,14 +1,17 @@
+import "dotenv/config";
 import express, { Request, Response } from "express";
 import cors from "cors";
 import path from "path";
+import * as fs from "fs";
 import multer from "multer";
 import { createRequire } from "module";
 import cookieParser from "cookie-parser";
 import cookieSession from "cookie-session";
 import Stripe from "stripe";
-import authRouter, { noteRenderComplete } from "./routes/auth";
+import authRouter, { getPasskeySession, noteRenderComplete } from "./routes/auth";
 import db from "./lib/db";
 import { addUserCredits, getAvailableCredits } from "./lib/credits";
+import { isSttEnabled, transcribeChunk } from "./lib/stt";
 import { ensureAuditTable, makeAuditMiddleware } from "./lib/audit";
 import { makeRateLimiters } from "./middleware/rateLimit";
 
@@ -21,6 +24,31 @@ const stripe =
     ? new Stripe(STRIPE_SECRET_KEY)
     : null;
 const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || "";
+<<<<<<< HEAD
+=======
+
+function stripDataUrlPrefix(data: string): { base64: string; mimeFromHeader?: string } {
+  const trimmed = data.trim();
+  if (!trimmed.startsWith("data:")) {
+    return { base64: trimmed };
+  }
+
+  const commaIndex = trimmed.indexOf(",");
+  if (commaIndex === -1) {
+    // Malformed data URL; just return as-is
+    return { base64: trimmed };
+  }
+
+  const header = trimmed.slice(5, commaIndex); // between "data:" and ","
+  // header example: "audio/webm;codecs=opus;base64"
+  const parts = header.split(";");
+  const mimePart = parts[0]?.trim();
+  const mimeFromHeader = mimePart && mimePart.length > 0 ? mimePart : undefined;
+
+  const base64 = trimmed.slice(commaIndex + 1);
+  return { base64, mimeFromHeader };
+}
+>>>>>>> feature/pwa-auth
 
 // --- tiny helper: safe fetch with timeout ---
 async function fetchWithTimeout(input: RequestInfo, init: RequestInit & { timeoutMs?: number } = {}) {
@@ -140,6 +168,13 @@ app.post("/billing/create_checkout", express.json(), async (req: Request, res: R
       });
     }
 
+    const { passkeyLoggedIn, userId } = getPasskeySession(req);
+    if (!passkeyLoggedIn || !userId) {
+      return res.status(401).json({
+        error: "Sign in with a passkey before purchasing credits.",
+      });
+    }
+
     const successUrl =
       process.env.STRIPE_SUCCESS_URL ||
       "https://example.com/offbook-success";
@@ -157,7 +192,11 @@ app.post("/billing/create_checkout", express.json(), async (req: Request, res: R
       ],
       success_url: successUrl,
       cancel_url: cancelUrl,
-      client_reference_id: planId,
+      client_reference_id: userId,
+      metadata: {
+        userId,
+        planId,
+      },
     });
 
     console.log("[billing] stripe checkout session=%s plan=%s", session.id, planId);
@@ -229,20 +268,41 @@ app.post(
       if (eventType === "checkout.session.completed") {
         const session = event.data.object as Stripe.Checkout.Session;
 
+<<<<<<< HEAD
+=======
+        const userIdFromClientRef = session.client_reference_id;
+        const userIdFromMetadata =
+          (session.metadata && (session.metadata as any).userId) || null;
+        const userId = (userIdFromClientRef || userIdFromMetadata || "").toString().trim();
+
+        if (!userId) {
+          console.warn("Stripe webhook: missing userId on session", session.id);
+          return res.json({ received: true });
+        }
+
+>>>>>>> feature/pwa-auth
         // For now we hard-code the plan → credits mapping.
         // "credits-100" → 100 credits; adjust later if we add more plans.
         const creditsToGrant = 100;
 
+<<<<<<< HEAD
         const uid = "solo-tester";
 
         const updated = await addUserCredits(uid, creditsToGrant);
+=======
+        const updated = await addUserCredits(userId, creditsToGrant);
+>>>>>>> feature/pwa-auth
 
         const totalCredits = updated.total_credits;
         const usedCredits = updated.used_credits;
         const availableCredits = getAvailableCredits(updated);
 
         console.log("[billing] webhook credited", {
+<<<<<<< HEAD
           userId: uid,
+=======
+          userId,
+>>>>>>> feature/pwa-auth
           creditsAdded: creditsToGrant,
           totalCredits,
           usedCredits,
@@ -251,7 +311,11 @@ app.post(
         });
       }
 
+<<<<<<< HEAD
       return res.json({ ok: true, received: true });
+=======
+      return res.json({ received: true });
+>>>>>>> feature/pwa-auth
     } catch (e: any) {
       console.error("[billing] webhook error", e);
       return res.status(500).json({ ok: false, error: "webhook_error" });
@@ -276,6 +340,8 @@ const mem = {
   renders: new Map<string, RenderJob>(),
   assets: new Map<string, Buffer>(), // id -> MP3 bytes (for renders and single-line TTS)
 };
+const ASSETS_DIR = path.join(process.cwd(), "assets");
+if (!fs.existsSync(ASSETS_DIR)) fs.mkdirSync(ASSETS_DIR, { recursive: true });
 const upload = multer({ storage: multer.memoryStorage() });
 
 function genId(prefix: string) {
@@ -438,6 +504,7 @@ function concatMp3(parts: Buffer[]): Buffer {
   return Buffer.concat(parts);
 }
 
+<<<<<<< HEAD
 function getUserIdForRequest(_req: Request): string {
   // TODO: Wire this to real auth/session when user ids are available.
   return "solo-tester";
@@ -491,6 +558,94 @@ function loadScriptFromDb(scriptId: string, userId: string): { title: string; sc
     };
   } catch (e: any) {
     console.error("[scripts] loadScriptFromDb failed", scriptId, e?.message || e);
+=======
+function getUserIdForRequest(req: Request): string {
+  try {
+    const { passkeyLoggedIn, userId } = getPasskeySession(req as any);
+    if (passkeyLoggedIn && userId && typeof userId === "string" && userId.trim()) {
+      return userId.trim();
+    }
+  } catch (e) {
+    console.warn("[auth] getUserIdForRequest: falling back to solo-tester", (e as any)?.message || e);
+  }
+  return "solo-tester";
+}
+
+function persistScriptToDb(
+  id: string,
+  userId: string,
+  title: string,
+  scenes: Scene[]
+): void {
+  try {
+    const cleanId = (id || "").trim();
+    if (!cleanId) return;
+
+    const cleanTitle = (title || "Sides").trim();
+    const safeScenes = Array.isArray(scenes) ? scenes : [];
+    const scenesJson = JSON.stringify(safeScenes);
+    const sceneCount = safeScenes.length;
+
+    const stmt = db.prepare(
+      `INSERT INTO scripts (id, user_id, title, scene_count, scenes_json, created_at, updated_at)
+       VALUES (@id, @user_id, @title, @scene_count, @scenes_json, datetime('now'), datetime('now'))
+       ON CONFLICT(id) DO UPDATE SET
+         user_id = excluded.user_id,
+         title = excluded.title,
+         scene_count = excluded.scene_count,
+         scenes_json = excluded.scenes_json,
+         updated_at = datetime('now')`
+    );
+
+    stmt.run({
+      id: cleanId,
+      user_id: userId,
+      title: cleanTitle,
+      scene_count: sceneCount,
+      scenes_json: scenesJson,
+    });
+
+    console.log("[scripts] persisted script", {
+      id: cleanId,
+      userId,
+      title: cleanTitle,
+      sceneCount,
+    });
+  } catch (e: any) {
+    console.error("[scripts] failed to persist script", {
+      id,
+      title,
+      error: e?.message || e,
+    });
+  }
+}
+
+type ScriptRow = {
+  id: string;
+  user_id: string | null;
+  title: string | null;
+  scene_count: number | null;
+  scenes_json: string | null;
+  created_at?: string;
+  updated_at?: string;
+};
+
+const loadScriptByIdStmt = db.prepare<Pick<ScriptRow, "id">, ScriptRow>(`
+  SELECT id, user_id, title, scene_count, scenes_json, created_at, updated_at
+  FROM scripts
+  WHERE id = @id
+`);
+
+function loadScriptFromDb(id: string): ScriptRow | null {
+  if (!id || !id.trim()) return null;
+  try {
+    return loadScriptByIdStmt.get({ id: id.trim() }) ?? null;
+  } catch (e) {
+    console.error("[scripts] failed to load script from DB", {
+      id,
+      error: (e as any)?.message || e,
+    });
+>>>>>>> feature/pwa-auth
     return null;
   }
 }
@@ -503,23 +658,169 @@ app.get("/debug/tts_check", requireSecret, async (_req: Request, res: Response) 
   res.json(result);
 });
 
-// 2) Single-line TTS for Rehearse/Diagnostics
+// 2) Voices probe for UI (curated list; UI will accept any entries)
+app.get("/debug/voices_probe", requireSecret, (_req: Request, res: Response) => {
+  res.json({
+    ok: true,
+    voices: ["alloy", "ash", "ballad", "coral", "echo", "fable", "onyx", "nova", "sage", "shimmer", "verse"],
+  });
+});
+
+// 3) Single-line TTS for Rehearse/Diagnostics
 app.post("/debug/tts_line", requireSecret, async (req: Request, res: Response) => {
   try {
     if (!OPENAI_API_KEY) return res.status(500).json({ error: "OPENAI_API_KEY not set" });
-    const voice = String((req.body as any)?.voice || "alloy");
+    const VOICES = ["alloy", "ash", "ballad", "coral", "echo", "fable", "onyx", "nova", "sage", "shimmer", "verse"];
+    const LEGACY_VOICES = new Set(["alloy", "echo", "fable", "onyx", "nova", "shimmer"]);
+    const voiceRaw = String((req.body as any)?.voice || "alloy").trim();
+    const voice = VOICES.includes(voiceRaw) ? voiceRaw : "alloy";
+    const modelRaw = String((req.body as any)?.model || "tts-1");
+    const allowedModels = new Set(["tts-1", "tts-1-hd", "gpt-4o-mini-tts"]);
+    let model = allowedModels.has(modelRaw) ? modelRaw : "tts-1";
+    if (VOICES.includes(voice) && !LEGACY_VOICES.has(voice)) {
+      model = "gpt-4o-mini-tts";
+    }
     const text = String((req.body as any)?.text || "").trim();
     if (!text) return res.status(400).json({ error: "missing text" });
 
-    const buf = await openaiTts(text, voice, "tts-1");
+    const buf = await openaiTts(text, voice, model);
     const id = genId("tts");
     mem.assets.set(id, buf);
-    return res.json({ url: `/api/assets/${id}` });
+    return res.json({ ok: true, url: `/api/assets/${id}` });
   } catch (e: any) {
     const msg = e?.message || String(e);
     return res.status(500).json({ error: msg.slice(0, 200) });
   }
 });
+
+// STT stub: accept a small audio chunk and return a dummy transcript.
+// This does NOT call OpenAI yet; it's only to prove wiring.
+app.post(
+  "/debug/stt_transcribe_chunk",
+  requireSecret,
+  audit("/debug/stt_transcribe_chunk"),
+  express.json({ limit: "2mb" }),
+  async (req: Request, res: Response) => {
+    try {
+      const body = (req as any).body || {};
+      const rawAudioB64 = typeof body.audio_b64 === "string" ? body.audio_b64.trim() : "";
+
+      if (!rawAudioB64) {
+        return res.status(400).json({
+          ok: false,
+          error: "missing_audio",
+        });
+      }
+
+      const { base64: cleanBase64, mimeFromHeader } = stripDataUrlPrefix(rawAudioB64);
+
+      const mimeRaw =
+        typeof body.mime === "string" && body.mime.trim() ? (body.mime as string) : mimeFromHeader;
+
+      const mime = mimeRaw && mimeRaw.trim().length > 0 ? mimeRaw.trim() : "audio/webm";
+
+      const audioBuffer = Buffer.from(cleanBase64, "base64");
+      if (!audioBuffer || audioBuffer.length === 0) {
+        return res.status(400).json({
+          ok: false,
+          error: "invalid_audio",
+        });
+      }
+
+      console.log("[stt] /stt_transcribe_chunk request:", {
+        rawMime: body.mime || null,
+        headerMime: mimeFromHeader || null,
+        effectiveMime: mime,
+        hasDataUrlPrefix: rawAudioB64.startsWith("data:"),
+        base64Length: cleanBase64.length,
+        bytes: audioBuffer.length,
+      });
+
+      if (!isSttEnabled()) {
+        return res.status(200).json({
+          ok: false,
+          error: "stt_disabled",
+        });
+      }
+
+      const script_id =
+        typeof body.script_id === "string" ? body.script_id.trim() : "";
+      const scene_id =
+        typeof body.scene_id === "string" ? body.scene_id.trim() : "";
+      const line_id =
+        typeof body.line_id === "string" ? body.line_id.trim() : "";
+      void script_id;
+      void scene_id;
+      void line_id;
+
+      try {
+        const result = await transcribeChunk({
+          audio: audioBuffer,
+          mime,
+        });
+
+        return res.status(200).json({
+          ok: true,
+          text: result.text,
+          partial: false,
+        });
+      } catch (err: any) {
+        let code = "stt_failed";
+        let message: string | undefined;
+
+        const anyErr: any = err || {};
+        const oaiErr = anyErr.error || anyErr.response?.data?.error;
+
+        if (typeof oaiErr?.code === "string") {
+          code = oaiErr.code;
+        } else if (typeof anyErr.code === "string") {
+          code = anyErr.code;
+        } else if (typeof anyErr.message === "string") {
+          code = anyErr.message;
+        }
+
+        if (typeof oaiErr?.message === "string") {
+          message = oaiErr.message;
+        } else if (typeof anyErr.message === "string") {
+          message = anyErr.message;
+        }
+
+        console.error("[stt] transcribe_chunk error:", {
+          code,
+          message,
+          mime,
+          bytes: audioBuffer.length,
+          raw: anyErr,
+        });
+
+        return res.status(500).json({
+          ok: false,
+          error: code,
+          message,
+          meta: {
+            mime,
+            bytes: audioBuffer.length,
+          },
+        });
+      }
+    } catch (err: any) {
+      console.error("[stt] transcribe_chunk error:", err);
+      const code =
+        err?.code ||
+        err?.error?.code ||
+        err?.status ||
+        "stt_failed";
+      const message =
+        err?.error?.message || err?.message || "Audio file might be corrupted or unsupported";
+
+      res.json({
+        ok: false,
+        error: code,
+        message,
+      });
+    }
+  }
+);
 /* ---------------------------------------------------------- */
 
 app.get("/api/my_scripts", async (req: Request, res: Response) => {
@@ -527,6 +828,7 @@ app.get("/api/my_scripts", async (req: Request, res: Response) => {
     const userId = getUserIdForRequest(req);
 
     const stmt = db.prepare(
+<<<<<<< HEAD
       `SELECT id, title, scene_count, updated_at
        FROM scripts
        WHERE user_id = @user_id
@@ -541,6 +843,35 @@ app.get("/api/my_scripts", async (req: Request, res: Response) => {
       sceneCount: typeof row.scene_count === "number" ? row.scene_count : 0,
       updatedAt: row.updated_at,
     }));
+=======
+      `SELECT id, user_id, title, scene_count, updated_at
+       FROM scripts
+       ORDER BY datetime(updated_at) DESC`
+    );
+
+    const rows = stmt.all({}) as any[];
+
+    const seen = new Set<string>();
+    const scripts = rows
+      .filter((row) => {
+        if (!row || !row.id) return false;
+        if (seen.has(row.id)) return false;
+        seen.add(row.id);
+        return true;
+      })
+      .map((row) => ({
+        id: row.id,
+        title: row.title,
+        sceneCount:
+          typeof row.scene_count === "number" ? row.scene_count : 0,
+        updatedAt: row.updated_at,
+      }));
+
+    console.log("[scripts] /api/my_scripts", {
+      userId,
+      count: scripts.length,
+    });
+>>>>>>> feature/pwa-auth
 
     res.json({ scripts });
   } catch (e: any) {
@@ -549,6 +880,53 @@ app.get("/api/my_scripts", async (req: Request, res: Response) => {
   }
 });
 
+<<<<<<< HEAD
+=======
+app.get("/api/scripts/:id", (req: Request, res: Response) => {
+  const id = (req.params.id || "").trim();
+  if (!id) {
+    return res.status(400).json({ error: "missing_id" });
+  }
+
+  const row = loadScriptFromDb(id);
+  let script = mem.scripts.get(id);
+
+  if (!script && row) {
+    let scenes: Scene[] = [];
+    if (row.scenes_json) {
+      try {
+        scenes = JSON.parse(row.scenes_json) as Scene[];
+      } catch (e) {
+        console.error("[scripts] failed to parse scenes_json from DB", {
+          id,
+          error: (e as any)?.message || e,
+        });
+      }
+    }
+
+    script = {
+      id: row.id,
+      title: row.title || "Sides",
+      scenes,
+      voices: {},
+    };
+
+    mem.scripts.set(id, script);
+  }
+
+  if (!script) {
+    return res.status(404).json({ error: "not_found" });
+  }
+
+  return res.json({
+    id: script.id,
+    title: script.title,
+    scenes: script.scenes,
+    voices: script.voices || {},
+  });
+});
+
+>>>>>>> feature/pwa-auth
 app.post("/api/scripts/:id/save", async (req: Request, res: Response) => {
   try {
     const userId = getUserIdForRequest(req);
@@ -582,7 +960,11 @@ app.post("/api/scripts/:id/save", async (req: Request, res: Response) => {
     const finalTitle = rawTitle || existingTitle || "Sides";
 
     // Persist new title + scenes to DB
+<<<<<<< HEAD
     persistScriptToDb(id, finalTitle, scenes);
+=======
+    persistScriptToDb(id, userId, finalTitle, scenes);
+>>>>>>> feature/pwa-auth
 
     return res.json({ ok: true });
   } catch (e: any) {
@@ -593,13 +975,18 @@ app.post("/api/scripts/:id/save", async (req: Request, res: Response) => {
 
 app.delete("/api/scripts/:id", async (req: Request, res: Response) => {
   try {
+<<<<<<< HEAD
     const userId = getUserIdForRequest(req);
+=======
+    const userId = getUserIdForRequest(req); // keep this for logging if needed later
+>>>>>>> feature/pwa-auth
     const id = (req.params.id || "").trim();
 
     if (!id) {
       return res.status(400).json({ error: "missing_script_id" });
     }
 
+<<<<<<< HEAD
     const stmt = db.prepare(
       "DELETE FROM scripts WHERE id = @id AND user_id = @user_id"
     );
@@ -607,6 +994,13 @@ app.delete("/api/scripts/:id", async (req: Request, res: Response) => {
 
     if (info.changes === 0) {
       // Nothing deleted: either it never existed or belongs to another user.
+=======
+    const stmt = db.prepare("DELETE FROM scripts WHERE id = @id");
+    const info = stmt.run({ id });
+
+    if (info.changes === 0) {
+      // Nothing deleted: either it never existed or was already removed.
+>>>>>>> feature/pwa-auth
       return res.status(404).json({ ok: false, error: "script_not_found" });
     }
 
@@ -624,6 +1018,7 @@ function mountFallbackDebugRoutes() {
     res.json({ ok: true, marker: "fallback/server.ts" });
   });
 
+<<<<<<< HEAD
   app.post("/debug/upload_script_text", requireSecret, audit("/debug/upload_script_text"), (req: Request, res: Response) => {
     const title = String(req.body?.title || "Script");
     const text = String(req.body?.text || "");
@@ -664,11 +1059,22 @@ function mountFallbackDebugRoutes() {
       }
 
       text = normalizePdfText(text);
+=======
+  app.post(
+    "/debug/upload_script_text",
+    requireSecret,
+    audit("/debug/upload_script_text"),
+    (req: Request, res: Response) => {
+      const userId = getUserIdForRequest(req);
+      const title = String(req.body?.title || "Script");
+      const text = String(req.body?.text || "");
+      const id = genId("scr");
+>>>>>>> feature/pwa-auth
       const scenes = parseTextToScenes(title, text);
       const speakers = uniqueSpeakers(scenes[0]);
 
-      const id = genId("scr");
       mem.scripts.set(id, { id, title, scenes, voices: {} });
+<<<<<<< HEAD
       persistScriptToDb(id, title, scenes);
       return res.json({ script_id: id, scene_count: scenes.length, speakers, textLen: text.length });
     } catch (e: any) {
@@ -682,6 +1088,110 @@ function mountFallbackDebugRoutes() {
     }
   });
 
+=======
+      persistScriptToDb(id, userId, title, scenes);
+
+      res.json({ script_id: id, scene_count: scenes.length, speakers });
+    }
+  );
+
+  // Robust PDF (text) import
+  app.post(
+    "/debug/upload_script_upload",
+    requireSecret,
+    audit("/debug/upload_script_upload"),
+    upload.single("pdf"),
+    async (req: Request, res: Response) => {
+      const userId = getUserIdForRequest(req);
+      const title = String((req.body as any)?.title || "PDF");
+      const pdfBuf = (req as any).file?.buffer as Buffer | undefined;
+      if (!pdfBuf) return res.status(400).json({ error: "missing pdf file" });
+
+      try {
+        let pdfParseFn: any = null;
+        try {
+          const modA: any = await import("pdf-parse");
+          pdfParseFn = modA?.default || modA;
+        } catch {}
+        if (!pdfParseFn) {
+          const reqr = createRequire(import.meta.url);
+          const modB: any = reqr("pdf-parse");
+          pdfParseFn = modB?.default || modB;
+        }
+        if (typeof pdfParseFn !== "function") {
+          throw new Error("pdf-parse load failed (no function export)");
+        }
+
+        const data = await pdfParseFn(pdfBuf);
+        let text = String(data?.text || "");
+        const textLenRaw = text.length;
+
+        if (textLenRaw < 20) {
+          const id = genId("scr");
+          const scenes: Scene[] = [
+            {
+              id: genId("scn"),
+              title,
+              lines: [
+                {
+                  speaker: "SYSTEM",
+                  text: "PDF appears to be image-only. Paste script text for best parsing (OCR later).",
+                },
+              ],
+            },
+          ];
+          mem.scripts.set(id, { id, title, scenes, voices: {} });
+          persistScriptToDb(id, userId, title, scenes);
+          return res.json({
+            script_id: id,
+            scene_count: scenes.length,
+            note: "image-only",
+            textLen: textLenRaw,
+          });
+        }
+
+        text = normalizePdfText(text);
+        const scenes = parseTextToScenes(title, text);
+        const speakers = uniqueSpeakers(scenes[0]);
+
+        const id = genId("scr");
+        mem.scripts.set(id, { id, title, scenes, voices: {} });
+        persistScriptToDb(id, userId, title, scenes);
+        return res.json({
+          script_id: id,
+          scene_count: scenes.length,
+          speakers,
+          textLen: text.length,
+        });
+      } catch (e: any) {
+        const msg = (e?.message || String(e)).slice(0, 200);
+        console.error("[pdf] extract failed:", msg);
+        const id = genId("scr");
+        const scenes: Scene[] = [
+          {
+            id: genId("scn"),
+            title,
+            lines: [
+              {
+                speaker: "SYSTEM",
+                text: "Could not parse PDF text. Please paste script text. (Error logged on server.)",
+              },
+            ],
+          },
+        ];
+        mem.scripts.set(id, { id, title, scenes, voices: {} });
+        persistScriptToDb(id, userId, title, scenes);
+        return res.json({
+          script_id: id,
+          scene_count: scenes.length,
+          note: "parse-error",
+          error: msg,
+        });
+      }
+    }
+  );
+
+>>>>>>> feature/pwa-auth
   app.get(
     "/debug/scenes",
     requireSecret,
@@ -692,6 +1202,7 @@ function mountFallbackDebugRoutes() {
         return res.status(400).json({ error: "missing_script_id" });
       }
 
+<<<<<<< HEAD
       // 1) Try in-memory first
       let s = mem.scripts.get(script_id);
       if (s && Array.isArray(s.scenes)) {
@@ -719,6 +1230,78 @@ function mountFallbackDebugRoutes() {
 
       // 3) Nothing found
       return res.status(404).json({ error: "not_found" });
+=======
+      let script = mem.scripts.get(script_id);
+      const row = loadScriptFromDb(script_id);
+
+      if (!script && row) {
+        let scenes: Scene[] = [];
+        if (row.scenes_json) {
+          try {
+            scenes = JSON.parse(row.scenes_json) as Scene[];
+          } catch (e) {
+            console.error("[scripts] failed to parse scenes_json from DB", {
+              id: script_id,
+              error: (e as any)?.message || e,
+            });
+          }
+        }
+
+        script = {
+          id: row.id,
+          title: row.title || "Sides",
+          scenes,
+          voices: {},
+        };
+
+        mem.scripts.set(script_id, script);
+      }
+
+      if (!script) {
+        return res.status(404).json({ error: "not_found" });
+      }
+
+      return res.json({ script_id, scenes: script.scenes });
+    }
+  );
+
+  app.post(
+    "/debug/stt",
+    requireSecret,
+    audit("/debug/stt"),
+    (req: Request, res: Response) => {
+      try {
+        const body = (req.body || {}) as any;
+        const script_id =
+          typeof body.script_id === "string" ? body.script_id.trim() : "";
+        const scene_id =
+          typeof body.scene_id === "string" ? body.scene_id.trim() : "";
+        const line_id =
+          typeof body.line_id === "string" ? body.line_id.trim() : "";
+        const text = typeof body.text === "string" ? body.text : "";
+        const audio_ms =
+          typeof body.audio_ms === "number" && Number.isFinite(body.audio_ms)
+            ? body.audio_ms
+            : null;
+
+        // For now, pretend STT heard exactly the provided text, or a stub.
+        const transcript = text.trim() || "stub transcript";
+
+        return res.json({
+          ok: true,
+          script_id,
+          scene_id,
+          line_id,
+          transcript,
+          confidence: 0.9,
+          received_ms: audio_ms,
+          decided_at: Date.now(),
+        });
+      } catch (err) {
+        console.error("[debug/stt] error:", err);
+        return res.status(500).json({ ok: false, error: "stt_stub_failed" });
+      }
+>>>>>>> feature/pwa-auth
     }
   );
 
@@ -820,15 +1403,6 @@ function mountFallbackDebugRoutes() {
     });
   });
 
-  app.get("/api/assets/:render_id", (req: Request, res: Response) => {
-    const rid = String(req.params.render_id || "");
-    const buf = mem.assets.get(rid);
-    if (!buf) return res.status(404).json({ error: "asset not found" });
-    res.setHeader("Content-Type", "audio/mpeg");
-    res.setHeader("Cache-Control", "no-store");
-    res.send(buf);
-  });
-
   console.log("[fallback] /debug/* routes active (in-memory, robust PDF import + strict speaker guard)");
 }
 
@@ -850,6 +1424,68 @@ async function tryMountProjectHttpRoutes() {
   }
   return false;
 }
+
+// Always-on assets route (in-memory first, then disk)
+app.get("/api/assets/:render_id", (req: Request, res: Response) => {
+  const rid = String(req.params.render_id || "");
+  const range = req.headers.range;
+
+  const sendBuffer = (buf: Buffer) => {
+    const total = buf.length;
+    if (range && range.startsWith("bytes=")) {
+      const parts = range.replace(/bytes=/, "").split("-");
+      const start = Number(parts[0]) || 0;
+      const end = parts[1] ? Number(parts[1]) : total - 1;
+      if (start >= total || start < 0 || start > end) {
+        res.status(416).set("Content-Range", `bytes */${total}`).end();
+        return;
+      }
+      const clampedEnd = Math.min(end, total - 1);
+      const chunk = buf.subarray(start, clampedEnd + 1);
+      res.status(206);
+      res.setHeader("Content-Range", `bytes ${start}-${clampedEnd}/${total}`);
+      res.setHeader("Accept-Ranges", "bytes");
+      res.setHeader("Content-Length", chunk.length);
+      res.setHeader("Content-Type", "audio/mpeg");
+      res.setHeader("Cache-Control", "no-store");
+      return res.end(chunk);
+    }
+    res.setHeader("Content-Type", "audio/mpeg");
+    res.setHeader("Cache-Control", "no-store");
+    res.setHeader("Content-Length", total);
+    return res.end(buf);
+  };
+
+  const inMem = mem.assets.get(rid);
+  if (inMem) return sendBuffer(inMem);
+
+  const filePath = path.join(ASSETS_DIR, `${rid}.mp3`);
+  if (fs.existsSync(filePath)) {
+    const stat = fs.statSync(filePath);
+    const total = stat.size;
+    res.setHeader("Content-Type", "audio/mpeg");
+    res.setHeader("Cache-Control", "no-store");
+    if (range && range.startsWith("bytes=")) {
+      const parts = range.replace(/bytes=/, "").split("-");
+      const start = Number(parts[0]) || 0;
+      const end = parts[1] ? Number(parts[1]) : total - 1;
+      if (start >= total || start < 0 || start > end) {
+        res.status(416).set("Content-Range", `bytes */${total}`).end();
+        return;
+      }
+      const clampedEnd = Math.min(end, total - 1);
+      res.status(206);
+      res.setHeader("Content-Range", `bytes ${start}-${clampedEnd}/${total}`);
+      res.setHeader("Accept-Ranges", "bytes");
+      res.setHeader("Content-Length", clampedEnd - start + 1);
+      return fs.createReadStream(filePath, { start, end: clampedEnd }).pipe(res);
+    }
+    res.setHeader("Content-Length", total);
+    return fs.createReadStream(filePath).pipe(res);
+  }
+
+  return res.status(404).json({ error: "asset not found" });
+});
 
 await tryMountProjectHttpRoutes().then((mounted) => { if (!mounted) mountFallbackDebugRoutes(); });
 

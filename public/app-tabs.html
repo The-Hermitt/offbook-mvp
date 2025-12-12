@@ -517,8 +517,27 @@
         grid-template-columns: repeat(4, 1fr);
       }
     }
+
+    #screen-settings .settings-row{
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:10px;
+      padding:6px 0;
+    }
+    #screen-settings .settings-label{
+      font-size:13px;
+      color:var(--muted);
+      letter-spacing:.2px;
+    }
+    #screen-settings .settings-value{
+      font-size:14px;
+      font-weight:700;
+      text-align:right;
+      word-break:break-word;
+    }
     
-    /* Rehearse render status — keep visible and readable */
+    /* Rehearse render status - keep visible and readable */
     #rehearseRenderStatus{
       display:block;
       margin-top:6px;
@@ -1481,6 +1500,10 @@ JANE: Ready?"></textarea>
         <div class="spacer8"></div>
         <pre id="authStatus" class="status" aria-live="polite"></pre>
         <div id="authStatusFriendly" class="small" style="display:none"></div>
+        <div class="settings-row">
+          <div class="settings-label">Signed in as</div>
+          <div class="settings-value" id="settings-session-user-id">Checking...</div>
+        </div>
         <div id="entitlementLine" class="small" style="display:none"></div>
         <div id="devEntButtons" style="display:none; margin-top:6px;">
           <button id="btnDevGrantCredits" class="btn">Grant 200 test credits</button>
@@ -1570,8 +1593,12 @@ JANE: Ready?"></textarea>
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 
   <!-- App -->
-  <script type="module">
-    import { expectedMinMsFor, AFTER_ADV_COOLDOWN_MS, isSpeaking, endsWithDashy, readyForAdvance } from "./js/speech-timing.js";
+    <script type="module">
+    import { expectedMinMsFor, AFTER_ADV_COOLDOWN_MS, isSpeaking, endsWithDashy, readyForAdvance, progressRatio } from "./js/speech-timing.js";
+    // Maximum time we’ll sit on a single “my” line once we’ve heard speech
+    // before we force an advance. Shared by Rehearse and Record so they
+    // behave the same. Tuned to stop “ghosting” without feeling rushed.
+    const MAX_MY_LINE_MS = 9000; // ~9s safety net
     const boot = () => {
       const qs = new URLSearchParams(location.search);
       const cookieSecret = (() => {
@@ -1614,16 +1641,193 @@ JANE: Ready?"></textarea>
         const baseHeaders = init?.headers instanceof Headers ? init.headers : init?.headers;
         const headers = new Headers(baseHeaders || {});
         const activeSecret = window.__OB_SECRET__;
-        if (activeSecret) headers.set("X-Shared-Secret", activeSecret);
-        if (isNgrokHost) headers.set("ngrok-skip-browser-warning", "true");
-        next.headers = headers;
-        return next;
+      if (activeSecret) headers.set("X-Shared-Secret", activeSecret);
+      if (isNgrokHost) headers.set("ngrok-skip-browser-warning", "true");
+      next.headers = headers;
+      return next;
+    }
+    // --- Dev flag: enable server STT plumbing when ?stt2=1 is present ---
+    const STT2_ENABLED = new URLSearchParams(window.location.search).has("stt2");
+    // Rolling mic recorder for STT2 debug (audio → /debug/stt_transcribe_chunk)
+    let stt2Recorder = null;
+    // Safari / MediaRecorder usually puts the WebM header in the first chunk.
+    // We keep that header chunk forever and only roll the *body* chunks.
+    let stt2HeaderChunk = null;
+    let stt2BodyChunks = [];
+    let stt2Mime = "";
+
+    let sttOverlayEl = null;
+    function ensureSttOverlay() {
+      if (!STT2_ENABLED) return null;
+      if (sttOverlayEl) return sttOverlayEl;
+      const el = document.createElement("div");
+      el.id = "stt-debug-overlay";
+      el.style.position = "fixed";
+      el.style.left = "0";
+      el.style.right = "0";
+      el.style.bottom = "0";
+      el.style.padding = "6px 10px";
+      el.style.fontSize = "12px";
+      el.style.background = "rgba(0,0,0,0.85)";
+      el.style.color = "#fff";
+      el.style.zIndex = "9999";
+      el.style.pointerEvents = "none";
+      el.style.maxHeight = "35vh";
+      el.style.overflow = "auto";
+      el.style.fontFamily = "system-ui, -apple-system, BlinkMacSystemFont, sans-serif";
+      el.style.whiteSpace = "pre-wrap";
+      document.body.appendChild(el);
+      sttOverlayEl = el;
+      return el;
+    }
+
+    function updateSttOverlay(text) {
+      if (!STT2_ENABLED) return;
+      const el = ensureSttOverlay();
+      if (!el) return;
+      el.textContent = text || "";
+    }
+    async function sendSttChunkToServer(opts = {}) {
+      // opts: { audioBlob | audioBuffer, mime?, scriptId?, sceneId?, lineId? }
+      const audioBlob = opts.audioBlob || null;
+      const audioBuffer = opts.audioBuffer || null;
+      const mime = opts.mime || "audio/webm";
+
+      let blob;
+      if (audioBlob instanceof Blob) {
+        blob = audioBlob;
+      } else if (audioBuffer instanceof ArrayBuffer || ArrayBuffer.isView(audioBuffer)) {
+        blob = new Blob([audioBuffer], { type: mime });
+      } else {
+        console.warn("[stt] sendSttChunkToServer called without audio");
+        return null;
       }
-      async function getSession() {
-        const res = await fetch("/auth/session", withSecretHeaders());
-        if (!res.ok) throw new Error("session_fetch_failed");
-        return await res.json();
+
+      try {
+        const buf = await blob.arrayBuffer();
+        const bytes = new Uint8Array(buf);
+
+        // Browser-safe base64 encode
+        let binary = "";
+        for (let i = 0; i < bytes.length; i++) {
+          binary += String.fromCharCode(bytes[i]);
+        }
+        const audio_b64 = btoa(binary);
+
+        const payload = {
+          audio_b64,
+          mime: blob.type || mime
+        };
+        if (opts.scriptId) payload.script_id = opts.scriptId;
+        if (opts.sceneId) payload.scene_id = opts.sceneId;
+        if (opts.lineId) payload.line_id = opts.lineId;
+
+        const res = await fetch(
+          "/debug/stt_transcribe_chunk",
+          withSecretHeaders({
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
+          })
+        );
+
+        // Always try to return a payload so the overlay can show details.
+        let data;
+        try {
+          data = await res.json();
+        } catch (err) {
+          console.error("[stt] failed to parse JSON", err);
+          data = null;
+        }
+
+        if (!res.ok) {
+          console.error("[stt] HTTP", res.status, data);
+          return {
+            ok: false,
+            error: `http_${res.status}`,
+            message: (data && data.message) || "Non-200 HTTP from /debug/stt_transcribe_chunk",
+          };
+        }
+
+        if (!data || typeof data.ok !== "boolean") {
+          console.warn("[stt] bad payload", data);
+          return {
+            ok: false,
+            error: "bad_payload",
+            message: "Missing or invalid { ok, text } in STT response",
+          };
+        }
+
+        return data; // e.g. { ok: true, text, partial } or { ok: false, error, message }
+      } catch (err) {
+        console.error("[stt] sendSttChunkToServer failed", err);
+        return null;
       }
+    }
+    async function callServerSttStub(opts = {}){
+      const scriptId = opts.scriptId || opts.script_id || null;
+      const sceneId  = opts.sceneId  || opts.scene_id  || null;
+      const lineId   = opts.lineId   || opts.line_id   || null;
+      const text     = typeof opts.text === "string" ? opts.text : "";
+      const audioMs  = (typeof opts.audioMs === "number" && Number.isFinite(opts.audioMs))
+        ? opts.audioMs
+        : null;
+
+      try{
+        const res = await fetch(
+          "/debug/stt",
+          withSecretHeaders({
+            method: "POST",
+            headers: { "Content-Type":"application/json" },
+            body: JSON.stringify({
+              script_id: scriptId,
+              scene_id:  sceneId,
+              line_id:   lineId,
+              text,
+              audio_ms:  audioMs
+            })
+          })
+        );
+        if(!res.ok) throw new Error("stt_http_failed");
+        const data = await res.json();
+        if(!data || data.ok !== true) return null;
+        return data; // { ok, script_id, scene_id, line_id, transcript, confidence, ... }
+      }catch(err){
+        console.error("[stt] stub failed", err);
+        return null;
+      }
+    }
+    async function getSession() {
+      const res = await fetch("/auth/session", withSecretHeaders());
+      if (!res.ok) throw new Error("session_fetch_failed");
+      return await res.json();
+    }
+    // Returns a stable key for the currently signed-in user, or null if no user is signed in.
+    function getSignedInUserKey() {
+      const auth = (typeof S !== "undefined" && S) ? S.auth : null;
+      if (!auth) return null;
+
+      // Only treat the user as "signed in" when the auth/session says so.
+      const isLoggedIn = !!(
+        (auth.passkey && auth.passkey.loggedIn) ||
+        (auth.dev && auth.dev.loggedIn) ||
+        (auth.cookieSession && auth.cookieSession.loggedIn)
+      );
+      if (!isLoggedIn) return null;
+
+      const user = auth.user;
+      if (!user) return null;
+
+      const id =
+        user.id ||
+        user.userId ||
+        user.user_id ||
+        user.email ||
+        user.emailAddress ||
+        null;
+
+      return id ? `user:${id}` : null;
+    }
       function openPaywall(message){
         const m = document.getElementById("paywallMsg");
         if (m && message) m.textContent = message;
@@ -1744,8 +1948,43 @@ JANE: Ready?"></textarea>
       async function refreshAuthUI() {
         try {
           const s = await getSession();
+          if (typeof S !== "undefined") {
+            S.auth = s;
+            if (S.auth && !S.auth.user && (s?.userId || s?.user_id)) {
+              S.auth.user = { id: s.userId || s.user_id };
+            }
+          }
           const inviteBlock = document.getElementById("inviteBlock");
           show(inviteBlock, Boolean(s?.hasInviteCode));
+
+          const userIdEl = document.getElementById("settings-session-user-id");
+          if (userIdEl) {
+            const rawUserId =
+              (s && s.userId) ||
+              (s && s.user_id) ||
+              (s && s.user && (s.user.id || s.user.email)) ||
+              null;
+
+            let displayText = "Not signed in";
+
+            if (rawUserId) {
+              const rawStr = String(rawUserId);
+
+              // For passkey-style IDs (e.g. "passkey:LGluR9jLzKorF-…"),
+              // show a clean, human label instead of the long token.
+              if (rawStr.startsWith("passkey:")) {
+                displayText = "Passkey (this device)";
+              } else {
+                // For any other kind of ID (email, etc.), show it as-is.
+                displayText = rawStr;
+              }
+            }
+
+            userIdEl.textContent = displayText;
+
+            // Optional: keep the raw ID available for debugging (not visible in UI)
+            userIdEl.setAttribute("data-raw-user-id", rawUserId || "");
+          }
 
           // Decide whether we're in dev view (also used for debugging output)
           const isDev = new URLSearchParams(location.search).has("dev");
@@ -1840,6 +2079,22 @@ JANE: Ready?"></textarea>
             }
             // Hide any old toast until user taps the button again
             addToast.style.display = "none";
+          }
+
+          if (typeof S !== "undefined") {
+            try {
+              setTimeout(() => {
+                try {
+                  loadTakes().catch((err) => {
+                    console.warn("[offbook] gallery refresh failed", err);
+                  });
+                } catch (err) {
+                  console.warn("[offbook] gallery refresh failed", err);
+                }
+              }, 0);
+            } catch (err) {
+              console.warn("[offbook] gallery refresh failed", err);
+            }
           }
         } catch {
           // soft-fail; keep UI as-is
@@ -2169,7 +2424,6 @@ JANE: Ready?"></textarea>
       wireAuthGateUI();
       maybeShowAuthGate();
 
-      refreshAuthUI();
       function wireSettingsPasskeyButtons(){
         const btnReg = document.getElementById("btnRegisterPasskey");
         const btnIn  = document.getElementById("btnSignIn");
@@ -2242,7 +2496,10 @@ JANE: Ready?"></textarea>
               console.warn("redirect to checkout failed", e);
             }
           } else {
-            toast.textContent = "Billing not configured yet. (Stripe test.)";
+            const errMsg =
+              (data && (data.error || data.message)) ||
+              "Billing not configured yet. (Stripe test.)";
+            toast.textContent = "Billing error: " + errMsg;
           }
           } catch (e) {
             console.warn("billing/create_checkout failed", e);
@@ -2287,6 +2544,8 @@ JANE: Ready?"></textarea>
         if(typeof window.__OB_MIC_TRACK === "undefined") window.__OB_MIC_TRACK = null;
         if(typeof window.__OB_AP === "undefined") window.__OB_AP = null;
         if(typeof window.isRecording === "undefined") window.isRecording = false;
+        if(typeof window.__OB_STT2_RECORDER === "undefined") window.__OB_STT2_RECORDER = null;
+        if(typeof window.__OB_STT2_LAST_BLOB === "undefined") window.__OB_STT2_LAST_BLOB = null;
       }
       // Reader element singleton (idempotent)
       window.__OB_READER_EL = window.__OB_READER_EL
@@ -2596,7 +2855,8 @@ JANE: Ready?"></textarea>
       // --- Belt & suspenders guard (safe checks for the Record state object) ---
       const hasR = () => !!(typeof R !== "undefined" && R && typeof R === "object");
       // Tight mode when recording
-      const tightMode = () => (typeof R !== "undefined" && R && R.recording === true);
+      // For now, disable tight mode so Record uses the same timing as Rehearse.
+      const tightMode = () => false;
       const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform==='MacIntel' && navigator.maxTouchPoints>1);
 
       const mqlPortrait = window.matchMedia('(orientation: portrait)');
@@ -2703,7 +2963,7 @@ JANE: Ready?"></textarea>
           try{ startPreviewIfNeeded(); }catch{}
           try{ setRailStates(); }catch{}
         }else if(name==="gallery"){
-          renderGallery().catch(()=>{});
+          loadTakes().catch(()=>{});
         }
       }
       $$(".tabbar button").forEach(b=>b.addEventListener("click",()=>showScreen(b.dataset.tab)));
@@ -2812,7 +3072,13 @@ const savedStrip = document.getElementById("savedScriptsStrip");
         supportedVoices: OPENAI_VOICES.slice(),
         savedScripts: [],
         currentSceneIndex: 0,
+<<<<<<< HEAD
         activeTab: "import"
+=======
+        activeTab: "import",
+        auth: null,
+        galleryTakes: []
+>>>>>>> feature/pwa-auth
       };
       // savedScripts: { id: string; title: string; sceneCount: number; createdAt: number; updatedAt: number }[]
       if (typeof window !== "undefined") window.currentSceneId = S.script_id || null;
@@ -2880,6 +3146,11 @@ const savedStrip = document.getElementById("savedScriptsStrip");
         try { hydrateImportEditor(); } catch {}
       })();
 
+<<<<<<< HEAD
+=======
+      refreshAuthUI();
+
+>>>>>>> feature/pwa-auth
         // helpers
         const setStatus = msg => $("#status").textContent = msg || "";
         const setStatusPdf = msg => $("#statusPdf").textContent = msg || "";
@@ -3684,7 +3955,6 @@ const savedStrip = document.getElementById("savedScriptsStrip");
       }
 
       function stopAllAudioHard() {
-        try { window.speechSynthesis?.cancel(); } catch {}
         try { E?.rehearseAudio?.pause(); E.rehearseAudio.currentTime = 0; } catch {}
         try { R?.audio?.pause(); R.audio.currentTime = 0; } catch {}
         resetReaderActiveSources();
@@ -4007,20 +4277,6 @@ const savedStrip = document.getElementById("savedScriptsStrip");
       function wireSlots(){ $$('[data-add-button]',$("#lines")).forEach(btn=>btn.onclick=(ev)=>{ if(!S.editMode) return; ev.stopPropagation(); const slot=btn.closest('.inline-slot'); openInlineForm(slot, Number(slot.getAttribute("data-place"))); }); }
       function highlightCurrent(){ $$(".line",$("#lines")).forEach(el=>el.classList.remove("playing")); const cur=document.querySelector(`.line[data-i="${idx}"]`); if(cur){ cur.classList.add("playing"); cur.scrollIntoView({block:"center",behavior:(!S.editMode?"smooth":"auto")}); } }
 
-      // simple native TTS (watchdog)
-      function synthSpeak(text){
-        if(!window.speechSynthesis) return Promise.resolve();
-        window.speechSynthesis.cancel();
-        const u=new SpeechSynthesisUtterance(text);
-        const v=(window.speechSynthesis.getVoices()||[]).find(v=>/en(-|_)?/.test(v.lang));
-        if(v) u.voice=v;
-        u.rate=1.0; u.pitch=1.0;
-        const p=new Promise(res=>{ u.onend=()=>res(); u.onerror=()=>res(); });
-        window.speechSynthesis.speak(u);
-        const maxMs = Math.min(9000, Math.max(1200, text.trim().length*70));
-        return Promise.race([p, new Promise(res=>setTimeout(res,maxMs))]);
-      }
-
       /* Speech Rec (unchanged timings) */
       const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
       const sr=SR?new SR():null;
@@ -4044,6 +4300,57 @@ const savedStrip = document.getElementById("savedScriptsStrip");
           const track = (typeof stream?.getAudioTracks === "function") ? stream.getAudioTracks()[0] : null;
           window.__OB_MIC_TRACK = track || null;
           logRouteCheck('startMicMonitor');
+          // When STT2 is enabled, keep a small rolling recorder on the mic stream
+          // so we can send recent audio chunks to the server for debug-only STT.
+          if (STT2_ENABLED && window.MediaRecorder && !stt2Recorder) {
+            try {
+              let mime = "";
+              if (typeof MediaRecorder.isTypeSupported === "function") {
+                if (MediaRecorder.isTypeSupported("audio/webm;codecs=opus")) {
+                  mime = "audio/webm;codecs=opus";
+                } else if (MediaRecorder.isTypeSupported("audio/webm")) {
+                  mime = "audio/webm";
+                }
+              }
+
+              const rec = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
+              stt2Recorder = rec;
+              window.__OB_STT2_RECORDER = rec;
+
+              // Reset rolling buffer whenever we (re)start the recorder.
+              stt2HeaderChunk = null;
+              stt2BodyChunks = [];
+              stt2Mime = mime || "";
+
+              rec.ondataavailable = (e) => {
+                if (!e.data || e.data.size === 0) return;
+
+                // First non-empty chunk: treat as the WebM header and keep it forever.
+                if (!stt2HeaderChunk) {
+                  stt2HeaderChunk = e.data;
+                  return;
+                }
+
+                // Subsequent chunks are "body" audio. We keep a small rolling window.
+                stt2BodyChunks.push(e.data);
+
+                // Optional safety: keep at most ~10s of recent audio body (~2-3 chunks).
+                const maxBodyChunks = 3;
+                if (stt2BodyChunks.length > maxBodyChunks) {
+                  stt2BodyChunks.splice(0, stt2BodyChunks.length - maxBodyChunks);
+                }
+              };
+
+              // Use a small timeslice so we always have recent audio.
+              try {
+                rec.start(4000); // ~4s rolling window
+              } catch (err) {
+                console.warn("[stt2] recorder start failed", err);
+              }
+            } catch (err) {
+              console.warn("[stt2] recorder init failed", err);
+            }
+          }
           try{
             const bt = window.__OB_BT_IN || await hasBluetoothInput();
             window.__OB_BT_IN = bt;
@@ -4105,18 +4412,18 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
       function minElapsedFor(text){
         const base = expectedMinMsFor(text || "");
-        // Slightly tighter so we can advance as soon as you finish
-        return tightMode()
-          ? Math.max(160, Math.round(base * 0.62))
-          : Math.round(base * 0.98);
+        // Rehearse is the timing source of truth; use the same minima in both tabs.
+        return Math.round(base * 0.98);
       }
+
       function silenceDebounceFor(text){
         const base = expectedMinMsFor(text || "");
-        // Aim for ~0.45–0.55s typical "after last energy" window
-        const scaled = tightMode()
-          ? Math.round(base * 0.48)
-          : Math.round(base * 0.58);
-        return Math.min(Math.max(140, scaled), 900);
+        // Medium setting: a bit more patient than the original,
+        // but not as slow as the last pass so lines don't feel ignored.
+        const scaled = Math.round(base * 0.65);
+        // Slightly lower floor so short lines can advance,
+        // but still enough to avoid micro-pause jumps.
+        return Math.min(Math.max(180, scaled), 1100);
       }
 
 
@@ -4362,47 +4669,73 @@ const savedStrip = document.getElementById("savedScriptsStrip");
       }
 
       function advanceFromMyLine(){
-        const now=performance.now();
-        // DO NOT TUNE in Record; Rehearse is the source of truth.
-        const cooldown = tightMode() ? Math.max(80, Math.round(AFTER_ADV_COOLDOWN_MS * 0.35)) : AFTER_ADV_COOLDOWN_MS;
-        if(advanceLock || (now - lastAdvanceAt) < cooldown) return;
-        if(!onMyLine()) return;
+        const now = performance.now();
+        // Rehearse is the timing source of truth; use the same cooldown in all tabs.
+        const cooldown = AFTER_ADV_COOLDOWN_MS;
+        if (advanceLock || (now - lastAdvanceAt) < cooldown) return;
+        if (!onMyLine()) return;
         const ln = current();
-        if(!ln) return;
-        const elapsed=now-(myLineStartMs||now);
-        if(elapsed < minElapsedFor(ln.text||"")) return;
+        if (!ln) return;
+        const elapsed = now - (myLineStartMs || now);
+        if (elapsed < minElapsedFor(ln.text || "")) return;
 
-        advanceLock=true;
-        const list=filtered(); if(!list.length){ advanceLock=false; return; }
-        idx=Math.min(idx+1,list.length-1);
+        advanceLock = true;
+        const list = filtered();
+        if (!list.length) { advanceLock = false; return; }
+
+        idx = Math.min(idx + 1, list.length - 1);
         highlightCurrent();
         clearMy();
         lastAdvanceAt = now;
-        try{ sr?.stop(); }catch{}
-        if(R?.rec && typeof R.rec.state === "string" && R.rec.state === "inactive"){
-          try{ R.rec.start(); R.recording = true; setRailStates(); }
-          catch{}
-        }
-        const next=current();
-        if(next && next.speaker===myName()){
-          if(srToggleOn && srPermGranted){ setTimeout(()=>{ if(sr && !srActive) try{ sr.start(); }catch{}; },80); }
-        }else if(next){
-          playing = true;
-          Promise.resolve(step(true, { immediate: true })).catch(()=>{});
-        }
-        advanceLock=false;
-      }
 
+        try { sr?.stop(); } catch {}
+
+        // If we are on the Record tab and have a recorder, start capturing this segment.
+        if (R?.rec && typeof R.rec.state === "string" && R.rec.state === "inactive") {
+          try {
+            R.rec.start();
+            R.recording = true;
+            setRailStates();
+          } catch {}
+        }
+
+        const next = current();
+        if (next && next.speaker === myName()) {
+          // Next line is yours: re-arm speech recognition if enabled.
+          if (srToggleOn && srPermGranted) {
+            setTimeout(() => {
+              if (sr && !srActive) {
+                try { sr.start(); } catch {}
+              }
+            }, 80);
+          }
+        } else if (next) {
+          // Partner line: keep the reader moving.
+          playing = true;
+          Promise.resolve(step(true, { immediate: true })).catch(() => {});
+        }
+
+        advanceLock = false;
+      }
       function armSilenceDebounce(){
-        if(silenceTimer) clearTimeout(silenceTimer);
+        if (silenceTimer) clearTimeout(silenceTimer);
         const ln = current();
-        if(!ln) return;
-        const need = silenceDebounceFor(ln.text||"");
+        if (!ln) return;
+        const need = silenceDebounceFor(ln.text || "");
         silenceTimer = setTimeout(()=>{
-          if(!onMyLine()) return;
+          if (!onMyLine()) return;
           const now = performance.now();
-          const elapsed = now - (myLineStartMs||now);
-          if(!firstEnergyAt || elapsed < 60) return;
+          const elapsed = now - (myLineStartMs || now);
+          if (!firstEnergyAt || elapsed < 60) return;
+          // Safety net: if we've been on this line for a long time after
+          // hearing speech, force an advance so the reader never "vanishes"
+          // permanently on tricky lines (especially in Record).
+          if (elapsed >= MAX_MY_LINE_MS) {
+            silenceTimer = null;
+            advanceFromMyLine();
+            return;
+          }
+
           const shouldAdvance = readyForAdvance({
             text: ln.text,
             interim: latestTranscript,
@@ -4411,19 +4744,72 @@ const savedStrip = document.getElementById("savedScriptsStrip");
             lastAdvanceAt,
             dashyMode: endsWithDashy(ln.text)
           });
+
           const timeSinceEnergy = now - (lastEnergyAt || now);
-          const enoughSilence = timeSinceEnergy >= Math.min(900, Math.max(140, silenceDebounceFor(ln.text)));
+          const enoughSilence = timeSinceEnergy >= Math.min(
+            900,
+            Math.max(140, silenceDebounceFor(ln.text))
+          );
           const enoughElapsed = elapsed >= minElapsedFor(ln.text);
           const dashy = endsWithDashy(ln.text);
-          if( (dashy && shouldAdvance && enoughElapsed) ||
-              (!dashy && shouldAdvance && enoughSilence && enoughElapsed) ){
+
+          // Let the timing / silence model decide, same as the older behavior,
+          // but shared for Rehearse and Record.
+          if (
+            (dashy && shouldAdvance && enoughElapsed) ||
+            (!dashy && shouldAdvance && enoughSilence && enoughElapsed)
+          ){
             silenceTimer = null;
             advanceFromMyLine();
           }
         }, need);
       }
 
+      // Normalize a string into lowercased word tokens with punctuation stripped.
+      function normalizeWords(str){
+        return (str || "")
+          .toLowerCase()
+          .replace(/[\u2014\u2013]/g, " ")      // em/en dash → space
+          .replace(/[^a-z0-9\s']/gi, " ")      // strip punctuation, keep letters/numbers/apostrophes
+          .split(/\s+/)
+          .filter(Boolean);
+      }
+
+      // Check if the last N words of the current line match the last N words
+      // that STT heard from the user. This is our "did they really finish the line?"
+      function hasEndingWordMatch(lineText, transcript, count = 2){
+        const lineWords = normalizeWords(lineText);
+        const heardWords = normalizeWords(transcript);
+
+        if (!lineWords.length || !heardWords.length) return false;
+
+        const n = Math.min(count, lineWords.length, heardWords.length);
+
+        for (let i = 0; i < n; i++){
+          const lw = lineWords[lineWords.length - n + i];
+          const hw = heardWords[heardWords.length - n + i];
+          if (lw !== hw) return false;
+        }
+        return true;
+      }
+
       if(sr){
+      // If STT2 flag is present, show a debug overlay immediately
+      if (STT2_ENABLED) {
+        updateSttOverlay(
+          [
+            "STT2 flag ON",
+            `SpeechRecognition: ${(window.SpeechRecognition || window.webkitSpeechRecognition) ? "available" : "NOT available"}`,
+            "Waiting for first final transcript…",
+            "",
+            "Steps to trigger:",
+            "1) Go to Rehearse or Record.",
+            "2) Turn Mic: On.",
+            "3) Speak one of your lines until STT produces a final result."
+          ].join("\n")
+        );
+      }
+
         sr.continuous=false; sr.interimResults=true; sr.lang="en-US";
         sr.onstart=()=>{
           srActive=true;
@@ -4446,18 +4832,128 @@ const savedStrip = document.getElementById("savedScriptsStrip");
           updateMicBadge();
         };
         sr.onresult=(ev)=>{
-          if(!(onMyLine() && srToggleOn && srPermGranted)) return;
+          if (!(onMyLine() && srToggleOn && srPermGranted)) return;
           maybeSetMyLineStart();
-          const now=performance.now();
-          const ln=current(); if(!ln) return;
+          const now = performance.now();
+          const ln = current(); if (!ln) return;
 
-          const last=ev.results?.[ev.results.length-1];
-          const alt=last?.[0];
-          const isFinal=!!last?.isFinal;
-          latestTranscript=(alt?.transcript||"").trim();
-          lastResultAt=now;
+          const last = ev.results?.[ev.results.length - 1];
+          const alt = last?.[0];
+          const isFinal = !!last?.isFinal;
+          latestTranscript = (alt?.transcript || "").trim();
+          lastResultAt = now;
 
-          const elapsed=now-(myLineStartMs||now);
+          const ratio = progressRatio(ln.text, latestTranscript);
+          const sttConfident = ratio >= 0.92; // high-confidence transcript match
+
+          const elapsed = now - (myLineStartMs || now);
+          // When STT2 is enabled, mirror final transcripts + recent audio to the server.
+          // This does NOT change cue timing; it's purely for debugging the pipeline.
+          if (STT2_ENABLED && isFinal) {
+            try {
+              const activeMode = (S && S.activeTab) ? S.activeTab : "";
+              // Only care in Rehearse / Record where listen/respond matters.
+              if (activeMode === "rehearse" || activeMode === "record") {
+                const safeScriptId = (S && S.script_id) ? S.script_id : null;
+                const safeSceneId =
+                  typeof window.currentSceneId !== "undefined"
+                    ? window.currentSceneId
+                    : null;
+                const safeLineId =
+                  ln && typeof ln.id === "string"
+                    ? ln.id
+                    : `${safeSceneId || "scene"}:${idx}`;
+
+                const textForServer = (latestTranscript || "").trim();
+
+                // Build a merged Blob from our rolling chunks, if we have any.
+                // We always try to prepend the original header chunk so the file
+                // is a valid WebM for Whisper and media players.
+                let audioBlob = null;
+                const header = stt2HeaderChunk;
+                const body = stt2BodyChunks;
+
+                if (header || (Array.isArray(body) && body.length > 0)) {
+                  const parts = [];
+                  if (header) parts.push(header);
+                  if (Array.isArray(body)) parts.push(...body);
+
+                  const type =
+                    stt2Mime ||
+                    (header && header.type) ||
+                    (body && body[0] && body[0].type) ||
+                    "audio/webm";
+
+                  audioBlob = new Blob(parts, { type });
+                }
+
+                // If we somehow have no text, nothing useful to send or show.
+                if (!textForServer) {
+                  return;
+                }
+
+                // If STT2 is on but we never captured audio, surface that explicitly.
+                // This is what we expect on iPhone Safari where MediaRecorder audio
+                // support is limited.
+                if (!audioBlob) {
+                  updateSttOverlay(
+                    [
+                      "STT2 (client) no-audio",
+                      `line: ${ln?.speaker || "?"}`,
+                      `local: ${textForServer}`,
+                      "note: no audio blob — MediaRecorder/audio capture not available in this browser"
+                    ].join("\n")
+                  );
+                  // Still do normal local cueing; this is debug-only.
+                  return;
+                }
+
+                // Normal server path when we *do* have audio.
+                (async () => {
+                  const startedAt = performance.now();
+                  const resp = await sendSttChunkToServer({
+                    audioBlob,
+                    scriptId: safeScriptId || undefined,
+                    sceneId: safeSceneId || undefined,
+                    lineId: safeLineId || undefined
+                  });
+                  const dur = Math.round(performance.now() - startedAt);
+
+                  if (!resp || resp.ok !== true) {
+                    const errCode = resp && typeof resp.error === "string" ? resp.error : "unknown";
+                    const msg =
+                      resp && typeof resp.message === "string"
+                        ? resp.message
+                        : "";
+                    updateSttOverlay(
+                      [
+                        "STT2 (server) error",
+                        `line: ${ln?.speaker || "?"}`,
+                        `local: ${textForServer}`,
+                        `error: ${errCode}`,
+                        msg ? `message: ${msg.slice(0, 160)}` : "",
+                        `latency: ${dur} ms`,
+                      ].filter(Boolean).join("\n")
+                    );
+                    return;
+                  }
+
+                  const remoteText = String(resp.text || resp.transcript || "").trim();
+                  updateSttOverlay(
+                    [
+                      "STT2 (server) OK",
+                      `line: ${ln?.speaker || "?"}`,
+                      `local: ${textForServer}`,
+                      `server: ${remoteText || "(empty)"}`,
+                      `latency: ${dur} ms`,
+                    ].join("\n")
+                  );
+                })();
+              }
+            } catch (err) {
+              console.error("[stt2] mirror error", err);
+            }
+          }
 
           const dashy = endsWithDashy(ln.text); // only end-dash matters
           const shouldAdvance = readyForAdvance({
@@ -4470,22 +4966,54 @@ const savedStrip = document.getElementById("savedScriptsStrip");
           });
           const enoughElapsed = elapsed >= minElapsedFor(ln.text);
           const timeSinceEnergy = now - (lastEnergyAt || now);
-          const enoughSilence = timeSinceEnergy >= Math.min(1100, Math.max(180, silenceDebounceFor(ln.text)));
+          const enoughSilence = timeSinceEnergy >= Math.min(
+            1100,
+            Math.max(180, silenceDebounceFor(ln.text))
+          );
 
-          // Dash at end = allow fast cut-in once minima met
-          if(dashy){
-            if((shouldAdvance && enoughElapsed) || (isFinal && enoughElapsed)){
+          // Treat long / multi-sentence lines more cautiously so they don't
+          // advance as soon as the first short phrase ("Yeah. Me too.") gets
+          // a final STT result.
+          const text = (ln.text || "");
+          const words = text.split(/\s+/).filter(Boolean);
+          const sentenceCount = text.split(/[.?!]/).filter(s => s.trim().length > 0).length;
+          const isLongOrMultiSentence = (words.length >= 10) || (sentenceCount >= 2);
+
+          // For long/multi-sentence lines, ignore bare "isFinal" unless we either
+          // have strong coverage (sttConfident) or a real silence gap.
+          let allowFinal = isFinal;
+          if (isLongOrMultiSentence && !sttConfident && !enoughSilence) {
+            allowFinal = false;
+          }
+
+          // Line length buckets
+          const isShortLine = words.length <= 3;
+          const goodCoverage = ratio >= 0.72; // enough of the line has been spoken
+
+          // On-result auto-advance now applies to *all* user lines (dash or not).
+          if (isShortLine) {
+            // Very short lines stay snappy but don't require the exact last word.
+            if (
+              shouldAdvance &&
+              enoughElapsed &&
+              (allowFinal || enoughSilence || sttConfident)
+            ) {
               return advanceFromMyLine();
             }
-          }else{
-            // Normal lines: require final result OR adequate silence, plus minima
-            if((isFinal && enoughElapsed) || (shouldAdvance && enoughSilence && enoughElapsed)){
+          } else {
+            // Longer lines: need decent coverage and either a real silence gap
+            // or a high-confidence STT match, but no strict last-word match.
+            if (
+              shouldAdvance &&
+              enoughElapsed &&
+              goodCoverage &&
+              (allowFinal || enoughSilence || sttConfident)
+            ) {
               return advanceFromMyLine();
             }
           }
 
-          // For non-dashy user lines we wait slightly longer before auto-advance.
-          // Dashy end ("—" at end) still advances fast via readyForAdvance().
+          // Always arm the silence debounce as a safety net.
           armSilenceDebounce();
         };
       }
@@ -4495,20 +5023,11 @@ const savedStrip = document.getElementById("savedScriptsStrip");
         if(!(onMyLine()) || (E.inlineForm&&E.inlineForm.isConnected)) return;
         if(!srActive){ try{ sr.start(); }catch{} }
       }, 300);
-
-      // Re-start SR if it ever drops while on your line (Record only)
-      setInterval(()=>{
-        if(!tightMode()) return;
-        if(!(onMyLine()) || (E.inlineForm&&E.inlineForm.isConnected)) return;
-        if(sr && srToggleOn && srPermGranted && !srActive){
-          try{ sr.start(); }catch{}
-        }
-      }, 250);
-
-      $("#btnMic")?.addEventListener("click", async ()=>{
-        const srAvailable = !!sr;
-        if(!srAvailable){
-          if(!srToggleOn){
+  
+        $("#btnMic")?.addEventListener("click", async ()=>{
+          const srAvailable = !!sr;
+          if(!srAvailable){
+            if(!srToggleOn){
             try{ await navigator.mediaDevices.getUserMedia({audio:true}); await startMicMonitor(); srPermGranted = true; srToggleOn = true; }
             catch{ srToggleOn = false; }
           }else{ srToggleOn = false; stopMicMonitor(); }
@@ -4747,7 +5266,17 @@ const savedStrip = document.getElementById("savedScriptsStrip");
         }
         try{ preloadReaderBuffers(); }catch{}
       }
-  function clearRehearseRender(){ RR.map.clear(); RR.failures=0; stopDots(); R.readerBuffers = new Map(); resetReaderActiveSources(); R.readerLoading=false; setRehearseRenderStatus("Cleared pre-render.","warn"); }
+  function clearRehearseRender(){
+    RR.map.clear();
+    RR.failures=0;
+    stopDots();
+    R.readerBuffers = new Map();
+    resetReaderActiveSources();
+    R.readerLoading=false;
+    try{ if(E?.rehearseAudio){ E.rehearseAudio.pause(); E.rehearseAudio.removeAttribute("src"); E.rehearseAudio.load(); } }catch{}
+    try{ window.__OB_LAST_READER_URL = null; }catch{}
+    setRehearseRenderStatus("Cleared pre-render.","warn");
+  }
       $("#btnRehearseRender")?.addEventListener("click", renderRehearseVoices);
       $("#btnRehearseClear")?.addEventListener("click", clearRehearseRender);
 
@@ -4806,10 +5335,42 @@ const savedStrip = document.getElementById("savedScriptsStrip");
         if(!ln || ln.speaker === myName()) return false;
         const paceSelect = document.getElementById("selPace");
         let pace = Number((paceSelect && paceSelect.value) || 0);
+        if(Number.isNaN(pace)) pace = 0;
         if(tightMode() || immediate) pace = 0;
         const usedOpenAi = await playOpenAiIfCached(index);
-        if(!usedOpenAi){ await synthSpeak(ln.text); }
-        if(pace > 0){ await new Promise(r=>setTimeout(r, pace)); }
+        if(usedOpenAi){
+          if(pace > 0){ await new Promise(r=>setTimeout(r, pace)); }
+          return true;
+        }
+
+        const readerUrl = (E.rehearseAudio?.src || "").trim() || (window.__OB_LAST_READER_URL || "").trim() || (hasR() ? (R.download_url || "").trim() : "");
+        if(!readerUrl){
+          alert('Please tap "Render for rehearsal (OpenAI)" first to generate the reader audio.');
+          playing = false;
+          $("#btnPlay").textContent = "Play";
+          return false;
+        }
+
+        const audio = E.rehearseAudio || getReaderEl();
+        try{
+          if(audio){
+            if(audio.src !== readerUrl){
+              audio.src = readerUrl;
+              rememberReaderUrl(readerUrl);
+              try{ audio.load(); }catch{}
+            }
+            await new Promise(res=>{
+              const done = ()=>{ audio.onended=null; audio.onerror=null; res(null); };
+              audio.onended = done;
+              audio.onerror = done;
+              try{ audio.play(); }catch{ done(); }
+            });
+          }
+        }catch(e){
+          console.error("Rehearse reader playback failed", e);
+        }
+        playing = false;
+        $("#btnPlay").textContent = "Play";
         return true;
       }
 
@@ -4827,6 +5388,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
             const i = idx;
             await playPartnerLine(i, { immediate });
             if(playing){ idx=Math.min(idx+1,list.length-1); step(true); }
+<<<<<<< HEAD
           }
         }
 
@@ -4938,6 +5500,138 @@ const savedStrip = document.getElementById("savedScriptsStrip");
           }
           else { window.speechSynthesis?.cancel(); try{ sr?.stop(); }catch{}; clearMy(); }
         });
+=======
+          }
+        }
+
+        async function rehearseCountInIfNeeded(){
+          const sel = document.getElementById("selRehearseCountIn");
+          const secs = Number(sel?.value || 0);
+          if(!secs || secs <= 0) return;
+
+          const overlay = document.getElementById("countdown");
+          const num = document.getElementById("countNum");
+
+          // Use the shared audioCtx used elsewhere in the app
+          await ensureAudioContext();
+          const ctx = window.audioCtx;
+          if(!ctx) return;
+          if(ctx.state !== 'running'){
+            try{ await ctx.resume(); }catch{}
+          }
+
+          if(overlay){
+            overlay.style.display = "flex";
+            overlay.setAttribute("aria-hidden","false");
+          }
+
+          const N = Math.min(10, Math.max(1, secs));
+
+          const playBeep = (freq, durSec = 0.28) => new Promise(res => {
+            try{
+              const o = ctx.createOscillator();
+              const g = ctx.createGain();
+              o.type = 'sine';
+              o.frequency.value = freq;
+              g.gain.value = 0.0001;
+              const now = ctx.currentTime;
+              g.gain.setValueAtTime(0.0001, now);
+              g.gain.exponentialRampToValueAtTime(0.6, now + 0.01);
+              g.gain.exponentialRampToValueAtTime(0.0001, now + durSec);
+              o.connect(g).connect(ctx.destination);
+              o.start(now);
+              o.stop(now + durSec);
+              o.onended = () => {
+                try{ o.disconnect(); g.disconnect(); }catch{}
+                res();
+              };
+            }catch{ res(); }
+          });
+
+          for(let i = N; i >= 1; i--){
+            if(!playing) break; // allow user to cancel during countdown
+            if(num) num.textContent = String(i);
+            await playBeep(i === 1 ? 660 : 880, 0.28);
+            await new Promise(r => setTimeout(r, 720));
+          }
+
+          if(overlay){
+            overlay.style.display = "none";
+            overlay.setAttribute("aria-hidden","true");
+          }
+        }
+
+    $("#btnPlay")?.addEventListener("click",async ()=>{
+      await ensureAudioContext();
+      try { await window.__OB_READER_EL?.setSinkId?.('default'); } catch {}
+      try{ hardResumeOnGesture().catch(()=>{}); }catch{};
+      const btnPlayEl = $("#btnPlay");
+      const wantsPlay = !playing;
+
+      if(wantsPlay){
+        const hasPerLineClips = (RR?.map && RR.map.size > 0) || (hasR() && R.readerBuffers && R.readerBuffers.size > 0);
+        const knownUrl = (E.rehearseAudio?.src || "").trim() || (window.__OB_LAST_READER_URL || "").trim() || (hasR() ? (R.download_url || "").trim() : "");
+        if(!hasPerLineClips && !knownUrl){
+          playing = false;
+          if(btnPlayEl){ btnPlayEl.textContent = "Play"; }
+          alert('Please tap "Render for rehearsal (OpenAI)" first to generate the reader audio.');
+          return;
+        }
+        if(!hasPerLineClips && knownUrl && E.rehearseAudio && !E.rehearseAudio.src){
+          E.rehearseAudio.src = knownUrl;
+          rememberReaderUrl(knownUrl);
+          try{ E.rehearseAudio.load(); }catch{}
+        }
+      }
+
+      playing = wantsPlay;
+      if(btnPlayEl) btnPlayEl.textContent = playing ? "Pause" : "Play";
+
+      if(playing){
+        // Optional count-in for Rehearse (0 / 3 / 5 / 10 seconds)
+        await rehearseCountInIfNeeded();
+        // User may have tapped Play again during the countdown
+        if(!playing){
+          if(btnPlayEl) btnPlayEl.textContent = "Play";
+          return;
+        }
+
+        const reader = getReaderEl();
+        if (window.__OB_NEEDS_UNLOCK && getReaderEl() && window.__OB_LAST_READER_URL) {
+          await restoreAudioRoute('play');
+          const _el = getReaderEl();
+          if (_el) {
+            try {
+              await _el.play();
+              window.__OB_NEEDS_UNLOCK = false;
+              if (btnEnableAudio) btnEnableAudio.style.display = 'none';
+            } catch (err) {
+              console.debug('[AUDIO] play blocked; prompting unlock', err);
+              window.__OB_NEEDS_UNLOCK = true;
+              if (btnEnableAudio) btnEnableAudio.style.display = '';
+            }
+          }
+        }
+
+        try{
+          const cur = current();
+          const micOn = !!(srToggleOn && srPermGranted);
+          // If the mic is OFF, keep legacy behavior and skip ahead to the first partner line.
+          // If the mic is ON, stay on my line so the app can listen and advance from my cue.
+          if(cur && cur.speaker === myName() && !micOn){
+            const list = filtered();
+            for(let i = idx; i < list.length; i++){
+              if(list[i] && list[i].speaker !== myName()){ idx = i; break; }
+            }
+            highlightCurrent();
+          }
+        }catch{}
+
+        step(true);
+      }
+      else { try{ E.rehearseAudio?.pause(); }catch{}; try{ sr?.stop(); }catch{}; clearMy(); }
+    });
+>>>>>>> feature/pwa-auth
       $("#btnPrev")?.addEventListener("click",()=>{ const list=filtered(); if(!list.length) return; try{ sr?.stop(); }catch{}; clearMy(); idx=Math.max(0,idx-1); highlightCurrent(); if(playing) step(true); else maybeSetMyLineStart(); });
   $("#btnNext")?.addEventListener("click",async ()=>{
         await ensureAudioContext();
@@ -5642,6 +6336,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
         R.rec.ondataavailable = (e)=>{ if(e.data && e.data.size>0) R.chunks.push(e.data); };
         R.rec.onstop = async ()=>{
+          setStatus("Recorder stopped; length (ms) = " + (Date.now() - (R.recordStartMs || Date.now())));
           if(typeof window !== "undefined"){
             window.isRecording = false;
             try{ document.dispatchEvent(new CustomEvent('ob:recording:stopped')); }catch{}
@@ -5672,8 +6367,10 @@ const savedStrip = document.getElementById("savedScriptsStrip");
           }
         }catch{}
 
+        R.recordStartMs = Date.now();
         try{ R.rec.start(); }
         catch(e){
+          setStatus("Record error: " + e);
           R.recording = false;
           if(typeof window !== "undefined"){
             window.isRecording = false;
@@ -5727,7 +6424,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
           restoreReaderDirectMonitor();
           return;
         }
-        try{ R.rec?.stop(); }catch{}
+        try{ R.rec?.stop(); }catch(e){ setStatus("Record error: " + e); }
         R.recording = false;
         R.forcePerLine = false;
         setRailStates();
@@ -5739,14 +6436,20 @@ const savedStrip = document.getElementById("savedScriptsStrip");
         const blob = new Blob(R.chunks, { type: (R.rec && R.rec.mimeType) ? R.rec.mimeType : (isVid ? "video/mp4" : "audio/mp4") });
         if(!blob || !blob.size){ setStatusRec("No data captured."); return; }
         const aspect = R.currentAspect || (isPortrait() ? "9:16" : "16:9");
+        let savedTake = null;
         try{
-          await saveTakeToDB({ blob, isVid, aspect });
+          savedTake = await saveTakeToDB({ blob, isVid, aspect });
           setStatusRec("Saved to Gallery.");
         }catch(err){
           console.error("[offbook] take save error", err);
           setStatusRec("Saved (temp), DB error");
         }finally{
-          try{ await renderGallery(); }catch{}
+          try{ await loadTakes(); }catch{}
+          if (savedTake) {
+            uploadTakeToServer(savedTake).catch(err => {
+              console.warn("Failed to upload take to server", err);
+            });
+          }
         }
       }
 
@@ -5804,6 +6507,33 @@ const savedStrip = document.getElementById("savedScriptsStrip");
       /* ---- Helpers for short labels + pruning ---- */
       const G = { filter:"all", urls:new Map() };
 
+      function currentUserKey() {
+        const auth = (window.S && S.auth) ? S.auth : null;
+
+        // If we have a real signed-in user, prefer a stable key based on userId
+        if (auth && auth.loggedIn && auth.userId) {
+          return `user:${auth.userId}`;
+        }
+
+        // Dev / anonymous fallback: stable per-device id stored in localStorage
+        try {
+          const LS_KEY = "offbook_dev_user_key";
+          let devKey = window.localStorage.getItem(LS_KEY);
+          if (!devKey) {
+            const base =
+              (window.crypto && typeof crypto.randomUUID === "function")
+                ? crypto.randomUUID()
+                : `dev-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+            devKey = `dev:${base}`;
+            window.localStorage.setItem(LS_KEY, devKey);
+          }
+          return devKey;
+        } catch (e) {
+          // If localStorage is blocked for some reason, fall back to a simple anon key
+          return "user:anon";
+        }
+      }
+
       function shortLabel(n){
         const num = Math.max(1, n);
         return "TK" + String(num).padStart(2, "0");
@@ -5812,11 +6542,18 @@ const savedStrip = document.getElementById("savedScriptsStrip");
       async function pruneTakes(){
         const MAX_ITEMS = 10;
         const MAX_AGE_MS = 14*24*3600*1000;
-        const list = (await GalleryDB.getAll()).sort((a,b)=>b.created-a.created);
+        const userKey = getSignedInUserKey();
+        const list = (await GalleryDB.getAll())
+          .filter(t => {
+            if (userKey) return !t.userKey || t.userKey === userKey;
+            return !t.userKey;
+          })
+          .sort((a,b)=>(b.created||0)-(a.created||0));
         const now = Date.now();
         const recent = [];
         for(const t of list){
-          if(now - t.created > MAX_AGE_MS){ await GalleryDB.del(t.id); continue; }
+          const created = t.created || 0;
+          if(now - created > MAX_AGE_MS){ await GalleryDB.del(t.id); continue; }
           recent.push(t);
         }
         if(recent.length > MAX_ITEMS){
@@ -5830,20 +6567,183 @@ const savedStrip = document.getElementById("savedScriptsStrip");
         const created = Date.now();
         const type = blob.type || (isVid ? "video/mp4" : "audio/mp4");
         const size = blob.size || 0;
+        const userKey = getSignedInUserKey();
         const existing = (await GalleryDB.getAll()).length;
         const short = shortLabel(existing + 1);
-    const ext = type.includes("webm") ? "webm" : (isVid ? "mp4" : "m4a");
-    const stamp = new Date(created).toISOString().replace(/[:.]/g,"-");
-    const name = `${isVid?"take-video":"take-audio"}-${stamp}.${ext}`;
-    const safeAspect = typeof aspect === "string" ? aspect : "16:9";
-    await GalleryDB.put({ id, created, name, short, type, size, aspect: safeAspect, blob, note:"" });
+        const ext = type.includes("webm") ? "webm" : (isVid ? "mp4" : "m4a");
+        const stamp = new Date(created).toISOString().replace(/[:.]/g,"-");
+        const name = `${isVid?"take-video":"take-audio"}-${stamp}.${ext}`;
+        const safeAspect = typeof aspect === "string" ? aspect : "16:9";
+        const take = { id, created, name, short, type, size, aspect: safeAspect, blob, note:"", userKey };
+        await GalleryDB.put(take);
         await pruneTakes();
+        return take;
       }
 
       /* ---- Gallery rendering with filters + actions ---- */
-      async function loadTakes(){
-        const all = await GalleryDB.getAll();
-        return all.sort((a,b)=>b.created-a.created);
+      async function loadTakes() {
+        try {
+          const userKey = getSignedInUserKey();
+
+          // If nobody is signed in, we don't show any takes.
+          if (!userKey) {
+            S.galleryTakes = [];
+            renderGallery();
+            return;
+          }
+
+          // 1) Load all local takes from IndexedDB
+          let allLocal = [];
+          try {
+            try { await pruneTakes(); } catch {}
+            allLocal = await GalleryDB.getAll();
+          } catch (e) {
+            console.warn("Failed to load local gallery items", e);
+            allLocal = [];
+          }
+
+          // Auto-migrate legacy items (no userKey) to the current signed-in user on this device.
+          const legacy = allLocal.filter(t => !t.userKey);
+          for (const t of legacy) {
+            t.userKey = userKey;
+            try {
+              await GalleryDB.put(t);
+            } catch (e) {
+              console.warn("Failed to migrate legacy gallery item", t.id, e);
+            }
+          }
+
+          const localAfterMigration =
+            legacy.length > 0 ? await GalleryDB.getAll() : allLocal;
+
+          const localMine = localAfterMigration.filter(t => t.userKey === userKey);
+
+          // 2) Load server-side items for this user (metadata only)
+          let remoteItems = [];
+          try {
+            const resp = await fetch("/api/gallery", { credentials: "include" });
+            if (resp.ok) {
+              const data = await resp.json();
+              if (data && Array.isArray(data.items)) {
+                remoteItems = data.items.map(row => ({
+                  id: row.id,
+                  created: Number(row.created_at) || 0,
+                  name: row.name || row.id || "Take",
+                  short: row.name || row.id || "Take",
+                  type: row.mime_type || "video/webm",
+                  size: Number(row.size) || 0,
+                  note: row.note || "",
+                  userKey,
+                  fromServer: true,
+                  serverId: row.id
+                }));
+              }
+            }
+          } catch (err) {
+            console.warn("Failed to load server gallery items", err);
+          }
+
+          // 3) Merge local + remote by id (local wins if both exist)
+          const byId = new Map();
+
+          for (const t of localMine) {
+            if (t && t.id) {
+              byId.set(t.id, t);
+            }
+          }
+
+          for (const r of remoteItems) {
+            if (!r || !r.id) continue;
+            if (!byId.has(r.id)) {
+              byId.set(r.id, r);
+            }
+          }
+
+          const merged = Array.from(byId.values());
+          merged.sort((a, b) => (b.created || 0) - (a.created || 0));
+
+          S.galleryTakes = merged;
+          renderGallery();
+        } catch (err) {
+          console.warn("[offbook] gallery load error", err);
+          const wrap = $("#takes");
+          if (wrap) {
+            wrap.innerHTML = `<p class="hint">Gallery storage unavailable on this device.</p>`;
+          }
+        }
+      }
+
+      async function uploadTakeToServer(take) {
+        try {
+          const userKey = getSignedInUserKey();
+          if (!userKey) return; // not signed in, skip
+
+          if (!take || !take.blob) return;
+
+          const form = new FormData();
+          const blob = take.blob;
+          const mime = take.type || blob.type || "video/webm";
+
+          const idPart = take.id || "take";
+          const isMp4 = mime && mime.toLowerCase().includes("mp4");
+          const ext = isMp4 ? ".mp4" : ".webm";
+          const filename = idPart + ext;
+
+          form.append("file", blob, filename);
+          if (take.id) form.append("id", take.id);
+
+          // Prefer the friendly TK label on the server, fall back to whatever we have
+          const friendlyName =
+            (take.short && String(take.short).trim()) ||
+            (take.name && String(take.name).trim()) ||
+            filename;
+          form.append("name", friendlyName);
+
+          if (take.scriptId) form.append("script_id", take.scriptId);
+          if (take.sceneId) form.append("scene_id", take.sceneId);
+
+          // Persist the note so it survives on new devices
+          if (typeof take.note === "string") {
+            form.append("note", take.note);
+          }
+
+          form.append("mime_type", mime);
+          form.append("size", String(take.size || blob.size || 0));
+          form.append("created_at", String(take.created || Date.now()));
+
+          console.log(
+            "[offbook] uploading take to server",
+            take.id || "(no id yet)"
+          );
+
+          const resp = await fetch("/api/gallery/upload", {
+            method: "POST",
+            body: form,
+            credentials: "include"
+          });
+
+          if (!resp.ok) {
+            const txt = await resp.text().catch(() => "");
+            console.warn("uploadTakeToServer failed", resp.status, txt);
+            // Surface this on device since there is no console
+            alert(
+              "Gallery upload failed (" +
+                resp.status +
+                ").\n\n" +
+                (txt || "").slice(0, 200)
+            );
+            return;
+          }
+
+          const data = await resp.json().catch(() => null);
+          if (data && data.id) {
+            take.serverId = data.id;
+            console.log("[offbook] gallery upload ok, server id:", data.id);
+          }
+        } catch (err) {
+          console.warn("uploadTakeToServer error", err);
+          alert("Gallery upload error. Please try again and mention this to Rodrigo.");
+        }
       }
 
       function fmtMB(n){
@@ -5868,16 +6768,20 @@ const savedStrip = document.getElementById("savedScriptsStrip");
         const wrap = $("#takes");
         if(!wrap) return;
         resetGalleryUrls();
-        try{ await pruneTakes(); }catch{}
-        let all;
-        try{
-          all = await loadTakes();
-        }catch(err){
-          console.warn("[offbook] gallery load error", err);
-          wrap.innerHTML = `<p class="hint">Gallery storage unavailable on this device.</p>`;
+        const userKey = getSignedInUserKey();
+
+        if (!userKey) {
+          wrap.innerHTML = `
+            <div class="ob-empty">
+              <h3>Sign in to see your takes</h3>
+              <p>Takes are stored per account on this device. Sign in to view your gallery.</p>
+            </div>
+          `;
           return;
-    }
-    const list = all.filter(t => G.filter === "all" ? true : (t.aspect === G.filter));
+        }
+
+        const takes = S.galleryTakes || [];
+        const list = takes.filter(t => G.filter === "all" ? true : (t.aspect === G.filter));
 
         const filters = `
           <div style="margin-bottom:8px">
@@ -5887,15 +6791,33 @@ const savedStrip = document.getElementById("savedScriptsStrip");
           </div>`;
 
         if(!list.length){
-          wrap.innerHTML = filters + `<p class="hint">No takes yet.</p>`;
+          wrap.innerHTML = filters + `
+            <div class="ob-empty">
+              <h3>No takes yet</h3>
+              <p>Record a scene to see it appear in your gallery.</p>
+            </div>
+          `;
           bindGalleryFilters(wrap);
           return;
         }
 
         const cardMap = new Map();
         const cardsHtml = list.map(t=>{
-          const src = URL.createObjectURL(t.blob);
-          G.urls.set(t.id, src);
+          let src = "";
+          if (t.blob) {
+            try {
+              src = URL.createObjectURL(t.blob);
+              G.urls.set(t.id, src);
+            } catch (e) {
+              console.warn("Failed to create object URL for take blob", e);
+            }
+          }
+
+          if (!src && (t.serverId || t.id)) {
+            const id = encodeURIComponent(t.serverId || t.id);
+            src = `/api/gallery/${id}/file`;
+          }
+
           cardMap.set(t.id, { ...t, url: src });
           const meta = `${escapeHtml(t.aspect || '—')} • ${escapeHtml(fmtMB(t.size))} • ${escapeHtml(kindFrom(t.type))}`;
           const shortName = escapeHtml(t.short || t.name || "Take");
@@ -6157,18 +7079,28 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
           btnDl?.addEventListener("click", async ()=>{
             try{
-              const file = new File([rec.blob], rec.name, { type: rec.type });
-              if(navigator.canShare && navigator.canShare({ files:[file] })){
-                try{ await navigator.share({ files:[file], title: rec.short || rec.name }); }
-                catch{}
-              }else{
-                const url = URL.createObjectURL(rec.blob);
+              if (rec.blob) {
+                const file = new File([rec.blob], rec.name, { type: rec.type });
+                if(navigator.canShare && navigator.canShare({ files:[file] })){
+                  try{ await navigator.share({ files:[file], title: rec.short || rec.name }); }
+                  catch{}
+                }else{
+                  const url = URL.createObjectURL(rec.blob);
+                  const a = document.createElement("a");
+                  a.href = url;
+                  a.download = rec.name;
+                  document.body.appendChild(a);
+                  a.click();
+                  setTimeout(()=>{ URL.revokeObjectURL(url); a.remove(); }, 1200);
+                }
+              } else if (rec.serverId || rec.id) {
+                const remoteUrl = `/api/gallery/${encodeURIComponent(rec.serverId || rec.id)}/file`;
                 const a = document.createElement("a");
-                a.href = url;
-                a.download = rec.name;
+                a.href = remoteUrl;
+                a.download = rec.name || "take";
                 document.body.appendChild(a);
                 a.click();
-                setTimeout(()=>{ URL.revokeObjectURL(url); a.remove(); }, 1200);
+                setTimeout(()=>{ a.remove(); }, 1200);
               }
             }catch(err){
               console.error("[offbook] download/share error", err);
@@ -6179,15 +7111,17 @@ const savedStrip = document.getElementById("savedScriptsStrip");
           btnDel?.addEventListener("click", async ()=>{
             if(rec.url){ try{ URL.revokeObjectURL(rec.url); }catch{} }
             try{ await GalleryDB.del(rec.id); }catch{}
-            renderGallery().catch(()=>{});
+            loadTakes().catch(()=>{});
           });
 
           noteEl?.addEventListener("blur", async ()=>{
             try{
               const { url, ...rest } = rec;
-              const updated = { ...rest, note: noteEl.value };
+              const userKey = rest.userKey ?? getSignedInUserKey();
+              const updated = { ...rest, note: noteEl.value, userKey };
               await GalleryDB.put(updated);
               rec.note = updated.note;
+              rec.userKey = updated.userKey;
             }catch(err){ console.warn("[offbook] note save failed", err); }
           });
         });
@@ -6467,8 +7401,8 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
       // initial safe boot
       try{
-  hydrateRehearse(); applyEditModeUI(); (function initAssign(){ $("#pillScript").textContent="script: "+(S.script_id||"—"); })();
-  renderGallery().catch(()=>{});
+  hydrateRehearse(); applyEditModeUI(); (function initAssign(){ $("#pillScript").textContent="script: "+(S.script_id||"-"); })();
+  loadTakes().catch(()=>{});
       }catch(e){ showErr("UI init error: "+e); }
     };
 
