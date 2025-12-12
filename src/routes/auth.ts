@@ -161,12 +161,15 @@ const INVITE_CODE = (process.env.INVITE_CODE || "").trim();
 const ENFORCE_AUTH_GATE = /^true$/i.test(process.env.ENFORCE_AUTH_GATE || "");
 
 function deriveUserId(sess: Sess | undefined | null) {
-  if (!sess) return null;
+  if (!sess) return "solo-tester";
   if (sess.userId && sess.userId.trim()) return sess.userId.trim();
+  // DEV: collapse all passkeys to a single logical user.
+  // This ensures gallery_takes.user_id stays stable across re-register and
+  // device changes.
   if (sess.credentialId && sess.credentialId.trim()) {
-    return `passkey:${sess.credentialId.trim()}`;
+    return "solo-tester";
   }
-  return null;
+  return "solo-tester";
 }
 
 // Lightweight helper for other routes to read the passkey session state
@@ -309,6 +312,10 @@ router.post("/passkey/register/start", (req, res) => {
   const userId = (body.userId || "solo-tester");
   const userName = (body.userName || "solo@tester.example");
   const displayName = (body.displayName || "Solo Tester");
+
+  // Persist a stable, human-friendly user id for this session (dev only).
+  // This is what we want to use for per-user data like Gallery takes.
+  sess.userId = userId;
 
   // Minimal PublicKeyCredentialCreationOptions (no libs)
   const options: any = {
