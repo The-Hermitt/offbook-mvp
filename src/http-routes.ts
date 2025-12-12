@@ -2,15 +2,15 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import express from "express";
 import multer from "multer";
-import path from "path";
-import fs from "fs";
+import * as path from "path";
+import * as fs from "fs";
 import crypto from "crypto";
-import db from "./lib/db";
+import db, { GalleryStore } from "./lib/db";
 import { generateReaderMp3, ttsProvider } from "./lib/tts";
 import { isSttEnabled, transcribeChunk } from "./lib/stt";
 import { ensureAuditTable, makeAuditMiddleware } from "./lib/audit";
 import { makeRateLimiters } from "./middleware/rateLimit";
-import { noteRenderComplete } from "./routes/auth";
+import { getPasskeySession, noteRenderComplete } from "./routes/auth";
 
 // ---------- Types ----------
 type SceneLine = { speaker: string; text: string };
@@ -41,9 +41,140 @@ const renders = new Map<string, {
   accounted?: boolean;
 }>();
 
+type ScriptRow = {
+  id: string;
+  user_id: string;
+  title: string;
+  scene_count: number;
+  scenes_json: string;
+  created_at?: string;
+  updated_at?: string;
+};
+
+// Persist Script + scenes into the SQLite `scripts` table.
+// We store scenes (and optional voiceMap) in `scenes_json` as a JSON payload.
+function serializeScriptScenes(script: Script): string {
+  const payload: any = {
+    scenes: Array.isArray(script.scenes) ? script.scenes : [],
+  };
+  if (script.voiceMap && typeof script.voiceMap === "object") {
+    payload.voiceMap = script.voiceMap;
+  }
+  return JSON.stringify(payload);
+}
+
+function deserializeScriptRow(row: ScriptRow): Script | null {
+  try {
+    const parsed = row.scenes_json ? JSON.parse(row.scenes_json) : null;
+    let scenes: Scene[] = [];
+    let voiceMap: Record<string, string> | undefined;
+
+    if (Array.isArray(parsed)) {
+      // Legacy payload: just an array of scenes
+      scenes = parsed as Scene[];
+    } else if (parsed && typeof parsed === "object") {
+      if (Array.isArray(parsed.scenes)) {
+        scenes = parsed.scenes as Scene[];
+      }
+      if (parsed.voiceMap && typeof parsed.voiceMap === "object") {
+        voiceMap = parsed.voiceMap as Record<string, string>;
+      }
+    }
+
+    const script: Script = {
+      id: row.id,
+      title: row.title,
+      text: "", // we don't persist full text yet; not needed for current flows
+      scenes,
+    };
+    if (voiceMap) {
+      script.voiceMap = voiceMap;
+    }
+    return script;
+  } catch (err) {
+    console.error("[scripts] failed to parse scenes_json for script", row.id, err);
+    return null;
+  }
+}
+
+function saveScriptToDb(script: Script, userId: string | null) {
+  const uid = userId || "solo-tester";
+  const scenesJson = serializeScriptScenes(script);
+  const sceneCount = Array.isArray(script.scenes) ? script.scenes.length : 0;
+
+  try {
+    db.prepare(
+      `INSERT INTO scripts (id, user_id, title, scene_count, scenes_json, created_at, updated_at)
+       VALUES (@id, @user_id, @title, @scene_count, @scenes_json, datetime('now'), datetime('now'))
+       ON CONFLICT(id) DO UPDATE SET
+         title = excluded.title,
+         scene_count = excluded.scene_count,
+         scenes_json = excluded.scenes_json,
+         updated_at = datetime('now')`
+    ).run({
+      id: script.id,
+      user_id: uid,
+      title: script.title,
+      scene_count: sceneCount,
+      scenes_json: scenesJson,
+    });
+  } catch (err) {
+    console.error("[scripts] failed to upsert script", script.id, err);
+  }
+}
+
+function loadScriptFromDb(scriptId: string): Script | null {
+  try {
+    const row = db
+      .prepare(`SELECT id, user_id, title, scene_count, scenes_json FROM scripts WHERE id = ?`)
+      .get(scriptId) as ScriptRow | undefined;
+    if (!row) return null;
+    return deserializeScriptRow(row);
+  } catch (err) {
+    console.error("[scripts] failed to load script", scriptId, err);
+    return null;
+  }
+}
+
+// Helper that prefers in-memory cache but can rehydrate from DB.
+function getOrLoadScript(scriptId: string): Script | null {
+  const cached = scripts.get(scriptId);
+  if (cached) return cached;
+
+  const loaded = loadScriptFromDb(scriptId);
+  if (loaded) {
+    scripts.set(scriptId, loaded);
+    return loaded;
+  }
+  return null;
+}
+
+function getUserIdOr401(req: Request, res: Response): string | null {
+  const { passkeyLoggedIn, userId } = getPasskeySession(req as any);
+  if (passkeyLoggedIn && userId) {
+    return userId;
+  }
+  res.status(401).json({ error: "not_logged_in" });
+  return null;
+}
+
+function requireUser(req: Request, res: Response, next: NextFunction) {
+  const userId = getUserIdOr401(req, res);
+  if (!userId) return;
+  const userObj = (req as any).user || { id: userId };
+  (req as any).user = userObj;
+  res.locals.user = res.locals.user || userObj;
+  next();
+}
+
 // ---------- Assets dir ----------
 const ASSETS_DIR = path.join(process.cwd(), "assets");
 if (!fs.existsSync(ASSETS_DIR)) fs.mkdirSync(ASSETS_DIR, { recursive: true });
+const UPLOADS_TMP_DIR = path.join(process.cwd(), "uploads", "tmp");
+if (!fs.existsSync(UPLOADS_TMP_DIR)) fs.mkdirSync(UPLOADS_TMP_DIR, { recursive: true });
+const galleryUpload = multer({
+  dest: UPLOADS_TMP_DIR,
+});
 
 // ---------- Parser: supports `NAME: line` and screenplay blocks ----------
 function parseScenesFromText(text: string): Scene[] {
@@ -244,53 +375,160 @@ export function initHttpRoutes(app: Express) {
 
   debug.use(secretGuard);
 
+  // GET /debug/voices_probe
+  debug.get("/voices_probe", audit("/debug/voices_probe"), (_req: Request, res: Response) => {
+    if (ttsProvider() !== "openai") {
+      return res.json({ ok: true, voices: ["alloy"] });
+    }
+    const curatedVoices = ["alloy", "echo", "fable", "onyx", "nova", "shimmer"];
+    res.json({ ok: true, voices: curatedVoices });
+  });
+
   // POST /debug/upload_script_text
   debug.post("/upload_script_text", audit("/debug/upload_script_text"), (req: Request, res: Response) => {
     const { title, text } = req.body || {};
     if (!title || !text) return res.status(400).json({ error: "title and text are required" });
+
     const id = crypto.randomUUID();
     const scenes = parseScenesFromText(String(text));
     const script: Script = { id, title: String(title), text: String(text), scenes };
+
+    // Cache in memory for this process
     scripts.set(id, script);
-    res.json({ script_id: id, scene_count: scenes.length });
+
+    // Persist to SQLite so scripts survive server restarts
+    const { userId } = getPasskeySession(req as any);
+    saveScriptToDb(script, userId || null);
+
+    // Derive a simple list of unique speaker names for the UI status line
+    const speakers = Array.from(
+      new Set(
+        scenes.flatMap((sc) =>
+          Array.isArray(sc.lines) ? sc.lines.map((ln) => ln.speaker).filter(Boolean) : []
+        )
+      )
+    );
+
+    res.json({
+      script_id: id,
+      scene_count: scenes.length,
+      speakers,
+    });
   });
 
   // POST /debug/upload_script_upload  (PDF or image)
-  debug.post("/upload_script_upload", audit("/debug/upload_script_upload"), upload.single("pdf"), async (req: Request, res: Response) => {
-    try {
-      const title = String(req.body?.title || "Uploaded Script");
-      if (!req.file?.buffer || !req.file.mimetype) return res.status(400).json({ error: "missing file" });
-      if (req.file.size > 20 * 1024 * 1024) return res.status(413).json({ error: "file too large" });
+  debug.post(
+    "/upload_script_upload",
+    audit("/debug/upload_script_upload"),
+    upload.single("pdf"),
+    async (req: Request, res: Response) => {
+      try {
+        const title = String(req.body?.title || "Uploaded Script");
+        if (!req.file?.buffer || !req.file.mimetype) {
+          return res.status(400).json({ error: "missing file" });
+        }
+        if (req.file.size > 20 * 1024 * 1024) {
+          return res.status(413).json({ error: "file too large" });
+        }
 
-      const extracted = (await extractTextAuto(req.file.buffer, req.file.mimetype)) || req.file.buffer.toString("utf8");
-      const scenes = parseScenesFromText(extracted || "");
-      const id = crypto.randomUUID();
-      const script: Script = { id, title, text: extracted, scenes };
-      scripts.set(id, script);
+        // Try to extract readable text from the upload (PDF or image).
+        const rawExtracted = await extractTextAuto(req.file.buffer, req.file.mimetype);
+        const extracted = typeof rawExtracted === "string" ? rawExtracted : "";
 
-      res.json({ script_id: id, scene_count: scenes.length });
-    } catch (e) {
-      console.error("[upload] failed:", e);
-      res.status(500).json({ error: "could not extract text" });
+        // Length of extracted text for debugging / status.
+        const textLen = extracted.trim().length;
+
+        // Only attempt scene parsing when we have a reasonable amount of text.
+        let scenes: Scene[] = [];
+        if (textLen >= 40) {
+          const parsed = parseScenesFromText(extracted);
+          // Drop any scenes that have no dialogue lines; they are noise.
+          scenes = (parsed || []).filter(
+            (sc) => Array.isArray(sc.lines) && sc.lines.length > 0
+          );
+        }
+
+        const id = crypto.randomUUID();
+        const script: Script = {
+          id,
+          title,
+          text: extracted,
+          scenes,
+        };
+
+        // Cache in memory and persist to DB
+        scripts.set(id, script);
+        const { userId } = getPasskeySession(req as any);
+        saveScriptToDb(script, userId || null);
+
+        // Derive speakers + simple parse meta for the UI
+        const speakers = Array.from(
+          new Set(
+            scenes.flatMap((sc) =>
+              Array.isArray(sc.lines) ? sc.lines.map((ln) => ln.speaker).filter(Boolean) : []
+            )
+          )
+        );
+
+        let note: string | undefined;
+        if (!scenes.length && textLen > 0) {
+          // We got text but could not recognize any dialogue patterns.
+          note = "parse-error";
+        } else if (textLen > 0 && textLen < 40) {
+          // Very short text usually means the PDF is image-only and needs OCR.
+          note = "image-only";
+        }
+
+        res.json({
+          script_id: id,
+          scene_count: scenes.length,
+          speakers,
+          textLen,
+          ...(note ? { note } : {}),
+        });
+      } catch (e) {
+        console.error("[upload] failed:", e);
+        res.status(500).json({ error: "could not extract text" });
+      }
     }
-  });
+  );
 
   // GET /debug/scenes
   debug.get("/scenes", audit("/debug/scenes"), (req: Request, res: Response) => {
     const scriptId = String(req.query.script_id || "");
-    if (!scriptId || !scripts.has(scriptId)) return res.status(404).json({ error: "script not found" });
-    const script = scripts.get(scriptId)!;
+    if (!scriptId) {
+      return res.status(400).json({ error: "script_id required" });
+    }
+
+    const script = getOrLoadScript(scriptId);
+    if (!script) {
+      return res.status(404).json({ error: "script not found" });
+    }
+
     res.json({ script_id: script.id, scenes: script.scenes });
   });
 
   // POST /debug/set_voice
   debug.post("/set_voice", audit("/debug/set_voice"), (req: Request, res: Response) => {
     const { script_id, voice_map } = req.body || {};
-    if (!script_id || !scripts.has(script_id)) return res.status(404).json({ error: "script not found" });
-    if (!voice_map || typeof voice_map !== "object") return res.status(400).json({ error: "voice_map required" });
-    const script = scripts.get(script_id)!;
-    script.voiceMap = { ...(script.voiceMap || {}), ...voice_map };
+    if (!script_id) {
+      return res.status(400).json({ error: "script_id required" });
+    }
+    if (!voice_map || typeof voice_map !== "object") {
+      return res.status(400).json({ error: "voice_map required" });
+    }
+
+    const script = getOrLoadScript(script_id);
+    if (!script) {
+      return res.status(404).json({ error: "script not found" });
+    }
+
+    script.voiceMap = { ...(script.voiceMap || {}), ...(voice_map || {}) };
     scripts.set(script_id, script);
+
+    const { userId } = getPasskeySession(req as any);
+    saveScriptToDb(script, userId || null);
+
     res.json({ ok: true });
   });
 
@@ -319,6 +557,63 @@ export function initHttpRoutes(app: Express) {
       if (!res.headersSent) {
         res.status(500).json({ error: "preview_failed" });
       }
+    }
+  });
+
+  // POST /debug/tts_line
+  debug.post("/tts_line", audit("/debug/tts_line"), async (req: Request, res: Response) => {
+    if (ttsProvider() !== "openai") {
+      return res.status(200).json({ ok: false, error: "tts_disabled" });
+    }
+
+    const body = req.body || {};
+    const voice =
+      typeof body.voice === "string" && body.voice.trim()
+        ? String(body.voice).trim()
+        : "alloy";
+    const text =
+      typeof body.text === "string" && body.text.trim()
+        ? String(body.text)
+        : "(empty line)";
+    const model =
+      typeof body.model === "string" && body.model.trim()
+        ? String(body.model).trim()
+        : "tts-1";
+
+    const lines = [{ character: "DEMO", text }];
+    const voiceMap: Record<string, string> = { DEMO: voice, UNKNOWN: voice };
+
+    try {
+      const args: any[] = [lines, voiceMap, "USER", "normal"];
+      if (typeof generateReaderMp3 === "function" && generateReaderMp3.length >= 5) {
+        args.push(model);
+      }
+      const outPath = await (generateReaderMp3 as any)(...args);
+      const id = crypto.randomUUID();
+      const dest = path.join(ASSETS_DIR, `${id}.mp3`);
+      fs.copyFileSync(outPath, dest);
+      const base = baseUrlFrom(req);
+      return res.json({ ok: true, url: `${base}/api/assets/${id}` });
+    } catch (err: any) {
+      const status = typeof err?.status === "number" ? err.status : err?.response?.status;
+      const code =
+        err?.code ||
+        err?.error?.code ||
+        err?.response?.data?.error?.code ||
+        err?.error?.type;
+      const message =
+        err?.message ||
+        err?.error?.message ||
+        err?.response?.data?.error?.message;
+      const isRateLimited =
+        status === 429 ||
+        (typeof code === "string" && code.toLowerCase().includes("rate")) ||
+        (typeof message === "string" && message.toLowerCase().includes("rate limit"));
+      console.error("[tts_line] error:", { status, code, message, raw: err });
+      if (isRateLimited) {
+        return res.status(429).json({ ok: false, error: "rate_limited" });
+      }
+      return res.status(500).json({ ok: false, error: "tts_failed" });
     }
   });
 
@@ -425,8 +720,14 @@ export function initHttpRoutes(app: Express) {
   // POST /debug/render (stub -> silent mp3)
   debug.post("/render", renderLimiter, audit("/debug/render"), (req: Request, res: Response) => {
     const { script_id, scene_id, role } = req.body || {};
-    if (!script_id || !scene_id || !role) return res.status(400).json({ error: "script_id, scene_id, role required" });
-    if (!scripts.has(script_id)) return res.status(404).json({ error: "script not found" });
+    if (!script_id || !scene_id || !role) {
+      return res.status(400).json({ error: "script_id, scene_id, role required" });
+    }
+
+    const script = getOrLoadScript(script_id);
+    if (!script) {
+      return res.status(404).json({ error: "script not found" });
+    }
 
     const renderId = crypto.randomUUID();
     renders.set(renderId, { status: "working", accounted: false });
@@ -467,11 +768,179 @@ export function initHttpRoutes(app: Express) {
   // Mount routers
   app.use("/debug", debugLimiter, debug);
 
+  // --- Gallery API (per-user, authenticated; metadata only) ------------------
+  api.get("/gallery", (req: Request, res: Response) => {
+    const userId = getUserIdOr401(req, res);
+    if (!userId) return;
+
+    try {
+      const rows = GalleryStore.listByUser(userId);
+      console.log(
+        "[gallery] list for user=%s, count=%d",
+        userId,
+        Array.isArray(rows) ? rows.length : 0
+      );
+      res.json({
+        ok: true,
+        items: rows,
+      });
+    } catch (err) {
+      console.error("Error in GET /api/gallery", err);
+      res.status(500).json({ error: "internal_error" });
+    }
+  });
+
+  api.get("/gallery/:id", (req: Request, res: Response) => {
+    const userId = getUserIdOr401(req, res);
+    if (!userId) return;
+
+    try {
+      const id = String(req.params.id || "");
+      const row = GalleryStore.getById(id, userId);
+
+      if (!row) {
+        return res.status(404).json({ error: "not_found" });
+      }
+
+      const { file_path, ...meta } = row as any;
+      res.json({
+        ok: true,
+        item: meta,
+      });
+    } catch (err) {
+      console.error("Error in GET /api/gallery/:id", err);
+      res.status(500).json({ error: "internal_error" });
+    }
+  });
+
+  api.post(
+    "/gallery/upload",
+    requireUser,
+    galleryUpload.single("file"),
+    (req: Request, res: Response) => {
+      try {
+        const user = (req as any).user || res.locals.user;
+        if (!user || !user.id) {
+          return res.status(401).json({ error: "Unauthorized" });
+        }
+
+        const file = req.file;
+        if (!file) {
+          return res.status(400).json({ error: "file_required" });
+        }
+
+        const {
+          id,
+          name,
+          script_id,
+          scene_id,
+          mime_type,
+          size,
+          created_at,
+          note,
+        } = (req.body || {}) as any;
+
+        const takeId = id || file.filename;
+        const createdAtNumRaw = created_at ? Number(created_at) : Date.now();
+        const createdAtNum = Number.isFinite(createdAtNumRaw)
+          ? createdAtNumRaw
+          : Date.now();
+        const sizeNumRaw = size ? Number(size) : file.size;
+        const sizeNum = Number.isFinite(sizeNumRaw) ? sizeNumRaw : file.size;
+        const mime = mime_type || file.mimetype || "video/webm";
+
+        const baseDir = path.join(
+          process.cwd(),
+          "uploads",
+          "gallery",
+          String(user.id)
+        );
+        fs.mkdirSync(baseDir, { recursive: true });
+
+        const ext = path.extname(file.originalname || "") || ".webm";
+        const finalName = `${takeId}${ext}`;
+        const finalPath = path.join(baseDir, finalName);
+
+        fs.renameSync(file.path, finalPath);
+
+        GalleryStore.save({
+          id: String(takeId),
+          user_id: String(user.id),
+          script_id: script_id || null,
+          scene_id: scene_id || null,
+          name: name || "Take",
+          mime_type: mime,
+          size: sizeNum,
+          created_at: createdAtNum,
+          note: note || null,
+          file_path: finalPath,
+        });
+
+        console.log(
+          "[gallery] upload saved: user=%s id=%s size=%d mime=%s path=%s",
+          String(user.id),
+          String(takeId),
+          sizeNum,
+          mime,
+          finalPath
+        );
+
+        res.json({
+          ok: true,
+          id: String(takeId),
+          created_at: createdAtNum,
+        });
+      } catch (err) {
+        console.error("Error in POST /api/gallery/upload", err);
+        res.status(500).json({ error: "internal_error" });
+      }
+    }
+  );
+
+  api.get("/gallery/:id/file", requireUser, (req: Request, res: Response) => {
+    try {
+      const user = (req as any).user || res.locals.user;
+      if (!user || !user.id) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+
+      const id = req.params.id;
+      const row = GalleryStore.getById(String(id), String(user.id));
+      if (!row) {
+        return res.status(404).json({ error: "not_found" });
+      }
+
+      const filePath = (row as any).file_path as string;
+      if (!filePath || !fs.existsSync(filePath)) {
+        return res.status(404).json({ error: "file_missing" });
+      }
+
+      // Force the correct MIME type for Safari, even if the extension is odd.
+      const mime = (row as any).mime_type as string | undefined;
+      if (mime && typeof mime === "string") {
+        res.type(mime);
+      }
+
+      res.sendFile(filePath);
+    } catch (err) {
+      console.error("Error in GET /api/gallery/:id/file", err);
+      res.status(500).json({ error: "internal_error" });
+    }
+  });
+
   api.get("/assets/:render_id", (req: Request, res: Response) => {
     const file = path.join(ASSETS_DIR, `${String(req.params.render_id)}.mp3`);
     if (!fs.existsSync(file)) return res.status(404).send("Not Found");
     res.setHeader("Content-Type", "audio/mpeg");
     fs.createReadStream(file).pipe(res);
   });
+
+  // Mount routers on the main app
+  app.use("/debug", debug);
   app.use("/api", api);
+}
+
+export function registerHttpRoutes(app: express.Express): void {
+  // Mount the API and debug routers on the main app.
+  initHttpRoutes(app as Express);
 }
