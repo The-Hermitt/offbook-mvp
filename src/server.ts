@@ -2,6 +2,7 @@ import "dotenv/config";
 import express, { Request, Response } from "express";
 import cors from "cors";
 import path from "path";
+import * as fs from "fs";
 import multer from "multer";
 import { createRequire } from "module";
 import cookieParser from "cookie-parser";
@@ -319,6 +320,8 @@ const mem = {
   renders: new Map<string, RenderJob>(),
   assets: new Map<string, Buffer>(), // id -> MP3 bytes (for renders and single-line TTS)
 };
+const ASSETS_DIR = path.join(process.cwd(), "assets");
+if (!fs.existsSync(ASSETS_DIR)) fs.mkdirSync(ASSETS_DIR, { recursive: true });
 const upload = multer({ storage: multer.memoryStorage() });
 
 function genId(prefix: string) {
@@ -579,18 +582,35 @@ app.get("/debug/tts_check", requireSecret, async (_req: Request, res: Response) 
   res.json(result);
 });
 
-// 2) Single-line TTS for Rehearse/Diagnostics
+// 2) Voices probe for UI (curated list; UI will accept any entries)
+app.get("/debug/voices_probe", requireSecret, (_req: Request, res: Response) => {
+  res.json({
+    ok: true,
+    voices: ["alloy", "ash", "ballad", "coral", "echo", "fable", "onyx", "nova", "sage", "shimmer", "verse"],
+  });
+});
+
+// 3) Single-line TTS for Rehearse/Diagnostics
 app.post("/debug/tts_line", requireSecret, async (req: Request, res: Response) => {
   try {
     if (!OPENAI_API_KEY) return res.status(500).json({ error: "OPENAI_API_KEY not set" });
-    const voice = String((req.body as any)?.voice || "alloy");
+    const VOICES = ["alloy", "ash", "ballad", "coral", "echo", "fable", "onyx", "nova", "sage", "shimmer", "verse"];
+    const LEGACY_VOICES = new Set(["alloy", "echo", "fable", "onyx", "nova", "shimmer"]);
+    const voiceRaw = String((req.body as any)?.voice || "alloy").trim();
+    const voice = VOICES.includes(voiceRaw) ? voiceRaw : "alloy";
+    const modelRaw = String((req.body as any)?.model || "tts-1");
+    const allowedModels = new Set(["tts-1", "tts-1-hd", "gpt-4o-mini-tts"]);
+    let model = allowedModels.has(modelRaw) ? modelRaw : "tts-1";
+    if (VOICES.includes(voice) && !LEGACY_VOICES.has(voice)) {
+      model = "gpt-4o-mini-tts";
+    }
     const text = String((req.body as any)?.text || "").trim();
     if (!text) return res.status(400).json({ error: "missing text" });
 
-    const buf = await openaiTts(text, voice, "tts-1");
+    const buf = await openaiTts(text, voice, model);
     const id = genId("tts");
     mem.assets.set(id, buf);
-    return res.json({ url: `/api/assets/${id}` });
+    return res.json({ ok: true, url: `/api/assets/${id}` });
   } catch (e: any) {
     const msg = e?.message || String(e);
     return res.status(500).json({ error: msg.slice(0, 200) });
@@ -1180,15 +1200,6 @@ function mountFallbackDebugRoutes() {
     });
   });
 
-  app.get("/api/assets/:render_id", (req: Request, res: Response) => {
-    const rid = String(req.params.render_id || "");
-    const buf = mem.assets.get(rid);
-    if (!buf) return res.status(404).json({ error: "asset not found" });
-    res.setHeader("Content-Type", "audio/mpeg");
-    res.setHeader("Cache-Control", "no-store");
-    res.send(buf);
-  });
-
   console.log("[fallback] /debug/* routes active (in-memory, robust PDF import + strict speaker guard)");
 }
 
@@ -1210,6 +1221,68 @@ async function tryMountProjectHttpRoutes() {
   }
   return false;
 }
+
+// Always-on assets route (in-memory first, then disk)
+app.get("/api/assets/:render_id", (req: Request, res: Response) => {
+  const rid = String(req.params.render_id || "");
+  const range = req.headers.range;
+
+  const sendBuffer = (buf: Buffer) => {
+    const total = buf.length;
+    if (range && range.startsWith("bytes=")) {
+      const parts = range.replace(/bytes=/, "").split("-");
+      const start = Number(parts[0]) || 0;
+      const end = parts[1] ? Number(parts[1]) : total - 1;
+      if (start >= total || start < 0 || start > end) {
+        res.status(416).set("Content-Range", `bytes */${total}`).end();
+        return;
+      }
+      const clampedEnd = Math.min(end, total - 1);
+      const chunk = buf.subarray(start, clampedEnd + 1);
+      res.status(206);
+      res.setHeader("Content-Range", `bytes ${start}-${clampedEnd}/${total}`);
+      res.setHeader("Accept-Ranges", "bytes");
+      res.setHeader("Content-Length", chunk.length);
+      res.setHeader("Content-Type", "audio/mpeg");
+      res.setHeader("Cache-Control", "no-store");
+      return res.end(chunk);
+    }
+    res.setHeader("Content-Type", "audio/mpeg");
+    res.setHeader("Cache-Control", "no-store");
+    res.setHeader("Content-Length", total);
+    return res.end(buf);
+  };
+
+  const inMem = mem.assets.get(rid);
+  if (inMem) return sendBuffer(inMem);
+
+  const filePath = path.join(ASSETS_DIR, `${rid}.mp3`);
+  if (fs.existsSync(filePath)) {
+    const stat = fs.statSync(filePath);
+    const total = stat.size;
+    res.setHeader("Content-Type", "audio/mpeg");
+    res.setHeader("Cache-Control", "no-store");
+    if (range && range.startsWith("bytes=")) {
+      const parts = range.replace(/bytes=/, "").split("-");
+      const start = Number(parts[0]) || 0;
+      const end = parts[1] ? Number(parts[1]) : total - 1;
+      if (start >= total || start < 0 || start > end) {
+        res.status(416).set("Content-Range", `bytes */${total}`).end();
+        return;
+      }
+      const clampedEnd = Math.min(end, total - 1);
+      res.status(206);
+      res.setHeader("Content-Range", `bytes ${start}-${clampedEnd}/${total}`);
+      res.setHeader("Accept-Ranges", "bytes");
+      res.setHeader("Content-Length", clampedEnd - start + 1);
+      return fs.createReadStream(filePath, { start, end: clampedEnd }).pipe(res);
+    }
+    res.setHeader("Content-Length", total);
+    return fs.createReadStream(filePath).pipe(res);
+  }
+
+  return res.status(404).json({ error: "asset not found" });
+});
 
 await tryMountProjectHttpRoutes().then((mounted) => { if (!mounted) mountFallbackDebugRoutes(); });
 
