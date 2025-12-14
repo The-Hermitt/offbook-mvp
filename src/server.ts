@@ -24,8 +24,6 @@ const stripe =
     ? new Stripe(STRIPE_SECRET_KEY)
     : null;
 const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || "";
-<<<<<<< HEAD
-=======
 
 function stripDataUrlPrefix(data: string): { base64: string; mimeFromHeader?: string } {
   const trimmed = data.trim();
@@ -48,7 +46,6 @@ function stripDataUrlPrefix(data: string): { base64: string; mimeFromHeader?: st
   const base64 = trimmed.slice(commaIndex + 1);
   return { base64, mimeFromHeader };
 }
->>>>>>> feature/pwa-auth
 
 // --- tiny helper: safe fetch with timeout ---
 async function fetchWithTimeout(input: RequestInfo, init: RequestInit & { timeoutMs?: number } = {}) {
@@ -268,8 +265,6 @@ app.post(
       if (eventType === "checkout.session.completed") {
         const session = event.data.object as Stripe.Checkout.Session;
 
-<<<<<<< HEAD
-=======
         const userIdFromClientRef = session.client_reference_id;
         const userIdFromMetadata =
           (session.metadata && (session.metadata as any).userId) || null;
@@ -280,29 +275,18 @@ app.post(
           return res.json({ received: true });
         }
 
->>>>>>> feature/pwa-auth
         // For now we hard-code the plan → credits mapping.
         // "credits-100" → 100 credits; adjust later if we add more plans.
         const creditsToGrant = 100;
 
-<<<<<<< HEAD
-        const uid = "solo-tester";
-
-        const updated = await addUserCredits(uid, creditsToGrant);
-=======
         const updated = await addUserCredits(userId, creditsToGrant);
->>>>>>> feature/pwa-auth
 
         const totalCredits = updated.total_credits;
         const usedCredits = updated.used_credits;
         const availableCredits = getAvailableCredits(updated);
 
         console.log("[billing] webhook credited", {
-<<<<<<< HEAD
-          userId: uid,
-=======
           userId,
->>>>>>> feature/pwa-auth
           creditsAdded: creditsToGrant,
           totalCredits,
           usedCredits,
@@ -311,11 +295,7 @@ app.post(
         });
       }
 
-<<<<<<< HEAD
-      return res.json({ ok: true, received: true });
-=======
       return res.json({ received: true });
->>>>>>> feature/pwa-auth
     } catch (e: any) {
       console.error("[billing] webhook error", e);
       return res.status(500).json({ ok: false, error: "webhook_error" });
@@ -504,61 +484,6 @@ function concatMp3(parts: Buffer[]): Buffer {
   return Buffer.concat(parts);
 }
 
-<<<<<<< HEAD
-function getUserIdForRequest(_req: Request): string {
-  // TODO: Wire this to real auth/session when user ids are available.
-  return "solo-tester";
-}
-
-function persistScriptToDb(id: string, title: string, scenes: Scene[]) {
-  try {
-    const scenesJson = JSON.stringify(scenes || []);
-    const sceneCount = Array.isArray(scenes) ? scenes.length : 0;
-
-    const stmt = db.prepare(`
-      INSERT INTO scripts (id, user_id, title, scene_count, scenes_json, created_at, updated_at)
-      VALUES (@id, @user_id, @title, @scene_count, @scenes_json, datetime('now'), datetime('now'))
-      ON CONFLICT(id) DO UPDATE SET
-        user_id = excluded.user_id,
-        title = excluded.title,
-        scene_count = excluded.scene_count,
-        scenes_json = excluded.scenes_json,
-        updated_at = datetime('now')
-    `);
-
-    // TODO: replace "solo-tester" with a real user id from the auth/session once that is wired.
-    stmt.run({
-      id,
-      user_id: "solo-tester",
-      title,
-      scene_count: sceneCount,
-      scenes_json: scenesJson,
-    });
-  } catch (e) {
-    console.error("[scripts] failed to persist script", { id, title, error: (e as any)?.message || e });
-  }
-}
-
-function loadScriptFromDb(scriptId: string, userId: string): { title: string; scenes: Scene[] } | null {
-  try {
-    const stmt = db.prepare(`
-      SELECT title, scenes_json
-      FROM scripts
-      WHERE id = @id AND user_id = @user_id
-    `);
-    const row: any = stmt.get({ id: scriptId, user_id: userId });
-    if (!row || !row.scenes_json) return null;
-
-    const parsed = JSON.parse(row.scenes_json);
-    if (!Array.isArray(parsed)) return null;
-
-    return {
-      title: row.title || "Sides",
-      scenes: parsed as Scene[],
-    };
-  } catch (e: any) {
-    console.error("[scripts] loadScriptFromDb failed", scriptId, e?.message || e);
-=======
 function getUserIdForRequest(req: Request): string {
   try {
     const { passkeyLoggedIn, userId } = getPasskeySession(req as any);
@@ -645,7 +570,6 @@ function loadScriptFromDb(id: string): ScriptRow | null {
       id,
       error: (e as any)?.message || e,
     });
->>>>>>> feature/pwa-auth
     return null;
   }
 }
@@ -828,22 +752,6 @@ app.get("/api/my_scripts", async (req: Request, res: Response) => {
     const userId = getUserIdForRequest(req);
 
     const stmt = db.prepare(
-<<<<<<< HEAD
-      `SELECT id, title, scene_count, updated_at
-       FROM scripts
-       WHERE user_id = @user_id
-       ORDER BY datetime(updated_at) DESC`
-    );
-
-    const rows = stmt.all({ user_id: userId });
-
-    const scripts = rows.map((row: any) => ({
-      id: row.id,
-      title: row.title,
-      sceneCount: typeof row.scene_count === "number" ? row.scene_count : 0,
-      updatedAt: row.updated_at,
-    }));
-=======
       `SELECT id, user_id, title, scene_count, updated_at
        FROM scripts
        ORDER BY datetime(updated_at) DESC`
@@ -871,7 +779,6 @@ app.get("/api/my_scripts", async (req: Request, res: Response) => {
       userId,
       count: scripts.length,
     });
->>>>>>> feature/pwa-auth
 
     res.json({ scripts });
   } catch (e: any) {
@@ -880,8 +787,6 @@ app.get("/api/my_scripts", async (req: Request, res: Response) => {
   }
 });
 
-<<<<<<< HEAD
-=======
 app.get("/api/scripts/:id", (req: Request, res: Response) => {
   const id = (req.params.id || "").trim();
   if (!id) {
@@ -926,7 +831,6 @@ app.get("/api/scripts/:id", (req: Request, res: Response) => {
   });
 });
 
->>>>>>> feature/pwa-auth
 app.post("/api/scripts/:id/save", async (req: Request, res: Response) => {
   try {
     const userId = getUserIdForRequest(req);
@@ -960,11 +864,7 @@ app.post("/api/scripts/:id/save", async (req: Request, res: Response) => {
     const finalTitle = rawTitle || existingTitle || "Sides";
 
     // Persist new title + scenes to DB
-<<<<<<< HEAD
-    persistScriptToDb(id, finalTitle, scenes);
-=======
     persistScriptToDb(id, userId, finalTitle, scenes);
->>>>>>> feature/pwa-auth
 
     return res.json({ ok: true });
   } catch (e: any) {
@@ -975,32 +875,18 @@ app.post("/api/scripts/:id/save", async (req: Request, res: Response) => {
 
 app.delete("/api/scripts/:id", async (req: Request, res: Response) => {
   try {
-<<<<<<< HEAD
-    const userId = getUserIdForRequest(req);
-=======
     const userId = getUserIdForRequest(req); // keep this for logging if needed later
->>>>>>> feature/pwa-auth
     const id = (req.params.id || "").trim();
 
     if (!id) {
       return res.status(400).json({ error: "missing_script_id" });
     }
 
-<<<<<<< HEAD
-    const stmt = db.prepare(
-      "DELETE FROM scripts WHERE id = @id AND user_id = @user_id"
-    );
-    const info = stmt.run({ id, user_id: userId });
-
-    if (info.changes === 0) {
-      // Nothing deleted: either it never existed or belongs to another user.
-=======
     const stmt = db.prepare("DELETE FROM scripts WHERE id = @id");
     const info = stmt.run({ id });
 
     if (info.changes === 0) {
       // Nothing deleted: either it never existed or was already removed.
->>>>>>> feature/pwa-auth
       return res.status(404).json({ ok: false, error: "script_not_found" });
     }
 
@@ -1018,48 +904,6 @@ function mountFallbackDebugRoutes() {
     res.json({ ok: true, marker: "fallback/server.ts" });
   });
 
-<<<<<<< HEAD
-  app.post("/debug/upload_script_text", requireSecret, audit("/debug/upload_script_text"), (req: Request, res: Response) => {
-    const title = String(req.body?.title || "Script");
-    const text = String(req.body?.text || "");
-    const id = genId("scr");
-    const scenes = parseTextToScenes(title, text);
-    const speakers = uniqueSpeakers(scenes[0]);
-    mem.scripts.set(id, { id, title, scenes, voices: {} });
-    persistScriptToDb(id, title, scenes);
-    res.json({ script_id: id, scene_count: scenes.length, speakers });
-  });
-
-  // Robust PDF (text) import
-  app.post("/debug/upload_script_upload", requireSecret, audit("/debug/upload_script_upload"), upload.single("pdf"), async (req: Request, res: Response) => {
-    const title = String((req.body as any)?.title || "PDF");
-    const pdfBuf = (req as any).file?.buffer as Buffer | undefined;
-    if (!pdfBuf) return res.status(400).json({ error: "missing pdf file" });
-
-    try {
-      let pdfParseFn: any = null;
-      try { const modA: any = await import("pdf-parse"); pdfParseFn = modA?.default || modA; } catch {}
-      if (!pdfParseFn) {
-        const reqr = createRequire(import.meta.url);
-        const modB: any = reqr("pdf-parse");
-        pdfParseFn = modB?.default || modB;
-      }
-      if (typeof pdfParseFn !== "function") throw new Error("pdf-parse load failed (no function export)");
-
-      const data = await pdfParseFn(pdfBuf);
-      let text = String(data?.text || "");
-      const textLenRaw = text.length;
-
-      if (textLenRaw < 20) {
-        const id = genId("scr");
-        const scenes: Scene[] = [{ id: genId("scn"), title, lines: [{ speaker: "SYSTEM", text: "PDF appears to be image-only. Paste script text for best parsing (OCR later)." }] }];
-        mem.scripts.set(id, { id, title, scenes, voices: {} });
-        persistScriptToDb(id, title, scenes);
-        return res.json({ script_id: id, scene_count: scenes.length, note: "image-only", textLen: textLenRaw });
-      }
-
-      text = normalizePdfText(text);
-=======
   app.post(
     "/debug/upload_script_text",
     requireSecret,
@@ -1069,26 +913,10 @@ function mountFallbackDebugRoutes() {
       const title = String(req.body?.title || "Script");
       const text = String(req.body?.text || "");
       const id = genId("scr");
->>>>>>> feature/pwa-auth
       const scenes = parseTextToScenes(title, text);
       const speakers = uniqueSpeakers(scenes[0]);
 
       mem.scripts.set(id, { id, title, scenes, voices: {} });
-<<<<<<< HEAD
-      persistScriptToDb(id, title, scenes);
-      return res.json({ script_id: id, scene_count: scenes.length, speakers, textLen: text.length });
-    } catch (e: any) {
-      const msg = (e?.message || String(e)).slice(0, 200);
-      console.error("[pdf] extract failed:", msg);
-      const id = genId("scr");
-      const scenes: Scene[] = [{ id: genId("scn"), title, lines: [{ speaker: "SYSTEM", text: "Could not parse PDF text. Please paste script text. (Error logged on server.)" }] }];
-      mem.scripts.set(id, { id, title, scenes, voices: {} });
-      persistScriptToDb(id, title, scenes);
-      return res.json({ script_id: id, scene_count: scenes.length, note: "parse-error", error: msg });
-    }
-  });
-
-=======
       persistScriptToDb(id, userId, title, scenes);
 
       res.json({ script_id: id, scene_count: scenes.length, speakers });
@@ -1191,7 +1019,6 @@ function mountFallbackDebugRoutes() {
     }
   );
 
->>>>>>> feature/pwa-auth
   app.get(
     "/debug/scenes",
     requireSecret,
@@ -1202,35 +1029,6 @@ function mountFallbackDebugRoutes() {
         return res.status(400).json({ error: "missing_script_id" });
       }
 
-<<<<<<< HEAD
-      // 1) Try in-memory first
-      let s = mem.scripts.get(script_id);
-      if (s && Array.isArray(s.scenes)) {
-        return res.json({ script_id, scenes: s.scenes });
-      }
-
-      // 2) Fallback: try to load from DB
-      try {
-        const userId = getUserIdForRequest(req);
-        const fromDb = loadScriptFromDb(script_id, userId);
-        if (fromDb && Array.isArray(fromDb.scenes)) {
-          // Optionally repopulate mem.scripts for faster access next time.
-          mem.scripts.set(script_id, {
-            id: script_id,
-            title: fromDb.title,
-            scenes: fromDb.scenes,
-            voices: s?.voices || {},
-          });
-
-          return res.json({ script_id, scenes: fromDb.scenes });
-        }
-      } catch (e) {
-        console.error("[scripts] /debug/scenes DB fallback failed", e);
-      }
-
-      // 3) Nothing found
-      return res.status(404).json({ error: "not_found" });
-=======
       let script = mem.scripts.get(script_id);
       const row = loadScriptFromDb(script_id);
 
@@ -1301,7 +1099,6 @@ function mountFallbackDebugRoutes() {
         console.error("[debug/stt] error:", err);
         return res.status(500).json({ ok: false, error: "stt_stub_failed" });
       }
->>>>>>> feature/pwa-auth
     }
   );
 

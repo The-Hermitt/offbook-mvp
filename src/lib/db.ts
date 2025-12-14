@@ -49,41 +49,37 @@ export default db;
 export function getDB() {
   return db;
 }
-<<<<<<< HEAD
-=======
 
 function ensureGalleryTakesSchema() {
   try {
     // Look at the existing table definition, if any.
     const rows = db.prepare(`PRAGMA table_info('gallery_takes')`).all();
     const hasExisting = rows && rows.length > 0;
+    const colNames = Array.isArray(rows) ? rows.map((r: any) => r.name) : [];
+    const hasNotesCol = colNames.includes("notes");
+    const hasReaderRenderIdCol = colNames.includes("reader_render_id");
 
-    // Columns we expect for the current implementation.
-    const expected = [
-      "id",
-      "user_id",
-      "script_id",
-      "scene_id",
-      "name",
-      "mime_type",
-      "size",
-      "created_at",
-      "note",
-      "file_path",
-    ];
+    // Non-destructive add: backfill the new notes column if it's missing.
+    if (hasExisting && !hasNotesCol) {
+      try {
+        db.exec(`ALTER TABLE gallery_takes ADD COLUMN notes TEXT DEFAULT ''`);
+        db.exec(
+          `UPDATE gallery_takes SET notes = COALESCE(notes, note, '') WHERE notes IS NULL OR notes = ''`
+        );
+        console.log("[db] added notes column to gallery_takes");
+      } catch (e) {
+        console.error("[db] failed to add notes column to gallery_takes", e);
+      }
+    }
 
-    const missing = hasExisting
-      ? expected.filter((col) => !rows.some((r: any) => r.name === col))
-      : [];
-
-    // If there is an existing table but it's missing any expected columns,
-    // we treat it as legacy and drop it so we can recreate a clean one.
-    if (hasExisting && missing.length > 0) {
-      console.warn(
-        "[db] detected legacy gallery_takes schema; dropping table. Missing:",
-        missing.join(", ")
-      );
-      db.exec(`DROP TABLE IF EXISTS gallery_takes;`);
+    // Non-destructive add: reader_render_id column for mixed downloads.
+    if (hasExisting && !hasReaderRenderIdCol) {
+      try {
+        db.exec(`ALTER TABLE gallery_takes ADD COLUMN reader_render_id TEXT`);
+        console.log("[db] added reader_render_id column to gallery_takes");
+      } catch (e) {
+        console.error("[db] failed to add reader_render_id column to gallery_takes", e);
+      }
     }
 
     // Create the current schema if needed.
@@ -98,7 +94,9 @@ function ensureGalleryTakesSchema() {
         size INTEGER,
         created_at INTEGER NOT NULL,
         note TEXT,
-        file_path TEXT NOT NULL
+        file_path TEXT NOT NULL,
+        notes TEXT DEFAULT '',
+        reader_render_id TEXT
       );
     `);
   } catch (e) {
@@ -113,7 +111,7 @@ export const GalleryStore = {
   listByUser(userId: string) {
     return db
       .prepare(
-        `SELECT id, user_id, script_id, scene_id, name, mime_type, size, created_at, note
+        `SELECT id, user_id, script_id, scene_id, name, mime_type, size, created_at, note, notes, reader_render_id
          FROM gallery_takes
          WHERE user_id = ?
          ORDER BY created_at DESC`
@@ -124,7 +122,7 @@ export const GalleryStore = {
   getById(id: string, userId: string) {
     return db
       .prepare(
-        `SELECT id, user_id, script_id, scene_id, name, mime_type, size, created_at, note, file_path
+        `SELECT id, user_id, script_id, scene_id, name, mime_type, size, created_at, note, notes, reader_render_id, file_path
          FROM gallery_takes
         WHERE id = ? AND user_id = ?`
       )
@@ -141,13 +139,32 @@ export const GalleryStore = {
     size?: number | null;
     created_at: number;
     note?: string | null;
+    notes?: string | null;
+    reader_render_id?: string | null;
     file_path: string;
   }) {
+    const notesVal =
+      typeof take.notes === "string"
+        ? take.notes
+        : typeof take.note === "string"
+        ? take.note
+        : "";
+    const noteVal =
+      typeof take.note === "string"
+        ? take.note
+        : typeof take.notes === "string"
+        ? take.notes
+        : null;
+    const readerRenderIdVal =
+      typeof take.reader_render_id === "string" && take.reader_render_id.trim()
+        ? take.reader_render_id.trim()
+        : null;
+
     db.prepare(
       `INSERT INTO gallery_takes
-         (id, user_id, script_id, scene_id, name, mime_type, size, created_at, note, file_path)
+         (id, user_id, script_id, scene_id, name, mime_type, size, created_at, note, notes, reader_render_id, file_path)
        VALUES
-         (@id, @user_id, @script_id, @scene_id, @name, @mime_type, @size, @created_at, @note, @file_path)
+         (@id, @user_id, @script_id, @scene_id, @name, @mime_type, @size, @created_at, @note, @notes, @reader_render_id, @file_path)
        ON CONFLICT(id) DO UPDATE SET
          user_id = excluded.user_id,
          script_id = excluded.script_id,
@@ -157,8 +174,26 @@ export const GalleryStore = {
          size = excluded.size,
          created_at = excluded.created_at,
          note = excluded.note,
+         notes = excluded.notes,
+         reader_render_id = excluded.reader_render_id,
          file_path = excluded.file_path`
-    ).run(take);
+    ).run({
+      ...take,
+      note: noteVal,
+      notes: notesVal,
+      reader_render_id: readerRenderIdVal,
+    });
+  },
+
+  deleteById(id: string, userId: string) {
+    return db
+      .prepare(`DELETE FROM gallery_takes WHERE id = ? AND user_id = ?`)
+      .run(id, userId);
+  },
+
+  updateNotes(id: string, userId: string, notes: string) {
+    return db
+      .prepare(`UPDATE gallery_takes SET notes = ?, note = ? WHERE id = ? AND user_id = ?`)
+      .run(notes, notes, id, userId);
   },
 };
->>>>>>> feature/pwa-auth

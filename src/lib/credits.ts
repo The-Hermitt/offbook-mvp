@@ -78,11 +78,7 @@ export function addUserCredits(userId: string, amount: number): UserCreditsRow {
 export function spendUserCredits(userId: string, amount: number): UserCreditsRow | null {
   if (!userId || amount <= 0) return null;
 
-  const row = db
-    .prepare<[{ user_id: string }], UserCreditsRow | undefined>(
-      "SELECT user_id, total_credits, used_credits, updated_at FROM user_credits WHERE user_id = ?"
-    )
-    .get(userId);
+  const row = getUserCredits(userId);
 
   if (!row) {
     return null;
@@ -95,15 +91,24 @@ export function spendUserCredits(userId: string, amount: number): UserCreditsRow
 
   const now = new Date().toISOString();
   const toSpend = Math.min(amount, remaining);
-  const nextUsed = row.used_credits + toSpend;
+  const result = db
+    .prepare(
+      `
+        UPDATE user_credits
+        SET used_credits = used_credits + ?, updated_at = ?
+        WHERE user_id = ? AND used_credits + ? <= total_credits
+      `
+    )
+    .run(toSpend, now, userId, toSpend);
 
-  db
-    .prepare("UPDATE user_credits SET used_credits = ?, updated_at = ? WHERE user_id = ?")
-    .run(nextUsed, now, userId);
+  if (!result || typeof result.changes !== "number" || result.changes === 0) {
+    // No row updated (likely because credits are exhausted). Return the original row.
+    return row;
+  }
 
   return {
     ...row,
-    used_credits: nextUsed,
+    used_credits: row.used_credits + toSpend,
     updated_at: now,
   };
 }

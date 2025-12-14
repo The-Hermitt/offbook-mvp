@@ -5,14 +5,10 @@ import multer from "multer";
 import * as path from "path";
 import * as fs from "fs";
 import crypto from "crypto";
-<<<<<<< HEAD
-import db from "./lib/db";
-import { generateReaderMp3, ttsProvider } from "./lib/tts";
-=======
+import { spawn } from "child_process";
 import db, { GalleryStore } from "./lib/db";
 import { generateReaderMp3, ttsProvider } from "./lib/tts";
 import { isSttEnabled, transcribeChunk } from "./lib/stt";
->>>>>>> feature/pwa-auth
 import { ensureAuditTable, makeAuditMiddleware } from "./lib/audit";
 import { makeRateLimiters } from "./middleware/rateLimit";
 import { getPasskeySession, noteRenderComplete } from "./routes/auth";
@@ -370,6 +366,24 @@ export function initHttpRoutes(app: Express) {
   ensureAuditTable(db);
   const audit = makeAuditMiddleware(db);
   const { debugLimiter, renderLimiter } = makeRateLimiters();
+  const mixdownEnabled =
+    !!process.env.MIXDOWN_ENABLED &&
+    process.env.MIXDOWN_ENABLED !== "0" &&
+    process.env.MIXDOWN_ENABLED.toLowerCase() !== "false";
+
+  function runFfmpeg(args: string[]): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const proc = spawn("ffmpeg", args);
+      let stderr = "";
+      proc.stderr?.on("data", (d) => (stderr += d.toString()));
+      proc.on("error", (err) => reject(err));
+      proc.on("close", (code) => {
+        if (code === 0) return resolve();
+        const err = new Error(`ffmpeg exited with code ${code}: ${stderr}`);
+        return reject(err);
+      });
+    });
+  }
 
   const debug = express.Router();
   // Quick probe to confirm http-routes.ts is mounted
@@ -565,8 +579,6 @@ export function initHttpRoutes(app: Express) {
     }
   });
 
-<<<<<<< HEAD
-=======
   // POST /debug/tts_line
   debug.post("/tts_line", audit("/debug/tts_line"), async (req: Request, res: Response) => {
     if (ttsProvider() !== "openai") {
@@ -724,7 +736,6 @@ export function initHttpRoutes(app: Express) {
     }
   });
 
->>>>>>> feature/pwa-auth
   // POST /debug/render (stub -> silent mp3)
   debug.post("/render", renderLimiter, audit("/debug/render"), (req: Request, res: Response) => {
     const { script_id, scene_id, role } = req.body || {};
@@ -740,7 +751,18 @@ export function initHttpRoutes(app: Express) {
     const renderId = crypto.randomUUID();
     renders.set(renderId, { status: "working", accounted: false });
     const file = writeSilentMp3(renderId);
-    renders.set(renderId, { status: "complete", file, accounted: false });
+    const job = { status: "complete" as const, file, accounted: false };
+    try {
+      console.log(
+        "[credits] render complete (http-routes:/debug/render): accounting usage; rid=%s",
+        renderId
+      );
+      noteRenderComplete(req);
+      job.accounted = true;
+    } catch (err) {
+      console.error("[credits] noteRenderComplete failed (http-routes:/debug/render):", err);
+    }
+    renders.set(renderId, job);
     res.json({ render_id: renderId, status: "complete" });
   });
 
@@ -790,7 +812,15 @@ export function initHttpRoutes(app: Express) {
       );
       res.json({
         ok: true,
-        items: rows,
+        items: (rows || []).map((r: any) => ({
+          ...r,
+          notes:
+            typeof r?.notes === "string"
+              ? r.notes
+              : typeof r?.note === "string"
+              ? r.note
+              : "",
+        })),
       });
     } catch (err) {
       console.error("Error in GET /api/gallery", err);
@@ -811,6 +841,12 @@ export function initHttpRoutes(app: Express) {
       }
 
       const { file_path, ...meta } = row as any;
+      meta.notes =
+        typeof meta.notes === "string"
+          ? meta.notes
+          : typeof meta.note === "string"
+          ? meta.note
+          : "";
       res.json({
         ok: true,
         item: meta,
@@ -846,6 +882,8 @@ export function initHttpRoutes(app: Express) {
           size,
           created_at,
           note,
+          notes,
+          render_id,
         } = (req.body || {}) as any;
 
         const takeId = id || file.filename;
@@ -871,6 +909,23 @@ export function initHttpRoutes(app: Express) {
 
         fs.renameSync(file.path, finalPath);
 
+        const notesVal =
+          typeof notes === "string"
+            ? notes
+            : typeof note === "string"
+            ? note
+            : "";
+        const noteVal =
+          typeof note === "string"
+            ? note
+            : typeof notes === "string"
+            ? notes
+            : null;
+        const readerRenderId =
+          typeof render_id === "string" && render_id.trim()
+            ? render_id.trim()
+            : null;
+
         GalleryStore.save({
           id: String(takeId),
           user_id: String(user.id),
@@ -880,7 +935,9 @@ export function initHttpRoutes(app: Express) {
           mime_type: mime,
           size: sizeNum,
           created_at: createdAtNum,
-          note: note || null,
+          note: noteVal,
+          notes: notesVal,
+          reader_render_id: readerRenderId,
           file_path: finalPath,
         });
 
@@ -905,6 +962,168 @@ export function initHttpRoutes(app: Express) {
     }
   );
 
+  // POST /api/gallery/delete { take_id }
+  api.post(
+    "/gallery/delete",
+    requireUser,
+    express.json(),
+    (req: Request, res: Response) => {
+      try {
+        const user = (req as any).user || res.locals.user;
+        if (!user || !user.id) {
+          return res.status(401).json({ error: "Unauthorized" });
+        }
+
+        const takeId = String((req.body as any)?.take_id || (req.body as any)?.id || "");
+        if (!takeId) {
+          return res.status(400).json({ error: "take_id_required" });
+        }
+
+        const row = GalleryStore.getById(takeId, String(user.id));
+        if (!row) {
+          return res.status(404).json({ error: "not_found" });
+        }
+
+        const filePath = (row as any).file_path as string;
+        try {
+          if (filePath && fs.existsSync(filePath)) {
+            fs.unlinkSync(filePath);
+          }
+        } catch (e) {
+          console.warn("[gallery] unlink failed for", takeId, e);
+        }
+
+        GalleryStore.deleteById(takeId, String(user.id));
+        return res.json({ ok: true });
+      } catch (err) {
+        console.error("Error in POST /api/gallery/delete", err);
+        return res.status(500).json({ error: "internal_error" });
+      }
+    }
+  );
+
+  api.post(
+    "/gallery/notes",
+    requireUser,
+    express.json(),
+    (req: Request, res: Response) => {
+      try {
+        const user = (req as any).user || res.locals.user;
+        if (!user || !user.id) {
+          return res.status(401).json({ error: "Unauthorized" });
+        }
+
+        const takeId = String((req.body as any)?.take_id || "");
+        const notes =
+          typeof (req.body as any)?.notes === "string" ? (req.body as any).notes : "";
+        if (!takeId) {
+          return res.status(400).json({ error: "take_id_required" });
+        }
+
+        const row = GalleryStore.getById(takeId, String(user.id));
+        if (!row) {
+          return res.status(404).json({ error: "not_found" });
+        }
+
+        GalleryStore.updateNotes(takeId, String(user.id), notes);
+        return res.json({ ok: true });
+      } catch (err) {
+        console.error("Error in POST /api/gallery/notes", err);
+        return res.status(500).json({ error: "internal_error" });
+      }
+    }
+  );
+
+  api.get("/gallery/:id/mixed_file", requireUser, async (req: Request, res: Response) => {
+    try {
+      if (!mixdownEnabled) {
+        return res.status(404).send("Not Found");
+      }
+
+      const user = (req as any).user || res.locals.user;
+      if (!user || !user.id) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+
+      const id = String(req.params.id || "");
+      if (!id) {
+        return res.status(400).json({ error: "id_required" });
+      }
+
+      const row = GalleryStore.getById(id, String(user.id));
+      if (!row) {
+        return res.status(404).json({ error: "not_found" });
+      }
+
+      const filePath = (row as any).file_path as string;
+      const readerId = (row as any).reader_render_id as string | undefined;
+      if (!filePath || !fs.existsSync(filePath)) {
+        return res.status(404).json({ error: "file_missing" });
+      }
+      if (!readerId) {
+        return res.status(404).json({ error: "reader_missing" });
+      }
+      const readerFile = path.join(ASSETS_DIR, `${readerId}.mp3`);
+      if (!fs.existsSync(readerFile)) {
+        return res.status(404).json({ error: "reader_audio_missing" });
+      }
+
+      const takeStat = fs.statSync(filePath);
+      const readerStat = fs.statSync(readerFile);
+      const outPath = path.join(path.dirname(filePath), `${id}.mixed.mp4`);
+      const outExists = fs.existsSync(outPath);
+      const needsRebuild =
+        !outExists ||
+        fs.statSync(outPath).mtimeMs <
+          Math.max(takeStat.mtimeMs, readerStat.mtimeMs);
+
+      if (needsRebuild) {
+        const filter =
+          "[1:a]aecho=0.6:0.5:30|45:0.25,highpass=f=160,lowpass=f=7200,volume=0.55[room];" +
+          "[0:a][room]amix=inputs=2:duration=first:dropout_transition=4[aout]";
+        const baseArgs = [
+          "-y",
+          "-i",
+          filePath,
+          "-i",
+          readerFile,
+          "-filter_complex",
+          filter,
+          "-map",
+          "0:v",
+          "-map",
+          "[aout]",
+          "-c:a",
+          "aac",
+          "-movflags",
+          "+faststart",
+        ];
+
+        try {
+          await runFfmpeg([...baseArgs, "-c:v", "copy", outPath]);
+        } catch (err) {
+          console.warn("[gallery] mixed copy failed, retrying with transcode", err);
+          await runFfmpeg([
+            ...baseArgs,
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "22",
+            outPath,
+          ]);
+        }
+      }
+
+      res.type("video/mp4");
+      return res.sendFile(outPath);
+    } catch (err) {
+      console.error("Error in GET /api/gallery/:id/mixed_file", err);
+      return res.status(500).json({ error: "internal_error" });
+    }
+  });
+
   api.get("/gallery/:id/file", requireUser, (req: Request, res: Response) => {
     try {
       const user = (req as any).user || res.locals.user;
@@ -923,10 +1142,30 @@ export function initHttpRoutes(app: Express) {
         return res.status(404).json({ error: "file_missing" });
       }
 
+      const wantsDownload =
+        (typeof req.query?.download === "string" && req.query.download === "1") ||
+        (typeof req.query?.dl === "string" && req.query.dl === "1");
+
+      const rawName =
+        (row as any)?.name ||
+        (row as any)?.label ||
+        path.basename(filePath);
+      const safeName =
+        (rawName &&
+          String(rawName)
+            .replace(/[\\\/]/g, "_")
+            .replace(/[^\w.-]+/g, "_")
+            .slice(0, 80)) ||
+        path.basename(filePath);
+
       // Force the correct MIME type for Safari, even if the extension is odd.
       const mime = (row as any).mime_type as string | undefined;
       if (mime && typeof mime === "string") {
         res.type(mime);
+      }
+
+      if (wantsDownload) {
+        return res.download(filePath, safeName);
       }
 
       res.sendFile(filePath);

@@ -238,6 +238,8 @@ router.get("/session", (req, res) => {
     });
   }
 
+  res.setHeader("Cache-Control", "no-store");
+
   res.json({
     invited,
     hasInviteCode: Boolean((process.env.INVITE_CODE || "").trim()),
@@ -524,6 +526,45 @@ router.post("/dev/use-credit", express.json(), (req, res) => {
     typeof sess.rendersUsed === "number" ? sess.rendersUsed : 0;
   const beforeSessionCredits =
     typeof sess.creditsAvailable === "number" ? sess.creditsAvailable : 0;
+
+  const { passkeyLoggedIn, userId: signedInUserId } = getPasskeySession(
+    req as any
+  );
+
+  // If a user is signed in, always debit DB credits first (no session fallback).
+  if (passkeyLoggedIn && signedInUserId) {
+    const beforeDb = getAvailableCreditsForUser(signedInUserId);
+    if (beforeDb <= 0) {
+      return res.status(400).json({
+        ok: false,
+        error: "no_credits",
+        renders_used: beforeUsed,
+        credits_available: beforeDb,
+      });
+    }
+
+    const updated = spendUserCredits(signedInUserId, 1);
+    const afterDb =
+      updated?.total_credits && typeof updated.used_credits === "number"
+        ? Math.max(0, updated.total_credits - updated.used_credits)
+        : getAvailableCreditsForUser(signedInUserId);
+
+    sess.rendersUsed = beforeUsed + 1;
+
+    console.log(
+      "[credits] use-credit: userId=%s dbCredits %d→%d",
+      signedInUserId,
+      beforeDb,
+      afterDb
+    );
+
+    return res.json({
+      ok: true,
+      sid,
+      renders_used: sess.rendersUsed,
+      credits_available: afterDb,
+    });
+  }
 
   // Primary user id for this session (passkey-based when available)
   const primaryUserId = sess.userId || "solo-tester";

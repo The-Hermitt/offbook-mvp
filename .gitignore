@@ -19,3 +19,6 @@ data/
 *.bak
 public/*.bak
 public/app-tabs.html.*.bak
+
+public/.backup/
+
