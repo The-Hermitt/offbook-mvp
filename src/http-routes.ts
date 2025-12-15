@@ -124,11 +124,18 @@ function saveScriptToDb(script: Script, userId: string | null) {
   }
 }
 
-function loadScriptFromDb(scriptId: string): Script | null {
+function loadScriptFromDb(scriptId: string, userId?: string): Script | null {
   try {
-    const row = db
-      .prepare(`SELECT id, user_id, title, scene_count, scenes_json FROM scripts WHERE id = ?`)
-      .get(scriptId) as ScriptRow | undefined;
+    let row: ScriptRow | undefined;
+    if (userId) {
+      row = db
+        .prepare(`SELECT id, user_id, title, scene_count, scenes_json FROM scripts WHERE id = ? AND user_id = ?`)
+        .get(scriptId, userId) as ScriptRow | undefined;
+    } else {
+      row = db
+        .prepare(`SELECT id, user_id, title, scene_count, scenes_json FROM scripts WHERE id = ?`)
+        .get(scriptId) as ScriptRow | undefined;
+    }
     if (!row) return null;
     return deserializeScriptRow(row);
   } catch (err) {
@@ -138,11 +145,20 @@ function loadScriptFromDb(scriptId: string): Script | null {
 }
 
 // Helper that prefers in-memory cache but can rehydrate from DB.
-function getOrLoadScript(scriptId: string): Script | null {
+function getOrLoadScript(scriptId: string, userId?: string): Script | null {
   const cached = scripts.get(scriptId);
-  if (cached) return cached;
+  if (cached) {
+    // Verify ownership if userId is provided
+    if (userId) {
+      const row = db
+        .prepare(`SELECT user_id FROM scripts WHERE id = ?`)
+        .get(scriptId) as { user_id: string } | undefined;
+      if (row && row.user_id !== userId) return null;
+    }
+    return cached;
+  }
 
-  const loaded = loadScriptFromDb(scriptId);
+  const loaded = loadScriptFromDb(scriptId, userId);
   if (loaded) {
     scripts.set(scriptId, loaded);
     return loaded;
@@ -519,7 +535,8 @@ export function initHttpRoutes(app: Express) {
       return res.status(400).json({ error: "script_id required" });
     }
 
-    const script = getOrLoadScript(scriptId);
+    const { userId } = getPasskeySession(req as any);
+    const script = getOrLoadScript(scriptId, userId || undefined);
     if (!script) {
       return res.status(404).json({ error: "script not found" });
     }
@@ -537,7 +554,8 @@ export function initHttpRoutes(app: Express) {
       return res.status(400).json({ error: "voice_map required" });
     }
 
-    const script = getOrLoadScript(script_id);
+    const { userId } = getPasskeySession(req as any);
+    const script = getOrLoadScript(script_id, userId || undefined);
     if (!script) {
       return res.status(404).json({ error: "script not found" });
     }
@@ -545,7 +563,6 @@ export function initHttpRoutes(app: Express) {
     script.voiceMap = { ...(script.voiceMap || {}), ...(voice_map || {}) };
     scripts.set(script_id, script);
 
-    const { userId } = getPasskeySession(req as any);
     saveScriptToDb(script, userId || null);
 
     res.json({ ok: true });
@@ -743,7 +760,8 @@ export function initHttpRoutes(app: Express) {
       return res.status(400).json({ error: "script_id, scene_id, role required" });
     }
 
-    const script = getOrLoadScript(script_id);
+    const { userId } = getPasskeySession(req as any);
+    const script = getOrLoadScript(script_id, userId || undefined);
     if (!script) {
       return res.status(404).json({ error: "script not found" });
     }
