@@ -179,7 +179,8 @@ export function getPasskeySession(req: express.Request) {
   const sid = cookies["ob_sid"];
   const sess = sid ? sessions.get(sid) : undefined;
   const passkeyLoggedIn = Boolean(sess?.loggedIn);
-  const userId = passkeyLoggedIn ? deriveUserId(sess) : null;
+  const allowAnon = !ENFORCE_AUTH_GATE;
+  const userId = passkeyLoggedIn ? deriveUserId(sess) : (allowAnon ? "solo-tester" : null);
   return { passkeyLoggedIn, userId };
 }
 
@@ -193,8 +194,8 @@ router.get("/session", (req, res) => {
   const sid = cookies["ob_sid"];
   const sess = sid ? sessions.get(sid) : undefined;
   const passkeyLoggedIn = Boolean(sess?.loggedIn);
-  const userId =
-    passkeyLoggedIn ? deriveUserId(sess) : (ENFORCE_AUTH_GATE ? null : "solo-tester");
+  const allowAnon = !ENFORCE_AUTH_GATE;
+  const userId = passkeyLoggedIn ? deriveUserId(sess) : (allowAnon ? "solo-tester" : null);
 
   // One-time migration: move legacy solo-tester data to this user
   if (userId && userId !== "solo-tester") {
@@ -268,7 +269,6 @@ router.get("/session", (req, res) => {
     }
   }
 
-  const allowAnon = !ENFORCE_AUTH_GATE;
   const sessionCredits = (passkeyLoggedIn || allowAnon) ? (sess?.creditsAvailable ?? 0) : 0;
   const combinedCredits = (passkeyLoggedIn || allowAnon) ? (sessionCredits + dbCredits) : 0;
 
