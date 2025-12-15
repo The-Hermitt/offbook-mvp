@@ -217,6 +217,25 @@ router.get("/session", (req, res) => {
     }
   }
 
+  // Staging auto-seed credits (if STAGING_SEED_CREDITS is set)
+  if (userId) {
+    const seed = parseInt(process.env.STAGING_SEED_CREDITS || "", 10);
+    if (Number.isFinite(seed) && seed > 0) {
+      try {
+        const row = db.prepare("SELECT credits_available FROM user_credits WHERE user_id = ?").get(userId) as { credits_available?: number } | undefined;
+        if (!row) {
+          db.prepare("INSERT INTO user_credits (user_id, credits_available) VALUES (?, ?)").run(userId, seed);
+          console.log("[auth] staging seed: created credits row with %d credits for userId=%s", seed, userId);
+        } else if ((row.credits_available ?? 0) <= 0) {
+          db.prepare("UPDATE user_credits SET credits_available = ? WHERE user_id = ?").run(seed, userId);
+          console.log("[auth] staging seed: replenished credits to %d for userId=%s", seed, userId);
+        }
+      } catch (err) {
+        console.error("[auth] staging seed failed for userId=%s", userId, err);
+      }
+    }
+  }
+
   let dbCredits = 0;
   let legacySoloCredits = 0;
 
