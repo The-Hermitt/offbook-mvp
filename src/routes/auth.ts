@@ -224,13 +224,18 @@ router.get("/session", (req, res) => {
     const seed = parseInt(process.env.STAGING_SEED_CREDITS || "", 10);
     if (Number.isFinite(seed) && seed > 0) {
       try {
-        const row = db.prepare("SELECT credits_available FROM user_credits WHERE user_id = ?").get(userId) as { credits_available?: number } | undefined;
+        const row = db.prepare("SELECT total_credits, used_credits FROM user_credits WHERE user_id = ?").get(userId) as { total_credits?: number; used_credits?: number } | undefined;
         if (!row) {
-          db.prepare("INSERT INTO user_credits (user_id, credits_available) VALUES (?, ?)").run(userId, seed);
+          db.prepare("INSERT INTO user_credits (user_id, total_credits, used_credits, updated_at) VALUES (?, ?, 0, CURRENT_TIMESTAMP)").run(userId, seed);
           console.log("[auth] staging seed: created credits row with %d credits for userId=%s", seed, userId);
-        } else if ((row.credits_available ?? 0) <= 0) {
-          db.prepare("UPDATE user_credits SET credits_available = ? WHERE user_id = ?").run(seed, userId);
-          console.log("[auth] staging seed: replenished credits to %d for userId=%s", seed, userId);
+        } else {
+          const total = row.total_credits ?? 0;
+          const used = row.used_credits ?? 0;
+          const available = total - used;
+          if (available <= 0) {
+            db.prepare("UPDATE user_credits SET total_credits = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?").run(used + seed, userId);
+            console.log("[auth] staging seed: replenished credits to %d for userId=%s", seed, userId);
+          }
         }
       } catch (err) {
         console.error("[auth] staging seed failed for userId=%s", userId, err);
