@@ -1,6 +1,7 @@
 import express from "express";
 import crypto from "node:crypto";
 import { getAvailableCreditsForUser, spendUserCredits } from "../lib/credits";
+import db from "../lib/db";
 
 const INCLUDED_RENDERS_PER_MONTH = Number(process.env.INCLUDED_RENDERS_PER_MONTH || 0);
 const DEV_STARTING_CREDITS = Number(process.env.DEV_STARTING_CREDITS || 0);
@@ -193,6 +194,28 @@ router.get("/session", (req, res) => {
   const sess = sid ? sessions.get(sid) : undefined;
   const passkeyLoggedIn = Boolean(sess?.loggedIn);
   const userId = passkeyLoggedIn ? deriveUserId(sess) : null;
+
+  // One-time migration: move legacy solo-tester data to this user
+  if (userId && userId !== "solo-tester") {
+    try {
+      const LEGACY = "solo-tester";
+      const hasMine = db.prepare("SELECT 1 FROM scripts WHERE user_id = ? LIMIT 1").get(userId);
+      if (!hasMine) {
+        const hasLegacy = db.prepare("SELECT 1 FROM scripts WHERE user_id = ? LIMIT 1").get(LEGACY);
+        if (hasLegacy) {
+          const migrate = db.transaction(() => {
+            db.prepare("UPDATE scripts SET user_id = ? WHERE user_id = ?").run(userId, LEGACY);
+            db.prepare("UPDATE user_credits SET user_id = ? WHERE user_id = ?").run(userId, LEGACY);
+            db.prepare("UPDATE gallery SET user_id = ? WHERE user_id = ?").run(userId, LEGACY);
+          });
+          migrate();
+          console.log("[auth] migrated legacy solo-tester data to", userId);
+        }
+      }
+    } catch (err) {
+      console.error("[auth] migration failed for userId=%s", userId, err);
+    }
+  }
 
   let dbCredits = 0;
   let legacySoloCredits = 0;
