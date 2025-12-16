@@ -1,7 +1,7 @@
 import express from "express";
 import crypto from "node:crypto";
 import { getAvailableCreditsForUser, spendUserCredits } from "../lib/credits";
-import db from "../lib/db";
+import db, { dbGet, dbRun } from "../lib/db";
 
 const INCLUDED_RENDERS_PER_MONTH = Number(process.env.INCLUDED_RENDERS_PER_MONTH || 0);
 const DEV_STARTING_CREDITS = Number(process.env.DEV_STARTING_CREDITS || 0);
@@ -198,7 +198,7 @@ export function getPasskeySession(req: express.Request) {
 }
 
 // --- GET /auth/session -------------------------------------------------------
-router.get("/session", (req, res) => {
+router.get("/session", async (req, res) => {
   const sid = getOrCreateSid(req, res);
   const sess = sessions.get(sid);
 
@@ -221,16 +221,14 @@ router.get("/session", (req, res) => {
   if (userId && userId !== "solo-tester") {
     try {
       const LEGACY = "solo-tester";
-      const hasMine = db.prepare("SELECT 1 FROM scripts WHERE user_id = ? LIMIT 1").get(userId);
+      const hasMine = await dbGet<{ "1": number }>("SELECT 1 FROM scripts WHERE user_id = ? LIMIT 1", [userId]);
       if (!hasMine) {
-        const hasLegacy = db.prepare("SELECT 1 FROM scripts WHERE user_id = ? LIMIT 1").get(LEGACY);
+        const hasLegacy = await dbGet<{ "1": number }>("SELECT 1 FROM scripts WHERE user_id = ? LIMIT 1", [LEGACY]);
         if (hasLegacy) {
-          const migrate = db.transaction(() => {
-            db.prepare("UPDATE scripts SET user_id = ? WHERE user_id = ?").run(userId, LEGACY);
-            db.prepare("UPDATE user_credits SET user_id = ? WHERE user_id = ?").run(userId, LEGACY);
-            db.prepare("UPDATE gallery_takes SET user_id = ? WHERE user_id = ?").run(userId, LEGACY);
-          });
-          migrate();
+          // Execute migration queries sequentially (transactions not supported in abstraction layer yet)
+          await dbRun("UPDATE scripts SET user_id = ? WHERE user_id = ?", [userId, LEGACY]);
+          await dbRun("UPDATE user_credits SET user_id = ? WHERE user_id = ?", [userId, LEGACY]);
+          await dbRun("UPDATE gallery_takes SET user_id = ? WHERE user_id = ?", [userId, LEGACY]);
           console.log("[auth] migrated legacy solo-tester data to", userId);
         }
       }
@@ -244,16 +242,16 @@ router.get("/session", (req, res) => {
     const seed = parseInt(process.env.STAGING_SEED_CREDITS || "", 10);
     if (Number.isFinite(seed) && seed > 0) {
       try {
-        const row = db.prepare("SELECT total_credits, used_credits FROM user_credits WHERE user_id = ?").get(userId) as { total_credits?: number; used_credits?: number } | undefined;
+        const row = await dbGet<{ total_credits?: number; used_credits?: number }>("SELECT total_credits, used_credits FROM user_credits WHERE user_id = ?", [userId]);
         if (!row) {
-          db.prepare("INSERT INTO user_credits (user_id, total_credits, used_credits, updated_at) VALUES (?, ?, 0, CURRENT_TIMESTAMP)").run(userId, seed);
+          await dbRun("INSERT INTO user_credits (user_id, total_credits, used_credits) VALUES (?, ?, 0)", [userId, seed]);
           console.log("[auth] staging seed: created credits row with %d credits for userId=%s", seed, userId);
         } else {
           const total = row.total_credits ?? 0;
           const used = row.used_credits ?? 0;
           const available = total - used;
           if (available <= 0) {
-            db.prepare("UPDATE user_credits SET total_credits = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?").run(used + seed, userId);
+            await dbRun("UPDATE user_credits SET total_credits = ? WHERE user_id = ?", [used + seed, userId]);
             console.log("[auth] staging seed: replenished credits to %d for userId=%s", seed, userId);
           }
         }

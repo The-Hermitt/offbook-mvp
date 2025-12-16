@@ -9,7 +9,7 @@ import cookieParser from "cookie-parser";
 import cookieSession from "cookie-session";
 import Stripe from "stripe";
 import authRouter, { getPasskeySession, noteRenderComplete } from "./routes/auth";
-import db from "./lib/db";
+import db, { ensureSchema, dbGet, dbAll, dbRun, USING_POSTGRES } from "./lib/db";
 import { addUserCredits, getAvailableCredits } from "./lib/credits";
 import { isSttEnabled, transcribeChunk } from "./lib/stt";
 import { ensureAuditTable, makeAuditMiddleware } from "./lib/audit";
@@ -497,12 +497,12 @@ function getUserIdForRequest(req: Request): string | null {
   return null;
 }
 
-function persistScriptToDb(
+async function persistScriptToDb(
   id: string,
   userId: string,
   title: string,
   scenes: Scene[]
-): void {
+): Promise<void> {
   try {
     const cleanId = (id || "").trim();
     if (!cleanId) return;
@@ -512,24 +512,25 @@ function persistScriptToDb(
     const scenesJson = JSON.stringify(safeScenes);
     const sceneCount = safeScenes.length;
 
-    const stmt = db.prepare(
-      `INSERT INTO scripts (id, user_id, title, scene_count, scenes_json, created_at, updated_at)
-       VALUES (@id, @user_id, @title, @scene_count, @scenes_json, datetime('now'), datetime('now'))
-       ON CONFLICT(id) DO UPDATE SET
-         user_id = excluded.user_id,
-         title = excluded.title,
-         scene_count = excluded.scene_count,
-         scenes_json = excluded.scenes_json,
-         updated_at = datetime('now')`
+    // Check if script exists
+    const existing = await dbGet<{ id: string }>(
+      "SELECT id FROM scripts WHERE id = ?",
+      [cleanId]
     );
 
-    stmt.run({
-      id: cleanId,
-      user_id: userId,
-      title: cleanTitle,
-      scene_count: sceneCount,
-      scenes_json: scenesJson,
-    });
+    if (existing) {
+      // Update existing script
+      await dbRun(
+        "UPDATE scripts SET user_id = ?, title = ?, scene_count = ?, scenes_json = ? WHERE id = ?",
+        [userId, cleanTitle, sceneCount, scenesJson, cleanId]
+      );
+    } else {
+      // Insert new script
+      await dbRun(
+        "INSERT INTO scripts (id, user_id, title, scene_count, scenes_json) VALUES (?, ?, ?, ?, ?)",
+        [cleanId, userId, cleanTitle, sceneCount, scenesJson]
+      );
+    }
 
     console.log("[scripts] persisted script", {
       id: cleanId,
@@ -556,16 +557,14 @@ type ScriptRow = {
   updated_at?: string;
 };
 
-const loadScriptByIdStmt = db.prepare<{ id: string; user_id: string }, ScriptRow>(`
-  SELECT id, user_id, title, scene_count, scenes_json, created_at, updated_at
-  FROM scripts
-  WHERE id = @id AND user_id = @user_id
-`);
-
-function loadScriptFromDb(id: string, userId: string): ScriptRow | null {
+async function loadScriptFromDb(id: string, userId: string): Promise<ScriptRow | null> {
   if (!id || !id.trim() || !userId || !userId.trim()) return null;
   try {
-    return loadScriptByIdStmt.get({ id: id.trim(), user_id: userId.trim() }) ?? null;
+    const row = await dbGet<ScriptRow>(
+      "SELECT id, user_id, title, scene_count, scenes_json, created_at, updated_at FROM scripts WHERE id = ? AND user_id = ?",
+      [id.trim(), userId.trim()]
+    );
+    return row ?? null;
   } catch (e) {
     console.error("[scripts] failed to load script from DB", {
       id,
@@ -756,14 +755,14 @@ app.get("/api/my_scripts", async (req: Request, res: Response) => {
       return res.status(401).json({ error: "unauthorized" });
     }
 
-    const stmt = db.prepare(
-      `SELECT id, user_id, title, scene_count, updated_at
-       FROM scripts
-       WHERE user_id = ?
-       ORDER BY datetime(updated_at) DESC`
-    );
+    const orderClause = USING_POSTGRES
+      ? "ORDER BY updated_at DESC"
+      : "ORDER BY datetime(updated_at) DESC";
 
-    const rows = stmt.all(userId) as any[];
+    const rows = await dbAll<{ id: string; user_id: string; title: string; scene_count: number; updated_at: string }>(
+      `SELECT id, user_id, title, scene_count, updated_at FROM scripts WHERE user_id = ? ${orderClause}`,
+      [userId]
+    );
 
     const seen = new Set<string>();
     const scripts = rows
@@ -793,7 +792,7 @@ app.get("/api/my_scripts", async (req: Request, res: Response) => {
   }
 });
 
-app.get("/api/scripts/:id", (req: Request, res: Response) => {
+app.get("/api/scripts/:id", async (req: Request, res: Response) => {
   const id = (req.params.id || "").trim();
   if (!id) {
     return res.status(400).json({ error: "missing_id" });
@@ -805,7 +804,7 @@ app.get("/api/scripts/:id", (req: Request, res: Response) => {
   }
 
   const cacheKey = `${userId}:${id}`;
-  const row = loadScriptFromDb(id, userId);
+  const row = await loadScriptFromDb(id, userId);
   let script = mem.scripts.get(cacheKey);
 
   if (!script && row) {
@@ -863,9 +862,10 @@ app.post("/api/scripts/:id/save", async (req: Request, res: Response) => {
     const scenes = Array.isArray(scenesRaw) ? (scenesRaw as Scene[]) : [];
 
     // Check if script exists with a different user_id
-    const existingRow = db
-      .prepare("SELECT id, user_id, title FROM scripts WHERE id = ?")
-      .get(id) as any;
+    const existingRow = await dbGet<{ id: string; user_id: string; title: string }>(
+      "SELECT id, user_id, title FROM scripts WHERE id = ?",
+      [id]
+    );
 
     if (existingRow && existingRow.user_id !== userId) {
       return res.status(403).json({ error: "not_owner" });
@@ -875,7 +875,7 @@ app.post("/api/scripts/:id/save", async (req: Request, res: Response) => {
     const finalTitle = rawTitle || existingTitle || "Sides";
 
     // Persist new title + scenes to DB
-    persistScriptToDb(id, userId, finalTitle, scenes);
+    await persistScriptToDb(id, userId, finalTitle, scenes);
 
     return res.json({ ok: true });
   } catch (e: any) {
@@ -896,10 +896,9 @@ app.delete("/api/scripts/:id", async (req: Request, res: Response) => {
       return res.status(400).json({ error: "missing_script_id" });
     }
 
-    const stmt = db.prepare("DELETE FROM scripts WHERE id = ? AND user_id = ?");
-    const info = stmt.run(id, userId);
+    const result = await dbRun("DELETE FROM scripts WHERE id = ? AND user_id = ?", [id, userId]);
 
-    if (info.changes === 0) {
+    if ((result.changes || 0) === 0) {
       // Nothing deleted: either it never existed or was already removed.
       return res.status(404).json({ ok: false, error: "script_not_found" });
     }
@@ -922,7 +921,7 @@ function mountFallbackDebugRoutes() {
     "/debug/upload_script_text",
     requireSecret,
     audit("/debug/upload_script_text"),
-    (req: Request, res: Response) => {
+    async (req: Request, res: Response) => {
       const userId = getUserIdForRequest(req);
       const title = String(req.body?.title || "Script");
       const text = String(req.body?.text || "");
@@ -931,7 +930,7 @@ function mountFallbackDebugRoutes() {
       const speakers = uniqueSpeakers(scenes[0]);
 
       mem.scripts.set(id, { id, title, scenes, voices: {} });
-      persistScriptToDb(id, userId, title, scenes);
+      await persistScriptToDb(id, userId, title, scenes);
 
       res.json({ script_id: id, scene_count: scenes.length, speakers });
     }
@@ -983,7 +982,7 @@ function mountFallbackDebugRoutes() {
             },
           ];
           mem.scripts.set(id, { id, title, scenes, voices: {} });
-          persistScriptToDb(id, userId, title, scenes);
+          await persistScriptToDb(id, userId, title, scenes);
           return res.json({
             script_id: id,
             scene_count: scenes.length,
@@ -998,7 +997,7 @@ function mountFallbackDebugRoutes() {
 
         const id = genId("scr");
         mem.scripts.set(id, { id, title, scenes, voices: {} });
-        persistScriptToDb(id, userId, title, scenes);
+        await persistScriptToDb(id, userId, title, scenes);
         return res.json({
           script_id: id,
           scene_count: scenes.length,
@@ -1022,7 +1021,7 @@ function mountFallbackDebugRoutes() {
           },
         ];
         mem.scripts.set(id, { id, title, scenes, voices: {} });
-        persistScriptToDb(id, userId, title, scenes);
+        await persistScriptToDb(id, userId, title, scenes);
         return res.json({
           script_id: id,
           scene_count: scenes.length,
@@ -1050,7 +1049,7 @@ function mountFallbackDebugRoutes() {
 
       const cacheKey = `${userId}:${script_id}`;
       let script = mem.scripts.get(cacheKey);
-      const row = loadScriptFromDb(script_id, userId);
+      const row = await loadScriptFromDb(script_id, userId);
 
       if (!script && row) {
         let scenes: Scene[] = [];
@@ -1303,6 +1302,9 @@ app.get("/api/assets/:render_id", (req: Request, res: Response) => {
 
   return res.status(404).json({ error: "asset not found" });
 });
+
+// Ensure database schema before starting server
+await ensureSchema();
 
 await tryMountProjectHttpRoutes().then((mounted) => { if (!mounted) mountFallbackDebugRoutes(); });
 

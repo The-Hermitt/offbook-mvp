@@ -6,40 +6,14 @@ import {
   verifyRegistrationResponse,
   verifyAuthenticationResponse,
 } from "@simplewebauthn/server";
-import db from "../lib/db";
+import { dbGet, dbRun } from "../lib/db";
 
 const rpName = "OffBook MVP";
 const rpID = process.env.RP_ID || "localhost";
 const origin = process.env.RP_ORIGIN || "http://localhost:3010";
 const inviteCodeEnv = (process.env.INVITE_CODE || "").trim(); // optional gate
 
-// DB helpers (idempotent bootstrap of tables)
-const bootstrap = `
-  CREATE TABLE IF NOT EXISTS users (
-    id TEXT PRIMARY KEY,
-    email TEXT,
-    created_at INTEGER NOT NULL
-  );
-  CREATE TABLE IF NOT EXISTS webauthn_credentials (
-    id TEXT PRIMARY KEY,           -- credentialID (base64url)
-    user_id TEXT NOT NULL,
-    public_key TEXT NOT NULL,      -- base64url
-    counter INTEGER NOT NULL DEFAULT 0,
-    created_at INTEGER NOT NULL,
-    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
-  );
-  CREATE INDEX IF NOT EXISTS idx_webauthn_user ON webauthn_credentials(user_id);
-`;
-db.exec(bootstrap);
-
-const q = {
-  insertUser: db.prepare("INSERT OR IGNORE INTO users (id, email, created_at) VALUES (@id, @email, @created_at)"),
-  getCredById: db.prepare("SELECT * FROM webauthn_credentials WHERE id=@id"),
-  getCredsByUser: db.prepare("SELECT * FROM webauthn_credentials WHERE user_id=@user_id"),
-  insertCred: db.prepare(`INSERT INTO webauthn_credentials (id, user_id, public_key, counter, created_at)
-                          VALUES (@id, @user_id, @public_key, @counter, @created_at)`),
-  updateCounter: db.prepare("UPDATE webauthn_credentials SET counter=@counter WHERE id=@id"),
-};
+// Schema bootstrap is now handled by ensureSchema() in src/lib/db.ts
 
 function sess(req: any) { return req.session || (req.session = {}); }
 
@@ -90,17 +64,33 @@ export function makeAuthRouter(_db?: Database.Database) {
       if (!verification.verified || !verification.registrationInfo) {
         return res.status(400).json({ error: "Registration failed" });
       }
-      const { credentialID, credentialPublicKey, counter } = verification.registrationInfo;
+      const regInfo = verification.registrationInfo;
+      const credentialID = regInfo.credential.id;
+      const credentialPublicKey = regInfo.credential.publicKey;
+      const counter = regInfo.credential.counter;
+
       const userId = s.tmpUserId || uuidv4();
       const email = s.tmpEmail || null;
-      q.insertUser.run({ id: userId, email, created_at: Date.now() });
-      q.insertCred.run({
-        id: Buffer.from(credentialID).toString("base64url"),
-        user_id: userId,
-        public_key: Buffer.from(credentialPublicKey).toString("base64url"),
-        counter,
-        created_at: Date.now(),
-      });
+      const now = Date.now();
+
+      // Insert user (ignore if exists)
+      const existingUser = await dbGet<{ id: string }>("SELECT id FROM users WHERE id = ?", [userId]);
+      if (!existingUser) {
+        await dbRun("INSERT INTO users (id, email, created_at) VALUES (?, ?, ?)", [userId, email, now]);
+      }
+
+      // Insert credential
+      await dbRun(
+        "INSERT INTO webauthn_credentials (id, user_id, public_key, counter, created_at) VALUES (?, ?, ?, ?, ?)",
+        [
+          Buffer.from(credentialID).toString("base64url"),
+          userId,
+          Buffer.from(credentialPublicKey).toString("base64url"),
+          counter,
+          now,
+        ]
+      );
+
       s.userId = userId;
       delete s.regChallenge; delete s.tmpUserId; delete s.tmpEmail;
       res.json({ ok: true, userId });
@@ -127,23 +117,29 @@ export function makeAuthRouter(_db?: Database.Database) {
     const s = sess(req);
     try {
       const credId = Buffer.from(req.body.rawId || "", "base64").toString("base64url");
-      const cred = q.getCredById.get({ id: credId });
+      const cred = await dbGet<{ id: string; user_id: string; public_key: string; counter: number }>(
+        "SELECT * FROM webauthn_credentials WHERE id = ?",
+        [credId]
+      );
       if (!cred) return res.status(401).json({ error: "Unknown credential" });
       const verification = await verifyAuthenticationResponse({
         response: req.body,
         expectedChallenge: s.authChallenge,
         expectedOrigin: origin,
         expectedRPID: rpID,
-        authenticator: {
-          credentialID: Buffer.from(cred.id, "base64url"),
-          credentialPublicKey: Buffer.from(cred.public_key, "base64url"),
+        credential: {
+          id: cred.id,
+          publicKey: new Uint8Array(Buffer.from(cred.public_key, "base64url")),
           counter: cred.counter,
         },
       });
       if (!verification.verified || !verification.authenticationInfo) {
         return res.status(401).json({ error: "Login failed" });
       }
-      q.updateCounter.run({ id: cred.id, counter: verification.authenticationInfo.newCounter });
+      await dbRun("UPDATE webauthn_credentials SET counter = ? WHERE id = ?", [
+        verification.authenticationInfo.newCounter,
+        cred.id,
+      ]);
       s.userId = cred.user_id;
       delete s.authChallenge;
       res.json({ ok: true, userId: cred.user_id });
