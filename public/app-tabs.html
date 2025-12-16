@@ -1970,6 +1970,9 @@
 
     .take-note{ width:100%; margin-top:8px; font-size:13px; border-radius:12px; padding:10px 12px; background:rgba(10,12,20,0.5); border:1px solid rgba(147,160,195,0.3); color:var(--text); }
 
+    .take-actions{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; align-items:center; }
+    .take-actions .btn{ width:100%; }
+
     .chip-filter{ display:inline-block; padding:6px 10px; border-radius:999px; border:1px solid rgba(147,160,195,0.32); background:rgba(12,15,24,0.7); margin-right:6px; cursor:pointer; }
 
     .chip-filter.active{ border-color:var(--focus); }
@@ -13589,11 +13592,13 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
                 </div>
 
-                <div class="row" style="flex:0 0 auto; gap:8px; align-items:center;">
+                <div class="take-actions">
 
                   <button type="button" class="btn sm secondary" data-act="play">Play</button>
 
                   <button type="button" class="btn sm" data-act="dl">Download</button>
+
+                  <button type="button" class="btn sm secondary" data-act="room">Room</button>
 
                   <button type="button" class="btn sm secondary" data-act="del">Delete</button>
 
@@ -14053,6 +14058,8 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
           const btnDl = card.querySelector('[data-act="dl"]');
 
+          const btnRoom = card.querySelector('[data-act="room"]');
+
           const btnDel = card.querySelector('[data-act="del"]');
 
           const noteEl = card.querySelector('.take-note');
@@ -14156,6 +14163,13 @@ const savedStrip = document.getElementById("savedScriptsStrip");
               btn.disabled = false;
               btn.textContent = prevLabel;
             }
+          });
+
+
+          btnRoom?.addEventListener("click", async ()=>{
+
+            showToastOnce("Room mix is coming back soon — use Download for now.");
+
           });
 
 
