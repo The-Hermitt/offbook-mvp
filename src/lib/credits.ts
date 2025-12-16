@@ -1,4 +1,4 @@
-import db from "./db";
+import { dbGet, dbRun } from "./db";
 
 // Persistent credit record for a user.
 // total_credits = total purchased or granted.
@@ -11,16 +11,7 @@ export type UserCreditsRow = {
   updated_at: string;
 };
 
-// Ensure the table exists at startup.
-// This is idempotent and safe to call multiple times.
-db.exec(`
-  CREATE TABLE IF NOT EXISTS user_credits (
-    user_id       TEXT PRIMARY KEY,
-    total_credits INTEGER NOT NULL,
-    used_credits  INTEGER NOT NULL,
-    updated_at    TEXT NOT NULL
-  )
-`);
+// Table creation is now handled by ensureSchema() in src/lib/db.ts
 
 // Helper to compute available credits (never negative).
 export function getAvailableCredits(row: UserCreditsRow | null): number {
@@ -29,28 +20,29 @@ export function getAvailableCredits(row: UserCreditsRow | null): number {
   return remaining > 0 ? remaining : 0;
 }
 
-export function getUserCredits(userId: string): UserCreditsRow | null {
-  const stmt = db.prepare<[{ user_id: string }], UserCreditsRow>(
-    "SELECT user_id, total_credits, used_credits, updated_at FROM user_credits WHERE user_id = ?"
+export async function getUserCredits(userId: string): Promise<UserCreditsRow | null> {
+  const row = await dbGet<UserCreditsRow>(
+    "SELECT user_id, total_credits, used_credits, updated_at FROM user_credits WHERE user_id = ?",
+    [userId]
   );
-  const row = stmt.get(userId) || null;
-  return row;
+  return row || null;
 }
 
 // Upsert helper for future webhook use:
 // - If the user has no row yet, create one with total_credits = max(amount, 0), used_credits = 0.
 // - If the user already exists, add `amount` to total_credits (never below 0).
 // Returns the fresh row.
-export function addUserCredits(userId: string, amount: number): UserCreditsRow {
+export async function addUserCredits(userId: string, amount: number): Promise<UserCreditsRow> {
   const now = new Date().toISOString();
-  const existing = getUserCredits(userId);
+  const existing = await getUserCredits(userId);
 
   if (!existing) {
     const total = amount > 0 ? amount : 0;
     const used = 0;
-    db.prepare(
-      "INSERT INTO user_credits (user_id, total_credits, used_credits, updated_at) VALUES (?,?,?,?)"
-    ).run(userId, total, used, now);
+    await dbRun(
+      "INSERT INTO user_credits (user_id, total_credits, used_credits, updated_at) VALUES (?, ?, ?, ?)",
+      [userId, total, used, now]
+    );
     return {
       user_id: userId,
       total_credits: total,
@@ -63,9 +55,10 @@ export function addUserCredits(userId: string, amount: number): UserCreditsRow {
   const total = nextTotal > 0 ? nextTotal : 0;
   const used = existing.used_credits;
 
-  db.prepare(
-    "UPDATE user_credits SET total_credits = ?, used_credits = ?, updated_at = ? WHERE user_id = ?"
-  ).run(total, used, now, userId);
+  await dbRun(
+    "UPDATE user_credits SET total_credits = ?, used_credits = ?, updated_at = ? WHERE user_id = ?",
+    [total, used, now, userId]
+  );
 
   return {
     user_id: userId,
@@ -75,10 +68,10 @@ export function addUserCredits(userId: string, amount: number): UserCreditsRow {
   };
 }
 
-export function spendUserCredits(userId: string, amount: number): UserCreditsRow | null {
+export async function spendUserCredits(userId: string, amount: number): Promise<UserCreditsRow | null> {
   if (!userId || amount <= 0) return null;
 
-  const row = getUserCredits(userId);
+  const row = await getUserCredits(userId);
 
   if (!row) {
     return null;
@@ -91,15 +84,10 @@ export function spendUserCredits(userId: string, amount: number): UserCreditsRow
 
   const now = new Date().toISOString();
   const toSpend = Math.min(amount, remaining);
-  const result = db
-    .prepare(
-      `
-        UPDATE user_credits
-        SET used_credits = used_credits + ?, updated_at = ?
-        WHERE user_id = ? AND used_credits + ? <= total_credits
-      `
-    )
-    .run(toSpend, now, userId, toSpend);
+  const result = await dbRun(
+    "UPDATE user_credits SET used_credits = used_credits + ?, updated_at = ? WHERE user_id = ? AND used_credits + ? <= total_credits",
+    [toSpend, now, userId, toSpend]
+  );
 
   if (!result || typeof result.changes !== "number" || result.changes === 0) {
     // No row updated (likely because credits are exhausted). Return the original row.
@@ -113,16 +101,12 @@ export function spendUserCredits(userId: string, amount: number): UserCreditsRow
   };
 }
 
-export function getAvailableCreditsForUser(userId: string): number {
+export async function getAvailableCreditsForUser(userId: string): Promise<number> {
   if (!userId) return 0;
-  const row = db
-    .prepare<
-      [{ user_id: string }],
-      { total_credits: number; used_credits: number } | undefined
-    >(
-      "SELECT total_credits, used_credits FROM user_credits WHERE user_id = ?"
-    )
-    .get(userId);
+  const row = await dbGet<{ total_credits: number; used_credits: number }>(
+    "SELECT total_credits, used_credits FROM user_credits WHERE user_id = ?",
+    [userId]
+  );
 
   if (!row) return 0;
   const remaining = (row.total_credits || 0) - (row.used_credits || 0);

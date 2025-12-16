@@ -1178,7 +1178,7 @@ function mountFallbackDebugRoutes() {
     res.json({ render_id: rid, status: "queued" });
   });
 
-  app.get("/debug/render_status", requireSecret, audit("/debug/render_status"), (req: Request, res: Response) => {
+  app.get("/debug/render_status", requireSecret, audit("/debug/render_status"), async (req: Request, res: Response) => {
     const render_id = String(req.query.render_id || "");
 
     // DEBUG: see if this route is being hit and what cookies we have
@@ -1204,7 +1204,7 @@ function mountFallbackDebugRoutes() {
     if (job.status === "complete" && !job.accounted) {
       try {
         console.log("[credits] render complete: accounting usage; rid=%s", render_id);
-        noteRenderComplete(req);
+        await noteRenderComplete(req);
         job.accounted = true;
       } catch (err) {
         console.error("[credits] noteRenderComplete failed:", err);

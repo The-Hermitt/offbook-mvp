@@ -5,7 +5,6 @@
 // It performs text-only PDF extraction (no page.render()) to avoid node-canvas
 // crashes on Render.
 
-import type { PDFDocumentProxy, TextContent } from "pdfjs-dist";
 import * as pdfjs from "pdfjs-dist/legacy/build/pdf";
 
 export type Line = { speaker: string; text: string };
@@ -70,7 +69,7 @@ async function extractPdfTextOnly(buf: Buffer, maxPages = 50): Promise<{ text: s
     timedOut: false,
   };
 
-  let doc: PDFDocumentProxy | null = null;
+  let doc: any = null;
   try {
     doc = await pdfjs.getDocument({ data: buf }).promise;
   } catch (_err) {
@@ -86,7 +85,7 @@ async function extractPdfTextOnly(buf: Buffer, maxPages = 50): Promise<{ text: s
   for (let i = 1; i <= pages; i++) {
     try {
       const page = await doc.getPage(i);
-      const tc: TextContent = await page.getTextContent(); // TEXT LAYER ONLY
+      const tc: any = await page.getTextContent(); // TEXT LAYER ONLY
       const joined = (tc.items as any[])
         .map((it: any) => ("str" in it ? it.str : ""))
         .join(" ")

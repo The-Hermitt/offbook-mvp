@@ -35,7 +35,7 @@ async function ttsToBuffer(text: string, voice: string): Promise<Buffer> {
     model: "gpt-4o-mini-tts",
     voice: voice || "alloy",
     input: text,
-    format: "mp3",
+    response_format: "mp3",
   });
   const arr = await resp.arrayBuffer();
   return Buffer.from(arr);

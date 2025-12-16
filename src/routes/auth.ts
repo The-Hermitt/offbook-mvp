@@ -88,7 +88,7 @@ export function ensureSid(req: express.Request, res: express.Response) {
   return getOrCreateSid(req, res);
 }
 
-export function noteRenderComplete(req: express.Request) {
+export async function noteRenderComplete(req: express.Request) {
   const cookies = parseCookies(req);
   const sid = cookies["ob_sid"];
   if (!sid) {
@@ -126,12 +126,12 @@ export function noteRenderComplete(req: express.Request) {
   );
   const userId = deriveUserId(sess) || sess.userId || `anon:${sid}`;
   try {
-    const beforeDb = getAvailableCreditsForUser(userId);
+    const beforeDb = await getAvailableCreditsForUser(userId);
     if (beforeDb > 0) {
-      const updated = spendUserCredits(userId, 1);
+      const updated = await spendUserCredits(userId, 1);
       const afterDb = updated
         ? updated.total_credits - updated.used_credits
-        : getAvailableCreditsForUser(userId);
+        : await getAvailableCreditsForUser(userId);
 
       console.log("[credits] db spend after render", {
         userId,
@@ -265,7 +265,7 @@ router.get("/session", async (req, res) => {
 
   if (userId) {
     try {
-      dbCredits = getAvailableCreditsForUser(userId);
+      dbCredits = await getAvailableCreditsForUser(userId);
     } catch (err) {
       console.error(
         "[auth/session] failed to read credits for userId=%s",
@@ -558,7 +558,7 @@ router.post("/dev/grant-credits", express.json(), (req, res) => {
   });
 });
 
-router.post("/dev/use-credit", express.json(), (req, res) => {
+router.post("/dev/use-credit", express.json(), async (req, res) => {
   const devToolsOn =
     /^true$/i.test(process.env.DEV_TOOLS || "") ||
     /(^|[?&])dev(=1|&|$)/.test(req.url);
@@ -582,7 +582,7 @@ router.post("/dev/use-credit", express.json(), (req, res) => {
 
   // If a user is signed in, always debit DB credits first (no session fallback).
   if (passkeyLoggedIn && signedInUserId) {
-    const beforeDb = getAvailableCreditsForUser(signedInUserId);
+    const beforeDb = await getAvailableCreditsForUser(signedInUserId);
     if (beforeDb <= 0) {
       return res.status(400).json({
         ok: false,
@@ -592,11 +592,11 @@ router.post("/dev/use-credit", express.json(), (req, res) => {
       });
     }
 
-    const updated = spendUserCredits(signedInUserId, 1);
+    const updated = await spendUserCredits(signedInUserId, 1);
     const afterDb =
       updated?.total_credits && typeof updated.used_credits === "number"
         ? Math.max(0, updated.total_credits - updated.used_credits)
-        : getAvailableCreditsForUser(signedInUserId);
+        : await getAvailableCreditsForUser(signedInUserId);
 
     sess.rendersUsed = beforeUsed + 1;
 
@@ -622,7 +622,7 @@ router.post("/dev/use-credit", express.json(), (req, res) => {
   let primaryDbCredits = 0;
 
   try {
-    primaryDbCredits = getAvailableCreditsForUser(primaryUserId);
+    primaryDbCredits = await getAvailableCreditsForUser(primaryUserId);
   } catch (err) {
     console.error(
       "[credits] dev use-credit: failed to read db credits for userId=%s",
@@ -652,10 +652,10 @@ router.post("/dev/use-credit", express.json(), (req, res) => {
   if (beforeDbCredits > 0 && dbUserId) {
     // Prefer to spend from DB-backed credits.
     try {
-      const updated = spendUserCredits(dbUserId, 1);
+      const updated = await spendUserCredits(dbUserId, 1);
       dbCreditsAfter = updated
         ? updated.total_credits - updated.used_credits
-        : getAvailableCreditsForUser(dbUserId);
+        : await getAvailableCreditsForUser(dbUserId);
     } catch (err) {
       console.error(
         "[credits] dev use-credit: db spend failed, falling back to session",

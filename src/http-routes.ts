@@ -876,7 +876,7 @@ export function initHttpRoutes(app: Express) {
         "[credits] render complete (http-routes:/debug/render): accounting usage; rid=%s",
         renderId
       );
-      noteRenderComplete(req);
+      await noteRenderComplete(req);
       job.accounted = true;
     } catch (err) {
       console.error("[credits] noteRenderComplete failed (http-routes:/debug/render):", err);
@@ -886,7 +886,7 @@ export function initHttpRoutes(app: Express) {
   });
 
   // GET /debug/render_status
-  debug.get("/render_status", audit("/debug/render_status"), (req: Request, res: Response) => {
+  debug.get("/render_status", audit("/debug/render_status"), async (req: Request, res: Response) => {
     const rid = String(req.query.render_id || "");
     if (!rid || !renders.has(rid)) {
       return res.status(404).json({ status: "error", error: "render not found" });
@@ -897,7 +897,7 @@ export function initHttpRoutes(app: Express) {
     if (job.status === "complete" && !job.accounted) {
       try {
         console.log("[credits] render complete (http-routes): accounting usage; rid=%s", rid);
-        noteRenderComplete(req);
+        await noteRenderComplete(req);
         job.accounted = true;
         renders.set(rid, job);
       } catch (err) {

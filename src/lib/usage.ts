@@ -109,7 +109,7 @@ export function getSnapshot(uid: string) {
 
 export function maybeDevGrant(req: Request, uid: string) {
   // Support ?dev=1 flow for local/staging convenience
-  const dev = req.query.dev === "1" || req.query.dev === 1 ? true : false;
+  const dev = String(req.query.dev || "") === "1";
   if (dev) grantTestCredits(uid, 200);
 }
 
