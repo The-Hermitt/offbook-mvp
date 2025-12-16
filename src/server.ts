@@ -484,16 +484,16 @@ function concatMp3(parts: Buffer[]): Buffer {
   return Buffer.concat(parts);
 }
 
-function getUserIdForRequest(req: Request): string {
+function getUserIdForRequest(req: Request): string | null {
   try {
-    const { passkeyLoggedIn, userId } = getPasskeySession(req as any);
-    if (passkeyLoggedIn && userId && typeof userId === "string" && userId.trim()) {
+    const { userId } = getPasskeySession(req as any);
+    if (userId && typeof userId === "string" && userId.trim()) {
       return userId.trim();
     }
   } catch (e) {
-    console.warn("[auth] getUserIdForRequest: falling back to solo-tester", (e as any)?.message || e);
+    console.warn("[auth] getUserIdForRequest: error getting session", (e as any)?.message || e);
   }
-  return "solo-tester";
+  return null;
 }
 
 function persistScriptToDb(
@@ -555,19 +555,20 @@ type ScriptRow = {
   updated_at?: string;
 };
 
-const loadScriptByIdStmt = db.prepare<Pick<ScriptRow, "id">, ScriptRow>(`
+const loadScriptByIdStmt = db.prepare<{ id: string; user_id: string }, ScriptRow>(`
   SELECT id, user_id, title, scene_count, scenes_json, created_at, updated_at
   FROM scripts
-  WHERE id = @id
+  WHERE id = @id AND user_id = @user_id
 `);
 
-function loadScriptFromDb(id: string): ScriptRow | null {
-  if (!id || !id.trim()) return null;
+function loadScriptFromDb(id: string, userId: string): ScriptRow | null {
+  if (!id || !id.trim() || !userId || !userId.trim()) return null;
   try {
-    return loadScriptByIdStmt.get({ id: id.trim() }) ?? null;
+    return loadScriptByIdStmt.get({ id: id.trim(), user_id: userId.trim() }) ?? null;
   } catch (e) {
     console.error("[scripts] failed to load script from DB", {
       id,
+      userId,
       error: (e as any)?.message || e,
     });
     return null;
@@ -750,14 +751,18 @@ app.post(
 app.get("/api/my_scripts", async (req: Request, res: Response) => {
   try {
     const userId = getUserIdForRequest(req);
+    if (!userId) {
+      return res.status(401).json({ error: "unauthorized" });
+    }
 
     const stmt = db.prepare(
       `SELECT id, user_id, title, scene_count, updated_at
        FROM scripts
+       WHERE user_id = ?
        ORDER BY datetime(updated_at) DESC`
     );
 
-    const rows = stmt.all({}) as any[];
+    const rows = stmt.all(userId) as any[];
 
     const seen = new Set<string>();
     const scripts = rows
@@ -793,8 +798,14 @@ app.get("/api/scripts/:id", (req: Request, res: Response) => {
     return res.status(400).json({ error: "missing_id" });
   }
 
-  const row = loadScriptFromDb(id);
-  let script = mem.scripts.get(id);
+  const userId = getUserIdForRequest(req);
+  if (!userId) {
+    return res.status(401).json({ error: "unauthorized" });
+  }
+
+  const cacheKey = `${userId}:${id}`;
+  const row = loadScriptFromDb(id, userId);
+  let script = mem.scripts.get(cacheKey);
 
   if (!script && row) {
     let scenes: Scene[] = [];
@@ -804,6 +815,7 @@ app.get("/api/scripts/:id", (req: Request, res: Response) => {
       } catch (e) {
         console.error("[scripts] failed to parse scenes_json from DB", {
           id,
+          userId,
           error: (e as any)?.message || e,
         });
       }
@@ -816,7 +828,7 @@ app.get("/api/scripts/:id", (req: Request, res: Response) => {
       voices: {},
     };
 
-    mem.scripts.set(id, script);
+    mem.scripts.set(cacheKey, script);
   }
 
   if (!script) {
@@ -834,6 +846,10 @@ app.get("/api/scripts/:id", (req: Request, res: Response) => {
 app.post("/api/scripts/:id/save", async (req: Request, res: Response) => {
   try {
     const userId = getUserIdForRequest(req);
+    if (!userId) {
+      return res.status(401).json({ error: "unauthorized" });
+    }
+
     const id = (req.params.id || "").trim();
     if (!id) {
       return res.status(400).json({ error: "missing_script_id" });
@@ -845,22 +861,16 @@ app.post("/api/scripts/:id/save", async (req: Request, res: Response) => {
     const scenesRaw = body.scenes;
     const scenes = Array.isArray(scenesRaw) ? (scenesRaw as Scene[]) : [];
 
-    let existingTitle = "";
+    // Check if script exists with a different user_id
+    const existingRow = db
+      .prepare("SELECT id, user_id, title FROM scripts WHERE id = ?")
+      .get(id) as any;
 
-    try {
-      const row = db
-        .prepare("SELECT id, title FROM scripts WHERE id = @id AND user_id = @user_id")
-        .get({ id, user_id: userId }) as any;
-      if (!row) {
-        // If there is no existing row for this user+id, treat as not found.
-        return res.status(404).json({ error: "script_not_found" });
-      }
-      existingTitle = (row.title as string) || "";
-    } catch (e: any) {
-      console.error("[scripts] /api/scripts/:id/save ownership check failed:", e?.message || e);
-      // Continue; we still try to persist as a best-effort.
+    if (existingRow && existingRow.user_id !== userId) {
+      return res.status(403).json({ error: "not_owner" });
     }
 
+    const existingTitle = existingRow?.title || "";
     const finalTitle = rawTitle || existingTitle || "Sides";
 
     // Persist new title + scenes to DB
@@ -875,15 +885,18 @@ app.post("/api/scripts/:id/save", async (req: Request, res: Response) => {
 
 app.delete("/api/scripts/:id", async (req: Request, res: Response) => {
   try {
-    const userId = getUserIdForRequest(req); // keep this for logging if needed later
-    const id = (req.params.id || "").trim();
+    const userId = getUserIdForRequest(req);
+    if (!userId) {
+      return res.status(401).json({ error: "unauthorized" });
+    }
 
+    const id = (req.params.id || "").trim();
     if (!id) {
       return res.status(400).json({ error: "missing_script_id" });
     }
 
-    const stmt = db.prepare("DELETE FROM scripts WHERE id = @id");
-    const info = stmt.run({ id });
+    const stmt = db.prepare("DELETE FROM scripts WHERE id = ? AND user_id = ?");
+    const info = stmt.run(id, userId);
 
     if (info.changes === 0) {
       // Nothing deleted: either it never existed or was already removed.
@@ -1024,13 +1037,19 @@ function mountFallbackDebugRoutes() {
     requireSecret,
     audit("/debug/scenes"),
     async (req: Request, res: Response) => {
+      const userId = getUserIdForRequest(req);
+      if (!userId) {
+        return res.status(401).json({ error: "unauthorized" });
+      }
+
       const script_id = String(req.query.script_id || "").trim();
       if (!script_id) {
         return res.status(400).json({ error: "missing_script_id" });
       }
 
-      let script = mem.scripts.get(script_id);
-      const row = loadScriptFromDb(script_id);
+      const cacheKey = `${userId}:${script_id}`;
+      let script = mem.scripts.get(cacheKey);
+      const row = loadScriptFromDb(script_id, userId);
 
       if (!script && row) {
         let scenes: Scene[] = [];
@@ -1052,7 +1071,7 @@ function mountFallbackDebugRoutes() {
           voices: {},
         };
 
-        mem.scripts.set(script_id, script);
+        mem.scripts.set(cacheKey, script);
       }
 
       if (!script) {

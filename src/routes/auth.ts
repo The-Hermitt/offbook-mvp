@@ -73,6 +73,7 @@ function getOrCreateSid(req: express.Request, res: express.Response) {
     const start = new Date(now.getFullYear(), now.getMonth(), 1);
     const end = new Date(now.getFullYear(), now.getMonth() + 1, 1);
     sessions.set(sid, {
+      userId: `anon:${sid}`,
       plan: "none",
       rendersUsed: 0,
       creditsAvailable: DEV_STARTING_CREDITS,
@@ -81,6 +82,10 @@ function getOrCreateSid(req: express.Request, res: express.Response) {
     });
   }
   return sid;
+}
+
+export function ensureSid(req: express.Request, res: express.Response) {
+  return getOrCreateSid(req, res);
 }
 
 export function noteRenderComplete(req: express.Request) {
@@ -119,7 +124,7 @@ export function noteRenderComplete(req: express.Request) {
     beforeCredits,
     credits
   );
-  const userId = sess.userId || "solo-tester";
+  const userId = deriveUserId(sess) || sess.userId || `anon:${sid}`;
   try {
     const beforeDb = getAvailableCreditsForUser(userId);
     if (beforeDb > 0) {
@@ -161,16 +166,17 @@ const router = express.Router();
 const INVITE_CODE = (process.env.INVITE_CODE || "").trim();
 const ENFORCE_AUTH_GATE = /^true$/i.test(process.env.ENFORCE_AUTH_GATE || "");
 
-function deriveUserId(sess: Sess | undefined | null) {
-  if (!sess) return "solo-tester";
-  if (sess.userId && sess.userId.trim()) return sess.userId.trim();
-  // DEV: collapse all passkeys to a single logical user.
-  // This ensures gallery_takes.user_id stays stable across re-register and
-  // device changes.
+function shortSha256(input: string): string {
+  return crypto.createHash("sha256").update(input).digest("hex").slice(0, 16);
+}
+
+function deriveUserId(sess: Sess | undefined | null): string {
+  if (!sess) return "";
   if (sess.credentialId && sess.credentialId.trim()) {
-    return "solo-tester";
+    return `pk_${shortSha256(sess.credentialId.trim())}`;
   }
-  return "solo-tester";
+  if (sess.userId && sess.userId.trim()) return sess.userId.trim();
+  return "";
 }
 
 // Lightweight helper for other routes to read the passkey session state
@@ -180,22 +186,36 @@ export function getPasskeySession(req: express.Request) {
   const sess = sid ? sessions.get(sid) : undefined;
   const passkeyLoggedIn = Boolean(sess?.loggedIn);
   const allowAnon = !ENFORCE_AUTH_GATE;
-  const userId = passkeyLoggedIn ? deriveUserId(sess) : (allowAnon ? "solo-tester" : null);
+
+  let userId: string | null = null;
+  if (passkeyLoggedIn) {
+    userId = deriveUserId(sess);
+  } else if (allowAnon && sess) {
+    userId = sess.userId || `anon:${sid}`;
+  }
+
   return { passkeyLoggedIn, userId };
 }
 
 // --- GET /auth/session -------------------------------------------------------
 router.get("/session", (req, res) => {
+  const sid = getOrCreateSid(req, res);
+  const sess = sessions.get(sid);
+
   const cookies = parseCookies(req);
   const invited = (process.env.INVITE_CODE || "").trim()
     ? cookies["ob_invite"] === "ok"
     : true;
 
-  const sid = cookies["ob_sid"];
-  const sess = sid ? sessions.get(sid) : undefined;
   const passkeyLoggedIn = Boolean(sess?.loggedIn);
   const allowAnon = !ENFORCE_AUTH_GATE;
-  const userId = passkeyLoggedIn ? deriveUserId(sess) : (allowAnon ? "solo-tester" : null);
+
+  let userId: string | null = null;
+  if (passkeyLoggedIn) {
+    userId = deriveUserId(sess);
+  } else if (allowAnon && sess) {
+    userId = sess.userId || `anon:${sid}`;
+  }
 
   // One-time migration: move legacy solo-tester data to this user
   if (userId && userId !== "solo-tester") {
@@ -208,7 +228,7 @@ router.get("/session", (req, res) => {
           const migrate = db.transaction(() => {
             db.prepare("UPDATE scripts SET user_id = ? WHERE user_id = ?").run(userId, LEGACY);
             db.prepare("UPDATE user_credits SET user_id = ? WHERE user_id = ?").run(userId, LEGACY);
-            db.prepare("UPDATE gallery SET user_id = ? WHERE user_id = ?").run(userId, LEGACY);
+            db.prepare("UPDATE gallery_takes SET user_id = ? WHERE user_id = ?").run(userId, LEGACY);
           });
           migrate();
           console.log("[auth] migrated legacy solo-tester data to", userId);
@@ -244,7 +264,6 @@ router.get("/session", (req, res) => {
   }
 
   let dbCredits = 0;
-  let legacySoloCredits = 0;
 
   if (userId) {
     try {
@@ -255,22 +274,6 @@ router.get("/session", (req, res) => {
         userId,
         err
       );
-    }
-
-    // Transitional: if this passkey user has no row yet, fall back to the
-    // original single-user dev id so existing purchased credits still show up.
-    if (dbCredits <= 0 && userId !== "solo-tester") {
-      try {
-        legacySoloCredits = getAvailableCreditsForUser("solo-tester");
-        if (legacySoloCredits > 0) {
-          dbCredits = legacySoloCredits;
-        }
-      } catch (err) {
-        console.error(
-          "[auth/session] failed to read legacy solo-tester credits",
-          err
-        );
-      }
     }
   }
 
@@ -283,7 +286,6 @@ router.get("/session", (req, res) => {
       dbCredits,
       sessionCredits,
       combinedCredits,
-      legacySoloCredits,
     });
   }
 
@@ -616,11 +618,10 @@ router.post("/dev/use-credit", express.json(), (req, res) => {
   }
 
   // Primary user id for this session (passkey-based when available)
-  const primaryUserId = sess.userId || "solo-tester";
+  const primaryUserId = sess.userId || `anon:${sid}`;
 
   let dbUserId: string | null = primaryUserId;
   let primaryDbCredits = 0;
-  let legacySoloCredits = 0;
 
   try {
     primaryDbCredits = getAvailableCreditsForUser(primaryUserId);
@@ -632,24 +633,7 @@ router.post("/dev/use-credit", express.json(), (req, res) => {
     );
   }
 
-  // Transitional: if this passkey user has no DB credits yet, fall back to the
-  // original single-user row so existing purchased credits are used.
-  if (primaryDbCredits <= 0 && primaryUserId !== "solo-tester") {
-    try {
-      legacySoloCredits = getAvailableCreditsForUser("solo-tester");
-      if (legacySoloCredits > 0) {
-        dbUserId = "solo-tester";
-      }
-    } catch (err) {
-      console.error(
-        "[credits] dev use-credit: failed to read legacy solo-tester credits",
-        err
-      );
-    }
-  }
-
-  const beforeDbCredits =
-    dbUserId === "solo-tester" ? legacySoloCredits : primaryDbCredits;
+  const beforeDbCredits = primaryDbCredits;
 
   const totalBefore = beforeSessionCredits + beforeDbCredits;
 
@@ -692,7 +676,7 @@ router.post("/dev/use-credit", express.json(), (req, res) => {
   const totalAfter = sessionCredits + dbCreditsAfter;
 
   console.log(
-    "[credits] dev use-credit: sid=%s used %d->%d session %d->%d db %d->%d total_after=%d primaryUserId=%s dbUserId=%s legacySolo=%d",
+    "[credits] dev use-credit: sid=%s used %d->%d session %d->%d db %d->%d total_after=%d primaryUserId=%s dbUserId=%s",
     sid,
     beforeUsed,
     used,
@@ -702,8 +686,7 @@ router.post("/dev/use-credit", express.json(), (req, res) => {
     dbCreditsAfter,
     totalAfter,
     primaryUserId,
-    dbUserId,
-    legacySoloCredits
+    dbUserId
   );
 
   return res.json({

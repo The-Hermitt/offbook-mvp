@@ -11,7 +11,7 @@ import { generateReaderMp3, ttsProvider } from "./lib/tts";
 import { isSttEnabled, transcribeChunk } from "./lib/stt";
 import { ensureAuditTable, makeAuditMiddleware } from "./lib/audit";
 import { makeRateLimiters } from "./middleware/rateLimit";
-import { getPasskeySession, noteRenderComplete } from "./routes/auth";
+import { getPasskeySession, noteRenderComplete, ensureSid } from "./routes/auth";
 
 // ---------- Types ----------
 type SceneLine = { speaker: string; text: string };
@@ -98,8 +98,11 @@ function deserializeScriptRow(row: ScriptRow): Script | null {
   }
 }
 
-function saveScriptToDb(script: Script, userId: string | null) {
-  const uid = userId || "solo-tester";
+function saveScriptToDb(script: Script, userId: string) {
+  if (!userId || !userId.trim()) {
+    throw new Error("saveScriptToDb: userId is required");
+  }
+
   const scenesJson = serializeScriptScenes(script);
   const sceneCount = Array.isArray(script.scenes) ? script.scenes.length : 0;
 
@@ -114,7 +117,7 @@ function saveScriptToDb(script: Script, userId: string | null) {
          updated_at = datetime('now')`
     ).run({
       id: script.id,
-      user_id: uid,
+      user_id: userId.trim(),
       title: script.title,
       scene_count: sceneCount,
       scenes_json: scenesJson,
@@ -124,43 +127,31 @@ function saveScriptToDb(script: Script, userId: string | null) {
   }
 }
 
-function loadScriptFromDb(scriptId: string, userId?: string): Script | null {
+function loadScriptFromDb(scriptId: string, userId: string): Script | null {
+  if (!scriptId || !scriptId.trim() || !userId || !userId.trim()) return null;
   try {
-    let row: ScriptRow | undefined;
-    if (userId) {
-      row = db
-        .prepare(`SELECT id, user_id, title, scene_count, scenes_json FROM scripts WHERE id = ? AND user_id = ?`)
-        .get(scriptId, userId) as ScriptRow | undefined;
-    } else {
-      row = db
-        .prepare(`SELECT id, user_id, title, scene_count, scenes_json FROM scripts WHERE id = ?`)
-        .get(scriptId) as ScriptRow | undefined;
-    }
+    const row = db
+      .prepare(`SELECT id, user_id, title, scene_count, scenes_json FROM scripts WHERE id = ? AND user_id = ?`)
+      .get(scriptId, userId) as ScriptRow | undefined;
     if (!row) return null;
     return deserializeScriptRow(row);
   } catch (err) {
-    console.error("[scripts] failed to load script", scriptId, err);
+    console.error("[scripts] failed to load script", scriptId, userId, err);
     return null;
   }
 }
 
 // Helper that prefers in-memory cache but can rehydrate from DB.
-function getOrLoadScript(scriptId: string, userId?: string): Script | null {
-  const cached = scripts.get(scriptId);
-  if (cached) {
-    // Verify ownership if userId is provided
-    if (userId) {
-      const row = db
-        .prepare(`SELECT user_id FROM scripts WHERE id = ?`)
-        .get(scriptId) as { user_id: string } | undefined;
-      if (row && row.user_id !== userId) return null;
-    }
-    return cached;
-  }
+function getOrLoadScript(scriptId: string, userId: string): Script | null {
+  if (!userId || !userId.trim()) return null;
+
+  const cacheKey = `${userId}:${scriptId}`;
+  const cached = scripts.get(cacheKey);
+  if (cached) return cached;
 
   const loaded = loadScriptFromDb(scriptId, userId);
   if (loaded) {
-    scripts.set(scriptId, loaded);
+    scripts.set(cacheKey, loaded);
     return loaded;
   }
   return null;
@@ -409,6 +400,10 @@ export function initHttpRoutes(app: Express) {
   const api = express.Router();
 
   debug.use(secretGuard);
+  debug.use((req: Request, res: Response, next: NextFunction) => {
+    ensureSid(req, res);
+    next();
+  });
 
   // GET /debug/voices_probe
   debug.get("/voices_probe", audit("/debug/voices_probe"), (_req: Request, res: Response) => {
@@ -421,6 +416,11 @@ export function initHttpRoutes(app: Express) {
 
   // POST /debug/upload_script_text
   debug.post("/upload_script_text", audit("/debug/upload_script_text"), (req: Request, res: Response) => {
+    const { userId } = getPasskeySession(req as any);
+    if (!userId) {
+      return res.status(401).json({ error: "unauthorized" });
+    }
+
     const { title, text } = req.body || {};
     if (!title || !text) return res.status(400).json({ error: "title and text are required" });
 
@@ -428,12 +428,12 @@ export function initHttpRoutes(app: Express) {
     const scenes = parseScenesFromText(String(text));
     const script: Script = { id, title: String(title), text: String(text), scenes };
 
-    // Cache in memory for this process
-    scripts.set(id, script);
+    // Cache in memory for this process (user-keyed)
+    const cacheKey = `${userId}:${id}`;
+    scripts.set(cacheKey, script);
 
     // Persist to SQLite so scripts survive server restarts
-    const { userId } = getPasskeySession(req as any);
-    saveScriptToDb(script, userId || null);
+    saveScriptToDb(script, userId);
 
     // Derive a simple list of unique speaker names for the UI status line
     const speakers = Array.from(
@@ -458,6 +458,11 @@ export function initHttpRoutes(app: Express) {
     upload.single("pdf"),
     async (req: Request, res: Response) => {
       try {
+        const { userId } = getPasskeySession(req as any);
+        if (!userId) {
+          return res.status(401).json({ error: "unauthorized" });
+        }
+
         const title = String(req.body?.title || "Uploaded Script");
         if (!req.file?.buffer || !req.file.mimetype) {
           return res.status(400).json({ error: "missing file" });
@@ -491,10 +496,10 @@ export function initHttpRoutes(app: Express) {
           scenes,
         };
 
-        // Cache in memory and persist to DB
-        scripts.set(id, script);
-        const { userId } = getPasskeySession(req as any);
-        saveScriptToDb(script, userId || null);
+        // Cache in memory (user-keyed) and persist to DB
+        const cacheKey = `${userId}:${id}`;
+        scripts.set(cacheKey, script);
+        saveScriptToDb(script, userId);
 
         // Derive speakers + simple parse meta for the UI
         const speakers = Array.from(
@@ -530,13 +535,17 @@ export function initHttpRoutes(app: Express) {
 
   // GET /debug/scenes
   debug.get("/scenes", audit("/debug/scenes"), (req: Request, res: Response) => {
+    const { userId } = getPasskeySession(req as any);
+    if (!userId) {
+      return res.status(401).json({ error: "unauthorized" });
+    }
+
     const scriptId = String(req.query.script_id || "");
     if (!scriptId) {
       return res.status(400).json({ error: "script_id required" });
     }
 
-    const { userId } = getPasskeySession(req as any);
-    const script = getOrLoadScript(scriptId, userId || undefined);
+    const script = getOrLoadScript(scriptId, userId);
     if (!script) {
       return res.status(404).json({ error: "script not found" });
     }
@@ -546,6 +555,11 @@ export function initHttpRoutes(app: Express) {
 
   // POST /debug/set_voice
   debug.post("/set_voice", audit("/debug/set_voice"), (req: Request, res: Response) => {
+    const { userId } = getPasskeySession(req as any);
+    if (!userId) {
+      return res.status(401).json({ error: "unauthorized" });
+    }
+
     const { script_id, voice_map } = req.body || {};
     if (!script_id) {
       return res.status(400).json({ error: "script_id required" });
@@ -554,16 +568,16 @@ export function initHttpRoutes(app: Express) {
       return res.status(400).json({ error: "voice_map required" });
     }
 
-    const { userId } = getPasskeySession(req as any);
-    const script = getOrLoadScript(script_id, userId || undefined);
+    const script = getOrLoadScript(script_id, userId);
     if (!script) {
       return res.status(404).json({ error: "script not found" });
     }
 
     script.voiceMap = { ...(script.voiceMap || {}), ...(voice_map || {}) };
-    scripts.set(script_id, script);
+    const cacheKey = `${userId}:${script_id}`;
+    scripts.set(cacheKey, script);
 
-    saveScriptToDb(script, userId || null);
+    saveScriptToDb(script, userId);
 
     res.json({ ok: true });
   });
@@ -755,13 +769,17 @@ export function initHttpRoutes(app: Express) {
 
   // POST /debug/render (stub -> silent mp3)
   debug.post("/render", renderLimiter, audit("/debug/render"), (req: Request, res: Response) => {
+    const { userId } = getPasskeySession(req as any);
+    if (!userId) {
+      return res.status(401).json({ error: "unauthorized" });
+    }
+
     const { script_id, scene_id, role } = req.body || {};
     if (!script_id || !scene_id || !role) {
       return res.status(400).json({ error: "script_id, scene_id, role required" });
     }
 
-    const { userId } = getPasskeySession(req as any);
-    const script = getOrLoadScript(script_id, userId || undefined);
+    const script = getOrLoadScript(script_id, userId);
     if (!script) {
       return res.status(404).json({ error: "script not found" });
     }
