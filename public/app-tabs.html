@@ -6366,15 +6366,16 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
         try {
 
-          const res = await fetch("/api/my_scripts", {
+          const res = await fetch(
+            "/api/my_scripts",
+            withSecretHeaders({
+              method: "GET",
+              credentials: "include",
+              headers: { ...JSON_HDRS },
+            })
+          );
 
-            method: "GET",
-
-            credentials: "include",
-
-          });
-
-
+          if (handleUnauthorized(res)) return;
 
           if (!res.ok) {
 
@@ -6392,9 +6393,47 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
 
 
-          // If server has nothing, keep whatever localSaved scripts we already have.
+          // If server returns 0 scripts, clear local stale scripts
 
           if (!list.length) {
+
+            S.savedScripts = [];
+
+            if (typeof saveSavedScriptsToStorage === "function") {
+
+              try {
+
+                saveSavedScriptsToStorage();
+
+              } catch (e) {
+
+                console.warn(e);
+
+              }
+
+            }
+
+            const savedStatus = document.getElementById("savedScriptsStatus");
+
+            if (savedStatus) {
+
+              savedStatus.textContent = "No scripts found for this account.";
+
+            }
+
+            if (typeof renderSavedScriptsStrip === "function") {
+
+              try {
+
+                renderSavedScriptsStrip();
+
+              } catch (e) {
+
+                console.warn(e);
+
+              }
+
+            }
 
             return;
 
@@ -6444,79 +6483,63 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
 
 
-          // Start with existing local meta (including any local titles).
-
-          for (const meta of existing) {
-
-            if (meta && meta.id) {
-
-              byId.set(meta.id, { ...meta });
-
-            }
-
-          }
-
-
-
-          // Merge server meta in, but always prefer the local title if present.
+          // Only include server scripts (not local-only extras)
 
           for (const serverMeta of serverMapped) {
 
             if (!serverMeta || !serverMeta.id) continue;
 
-            const current = byId.get(serverMeta.id);
+            byId.set(serverMeta.id, serverMeta);
+
+          }
 
 
 
-            if (!current) {
+          // Merge local title edits if available
 
-              byId.set(serverMeta.id, serverMeta);
+          for (const localMeta of existing) {
 
-            } else {
+            if (!localMeta || !localMeta.id) continue;
 
-              const merged = { ...serverMeta, ...current };
+            const serverMeta = byId.get(localMeta.id);
 
-
-
-              const localTitle =
-
-                typeof current.title === "string" && current.title.trim()
-
-                  ? current.title.trim()
-
-                  : "";
-
-              const serverTitle =
-
-                typeof serverMeta.title === "string" && serverMeta.title.trim()
-
-                  ? serverMeta.title.trim()
-
-                  : "Sides";
+            if (!serverMeta) continue; // Skip local-only scripts
 
 
 
-              merged.title = localTitle || serverTitle;
+            const localTitle =
+
+              typeof localMeta.title === "string" && localMeta.title.trim()
+
+                ? localMeta.title.trim()
+
+                : "";
+
+            const serverTitle =
+
+              typeof serverMeta.title === "string" && serverMeta.title.trim()
+
+                ? serverMeta.title.trim()
+
+                : "Sides";
 
 
 
-              // Keep the freshest updatedAt we know about.
-
-              const localUpdated =
-
-                typeof current.updatedAt === "number" ? current.updatedAt : 0;
-
-              const serverUpdated =
-
-                typeof serverMeta.updatedAt === "number" ? serverMeta.updatedAt : 0;
-
-              merged.updatedAt = Math.max(localUpdated, serverUpdated);
+            serverMeta.title = localTitle || serverTitle;
 
 
 
-              byId.set(serverMeta.id, merged);
+            // Keep the freshest updatedAt
 
-            }
+            const localUpdated =
+
+              typeof localMeta.updatedAt === "number" ? localMeta.updatedAt : 0;
+
+            const serverUpdated =
+
+              typeof serverMeta.updatedAt === "number" ? serverMeta.updatedAt : 0;
+
+            serverMeta.updatedAt = Math.max(localUpdated, serverUpdated);
 
           }
 
@@ -6527,14 +6550,6 @@ const savedStrip = document.getElementById("savedScriptsStrip");
             (a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)
 
           );
-
-
-
-          if (!mergedList.length) {
-
-            return;
-
-          }
 
 
 
