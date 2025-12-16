@@ -12,7 +12,7 @@ import authRouter, { getPasskeySession, noteRenderComplete } from "./routes/auth
 import db, { ensureSchema, dbGet, dbAll, dbRun, USING_POSTGRES } from "./lib/db";
 import { addUserCredits, getAvailableCredits } from "./lib/credits";
 import { isSttEnabled, transcribeChunk } from "./lib/stt";
-import { ensureAuditTable, makeAuditMiddleware } from "./lib/audit";
+import { makeAuditMiddleware } from "./lib/audit";
 import { makeRateLimiters } from "./middleware/rateLimit";
 
 const app = express();
@@ -93,8 +93,7 @@ app.use(cookieSession({
 
 app.use("/auth", authRouter);
 
-ensureAuditTable(db);
-const audit = makeAuditMiddleware(db);
+const audit = makeAuditMiddleware();
 const { debugLimiter, renderLimiter } = makeRateLimiters();
 
 function getSharedSecret(): string | undefined {

@@ -9,7 +9,7 @@ import { spawn } from "child_process";
 import db, { GalleryStore, dbGet, dbAll, dbRun, USING_POSTGRES } from "./lib/db";
 import { generateReaderMp3, ttsProvider } from "./lib/tts";
 import { isSttEnabled, transcribeChunk } from "./lib/stt";
-import { ensureAuditTable, makeAuditMiddleware } from "./lib/audit";
+import { makeAuditMiddleware } from "./lib/audit";
 import { makeRateLimiters } from "./middleware/rateLimit";
 import { getPasskeySession, noteRenderComplete, ensureSid } from "./routes/auth";
 
@@ -379,8 +379,7 @@ function baseUrlFrom(req: Request): string {
 // ---------- Routes ----------
 export function initHttpRoutes(app: Express) {
   if (typeof app?.set === "function") { app.set("trust proxy", 1); }
-  ensureAuditTable(db);
-  const audit = makeAuditMiddleware(db);
+  const audit = makeAuditMiddleware();
   const { debugLimiter, renderLimiter } = makeRateLimiters();
   const mixdownEnabled =
     !!process.env.MIXDOWN_ENABLED &&
