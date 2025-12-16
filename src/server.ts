@@ -111,7 +111,8 @@ function extractProvidedSecret(req: import("express").Request): string | undefin
   const cookies = (req as RequestWithCookies).cookies;
   const rawCookie = cookies?.["ob_secret"];
   const c = typeof rawCookie === "string" ? rawCookie.trim() : undefined;
-  return h || c || undefined;
+  const q = typeof req.query.secret === "string" ? req.query.secret.trim() : undefined;
+  return h || c || q || undefined;
 }
 
 function requireSharedSecret(): import("express").RequestHandler {

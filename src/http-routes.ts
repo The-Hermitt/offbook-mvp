@@ -28,8 +28,15 @@ type TesseractWorker = {
 function secretGuard(req: Request, res: Response, next: NextFunction) {
   const required = process.env.SHARED_SECRET;
   if (!required) return next();
-  const provided = req.header("X-Shared-Secret");
-  if (provided && provided === required) return next();
+
+  // Check header first
+  const providedHeader = req.header("X-Shared-Secret");
+  if (providedHeader && providedHeader === required) return next();
+
+  // Check query param (for Safari/browser convenience)
+  const providedQuery = req.query.secret;
+  if (providedQuery && providedQuery === required) return next();
+
   return res.status(404).send("Not Found");
 }
 
@@ -393,16 +400,89 @@ export function initHttpRoutes(app: Express) {
   }
 
   const debug = express.Router();
-  // Quick probe to confirm http-routes.ts is mounted
-  debug.get("/whoami", (req: Request, res: Response) => {
-    res.json({ ok: true, marker: "http-routes.ts" });
-  });
   const api = express.Router();
 
   debug.use(secretGuard);
   debug.use((req: Request, res: Response, next: NextFunction) => {
     ensureSid(req, res);
     next();
+  });
+
+  // GET /debug/whoami - shows current user session info
+  debug.get("/whoami", (req: Request, res: Response) => {
+    const { passkeyLoggedIn, userId } = getPasskeySession(req as any);
+    res.json({ passkeyLoggedIn, userId });
+  });
+
+  // GET /debug/my_scripts - list scripts owned by current user
+  debug.get("/my_scripts", audit("/debug/my_scripts"), (req: Request, res: Response) => {
+    const { userId } = getPasskeySession(req as any);
+    if (!userId) {
+      return res.status(401).json({ error: "unauthorized" });
+    }
+
+    try {
+      const stmt = db.prepare(
+        `SELECT id, user_id, title, scene_count, updated_at
+         FROM scripts
+         WHERE user_id = ?
+         ORDER BY datetime(updated_at) DESC`
+      );
+      const rows = stmt.all(userId) as any[];
+
+      const scripts = rows.map((row) => ({
+        id: row.id,
+        title: row.title,
+        scene_count: typeof row.scene_count === "number" ? row.scene_count : 0,
+        updated_at: row.updated_at,
+      }));
+
+      res.json({ userId, scripts });
+    } catch (err) {
+      console.error("[debug/my_scripts] query failed", err);
+      res.status(500).json({ error: "failed_to_list_scripts" });
+    }
+  });
+
+  // GET /debug/script_probe?script_id=... - diagnostic for script ownership
+  debug.get("/script_probe", audit("/debug/script_probe"), (req: Request, res: Response) => {
+    const { userId } = getPasskeySession(req as any);
+    if (!userId) {
+      return res.status(401).json({ error: "unauthorized" });
+    }
+
+    const script_id = String(req.query.script_id || "").trim();
+    if (!script_id) {
+      return res.status(400).json({ error: "script_id required" });
+    }
+
+    try {
+      const cacheKey = `${userId}:${script_id}`;
+      const cacheHit = scripts.has(cacheKey);
+
+      // Check if script exists for this user
+      const dbRow = db
+        .prepare(`SELECT user_id FROM scripts WHERE id = ? AND user_id = ?`)
+        .get(script_id, userId) as { user_id: string } | undefined;
+      const dbHit = Boolean(dbRow);
+
+      // Check if script exists with different owner
+      const ownerRow = db
+        .prepare(`SELECT user_id FROM scripts WHERE id = ?`)
+        .get(script_id) as { user_id: string } | undefined;
+      const dbOwner = ownerRow?.user_id || null;
+
+      res.json({
+        userId,
+        script_id,
+        cacheHit,
+        dbHit,
+        dbOwner,
+      });
+    } catch (err) {
+      console.error("[debug/script_probe] query failed", err);
+      res.status(500).json({ error: "probe_failed" });
+    }
   });
 
   // GET /debug/voices_probe

@@ -4,7 +4,9 @@
       "Bash(npm run build:*)",
       "Bash(npx tsc:*)",
       "Bash(taskkill:*)",
-      "Bash(netstat:*)"
+      "Bash(netstat:*)",
+      "Bash(timeout 10 npm run dev:*)",
+      "Bash(curl:*)"
     ]
   }
 }
