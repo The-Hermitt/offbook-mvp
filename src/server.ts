@@ -136,6 +136,22 @@ const sharedSecretMiddleware = requireSharedSecret();
 app.use("/debug", sharedSecretMiddleware, debugLimiter);
 const requireSecret = sharedSecretMiddleware;
 
+function requireAdmin(): import("express").RequestHandler {
+  return (req, res, next) => {
+    const adminSecret = process.env.ADMIN_SECRET;
+    if (!adminSecret || !adminSecret.trim()) {
+      return res.status(404).json({ error: "not_found" });
+    }
+
+    const provided = (req.headers["x-admin-secret"] as string | undefined)?.trim();
+    if (provided === adminSecret.trim()) {
+      return next();
+    }
+
+    res.status(404).json({ error: "not_found" });
+  };
+}
+
 // Health
 app.get("/health", (_req, res) =>
   res.json({ ok: true, env: { PORT, has_shared_secret: !!getSharedSecret() } })
@@ -539,14 +555,20 @@ async function persistScriptToDb(
     const scenesJson = JSON.stringify(safeScenes);
     const sceneCount = safeScenes.length;
 
-    // Check if script exists
-    const existing = await dbGet<{ id: string }>(
-      "SELECT id FROM scripts WHERE id = ?",
+    // Check if script exists and verify ownership
+    const existing = await dbGet<{ id: string; user_id: string | null }>(
+      "SELECT id, user_id FROM scripts WHERE id = ?",
       [cleanId]
     );
 
     if (existing) {
-      // Update existing script
+      // Prevent cross-user ownership stealing
+      const existingOwner = existing.user_id;
+      if (existingOwner && existingOwner.trim() && existingOwner !== userId) {
+        throw new Error("not_owner");
+      }
+
+      // Update existing script (only if owner matches OR owner is null/empty)
       await dbRun(
         "UPDATE scripts SET user_id = ?, title = ?, scene_count = ?, scenes_json = ? WHERE id = ?",
         [userId, cleanTitle, sceneCount, scenesJson, cleanId]
@@ -571,6 +593,10 @@ async function persistScriptToDb(
       title,
       error: e?.message || e,
     });
+    // Re-throw ownership errors so callers can handle them
+    if (e?.message === "not_owner") {
+      throw e;
+    }
   }
 }
 
@@ -602,6 +628,49 @@ async function loadScriptFromDb(id: string, userId: string): Promise<ScriptRow |
   }
 }
 
+// Script ownership helpers
+function scriptCacheKey(userId: string, scriptId: string): string {
+  return `${userId}:${scriptId}`;
+}
+
+async function getOwnedScriptOrNull(userId: string, scriptId: string): Promise<Script | null> {
+  const cacheKey = scriptCacheKey(userId, scriptId);
+
+  // Try cache first
+  let script = mem.scripts.get(cacheKey);
+  if (script) return script;
+
+  // Load from DB
+  const row = await loadScriptFromDb(scriptId, userId);
+  if (!row) return null;
+
+  // Parse scenes
+  let scenes: Scene[] = [];
+  if (row.scenes_json) {
+    try {
+      scenes = JSON.parse(row.scenes_json) as Scene[];
+    } catch (e) {
+      console.error("[scripts] failed to parse scenes_json from DB", {
+        id: scriptId,
+        userId,
+        error: (e as any)?.message || e,
+      });
+    }
+  }
+
+  // Build script object
+  script = {
+    id: row.id,
+    title: row.title || "Sides",
+    scenes,
+    voices: {},
+  };
+
+  // Cache and return
+  mem.scripts.set(cacheKey, script);
+  return script;
+}
+
 /* -------------------- ALWAYS-ON ROUTES -------------------- */
 // 1) TTS health (safe)
 app.get("/debug/tts_check", requireSecret, async (_req: Request, res: Response) => {
@@ -619,7 +688,7 @@ app.get("/debug/voices_probe", requireSecret, (_req: Request, res: Response) => 
 });
 
 // 2.5) Admin scripts diagnostics
-app.get("/debug/admin_scripts_diag", requireSecret, async (req: Request, res: Response) => {
+app.get("/debug/admin_scripts_diag", requireSecret, requireAdmin(), async (req: Request, res: Response) => {
   try {
     // Get script count by user
     const countsByUserRows = await dbAll<{ user_id: string; n: number }>(
@@ -659,7 +728,7 @@ app.get("/debug/admin_scripts_diag", requireSecret, async (req: Request, res: Re
 });
 
 // 2.6) Admin merge scripts between users
-app.post("/debug/admin_merge_scripts", requireSecret, express.json(), async (req: Request, res: Response) => {
+app.post("/debug/admin_merge_scripts", requireSecret, requireAdmin(), express.json(), async (req: Request, res: Response) => {
   try {
     const from_user_id = String(req.body?.from_user_id || "").trim();
     const to_user_id = String(req.body?.to_user_id || "").trim();
@@ -709,7 +778,7 @@ app.post("/debug/admin_merge_scripts", requireSecret, express.json(), async (req
 });
 
 // 2.7) Admin orphan scripts diagnostics
-app.get("/debug/admin_orphan_scripts", requireSecret, async (req: Request, res: Response) => {
+app.get("/debug/admin_orphan_scripts", requireSecret, requireAdmin(), async (req: Request, res: Response) => {
   try {
     // Count orphan scripts (user_id IS NULL OR user_id = '')
     const countRow = await dbGet<{ n: number }>(
@@ -767,7 +836,7 @@ app.get("/debug/whoami", requireSecret, (req: Request, res: Response) => {
 });
 
 // 2.9) Debug my_scripts as admin - read-only script query for specific user
-app.get("/debug/my_scripts_as_admin", requireSecret, async (req: Request, res: Response) => {
+app.get("/debug/my_scripts_as_admin", requireSecret, requireAdmin(), async (req: Request, res: Response) => {
   try {
     const user_id = String(req.query.user_id || "").trim();
     if (!user_id) {
@@ -1028,34 +1097,7 @@ app.get("/api/scripts/:id", async (req: Request, res: Response) => {
     return res.status(401).json({ error: "unauthorized" });
   }
 
-  const cacheKey = `${userId}:${id}`;
-  const row = await loadScriptFromDb(id, userId);
-  let script = mem.scripts.get(cacheKey);
-
-  if (!script && row) {
-    let scenes: Scene[] = [];
-    if (row.scenes_json) {
-      try {
-        scenes = JSON.parse(row.scenes_json) as Scene[];
-      } catch (e) {
-        console.error("[scripts] failed to parse scenes_json from DB", {
-          id,
-          userId,
-          error: (e as any)?.message || e,
-        });
-      }
-    }
-
-    script = {
-      id: row.id,
-      title: row.title || "Sides",
-      scenes,
-      voices: {},
-    };
-
-    mem.scripts.set(cacheKey, script);
-  }
-
+  const script = await getOwnedScriptOrNull(userId, id);
   if (!script) {
     return res.status(404).json({ error: "not_found" });
   }
@@ -1086,14 +1128,18 @@ app.post("/api/scripts/:id/save", async (req: Request, res: Response) => {
     const scenesRaw = body.scenes;
     const scenes = Array.isArray(scenesRaw) ? (scenesRaw as Scene[]) : [];
 
-    // Check if script exists with a different user_id
-    const existingRow = await dbGet<{ id: string; user_id: string; title: string }>(
-      "SELECT id, user_id, title FROM scripts WHERE id = ?",
+    // Check ownership BEFORE saving
+    const existingRow = await dbGet<{ user_id: string | null; title: string }>(
+      "SELECT user_id, title FROM scripts WHERE id = ?",
       [id]
     );
 
-    if (existingRow && existingRow.user_id !== userId) {
-      return res.status(403).json({ error: "not_owner" });
+    if (existingRow) {
+      const existingOwner = existingRow.user_id;
+      if (existingOwner && existingOwner.trim() && existingOwner !== userId) {
+        // Return 404 to avoid ID enumeration
+        return res.status(404).json({ error: "not_found" });
+      }
     }
 
     const existingTitle = existingRow?.title || "";
@@ -1158,7 +1204,8 @@ function mountFallbackDebugRoutes() {
       const scenes = parseTextToScenes(title, text);
       const speakers = uniqueSpeakers(scenes[0]);
 
-      mem.scripts.set(id, { id, title, scenes, voices: {} });
+      const cacheKey = scriptCacheKey(userId, id);
+      mem.scripts.set(cacheKey, { id, title, scenes, voices: {} });
       await persistScriptToDb(id, userId, title, scenes);
 
       res.json({ script_id: id, scene_count: scenes.length, speakers });
@@ -1214,7 +1261,8 @@ function mountFallbackDebugRoutes() {
               ],
             },
           ];
-          mem.scripts.set(id, { id, title, scenes, voices: {} });
+          const cacheKey = scriptCacheKey(userId, id);
+          mem.scripts.set(cacheKey, { id, title, scenes, voices: {} });
           await persistScriptToDb(id, userId, title, scenes);
           return res.json({
             script_id: id,
@@ -1229,7 +1277,8 @@ function mountFallbackDebugRoutes() {
         const speakers = uniqueSpeakers(scenes[0]);
 
         const id = genId("scr");
-        mem.scripts.set(id, { id, title, scenes, voices: {} });
+        const cacheKey = scriptCacheKey(userId, id);
+        mem.scripts.set(cacheKey, { id, title, scenes, voices: {} });
         await persistScriptToDb(id, userId, title, scenes);
         return res.json({
           script_id: id,
@@ -1253,7 +1302,8 @@ function mountFallbackDebugRoutes() {
             ],
           },
         ];
-        mem.scripts.set(id, { id, title, scenes, voices: {} });
+        const cacheKey = scriptCacheKey(userId, id);
+        mem.scripts.set(cacheKey, { id, title, scenes, voices: {} });
         await persistScriptToDb(id, userId, title, scenes);
         return res.json({
           script_id: id,
@@ -1280,33 +1330,7 @@ function mountFallbackDebugRoutes() {
         return res.status(400).json({ error: "missing_script_id" });
       }
 
-      const cacheKey = `${userId}:${script_id}`;
-      let script = mem.scripts.get(cacheKey);
-      const row = await loadScriptFromDb(script_id, userId);
-
-      if (!script && row) {
-        let scenes: Scene[] = [];
-        if (row.scenes_json) {
-          try {
-            scenes = JSON.parse(row.scenes_json) as Scene[];
-          } catch (e) {
-            console.error("[scripts] failed to parse scenes_json from DB", {
-              id: script_id,
-              error: (e as any)?.message || e,
-            });
-          }
-        }
-
-        script = {
-          id: row.id,
-          title: row.title || "Sides",
-          scenes,
-          voices: {},
-        };
-
-        mem.scripts.set(cacheKey, script);
-      }
-
+      const script = await getOwnedScriptOrNull(userId, script_id);
       if (!script) {
         return res.status(404).json({ error: "not_found" });
       }
@@ -1354,21 +1378,36 @@ function mountFallbackDebugRoutes() {
     }
   );
 
-  app.post("/debug/set_voice", requireSecret, audit("/debug/set_voice"), (req: Request, res: Response) => {
+  app.post("/debug/set_voice", requireSecret, audit("/debug/set_voice"), async (req: Request, res: Response) => {
+    const userId = getUserIdForRequest(req);
+    if (!userId) {
+      return res.status(401).json({ error: "unauthorized" });
+    }
+
     const script_id = String((req.body as any)?.script_id || "");
     const voice_map = (req.body as any)?.voice_map || {};
-    const s = mem.scripts.get(script_id);
-    if (!s) return res.status(404).json({ error: "not found" });
-    Object.assign(s.voices, voice_map);
+
+    const script = await getOwnedScriptOrNull(userId, script_id);
+    if (!script) {
+      return res.status(404).json({ error: "not_found" });
+    }
+
+    Object.assign(script.voices, voice_map);
     res.json({ ok: true });
   });
 
   // REAL: Render partner-only reader MP3 with OpenAI
   app.post("/debug/render", requireSecret, renderLimiter, audit("/debug/render"), async (req: Request, res: Response) => {
+    const userId = getUserIdForRequest(req);
+    if (!userId) {
+      return res.status(401).json({ error: "unauthorized" });
+    }
+
     const script_id = String((req.body as any)?.script_id || "");
     const myRole = String((req.body as any)?.my_role || "").toUpperCase();
     const paceMs = Number((req.body as any)?.pace_ms || 0);
-    const s = mem.scripts.get(script_id);
+
+    const s = await getOwnedScriptOrNull(userId, script_id);
     if (!s) return res.status(404).json({ error: "script not found" });
     if (!OPENAI_API_KEY) return res.status(500).json({ error: "OPENAI_API_KEY not set" });
 
