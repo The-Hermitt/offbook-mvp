@@ -64,9 +64,10 @@ function ensureSessionDefaults(req: express.Request): Sess {
     const now = new Date();
     const start = new Date(now.getFullYear(), now.getMonth(), 1);
     const end = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+    const stripeEnabled = Boolean((process.env.STRIPE_SECRET_KEY || "").trim());
     sess.plan = "none";
     sess.rendersUsed = 0;
-    sess.creditsAvailable = DEV_STARTING_CREDITS;
+    sess.creditsAvailable = stripeEnabled ? 0 : DEV_STARTING_CREDITS;
     sess.periodStart = start.toISOString();
     sess.periodEnd = end.toISOString();
   }
@@ -291,7 +292,8 @@ router.get("/session", async (req, res) => {
     }
   }
 
-  const sessionCredits = (passkeyLoggedIn || allowAnon) ? (sess?.creditsAvailable ?? 0) : 0;
+  const stripeEnabled = Boolean((process.env.STRIPE_SECRET_KEY || "").trim());
+  const sessionCredits = stripeEnabled ? 0 : ((passkeyLoggedIn || allowAnon) ? (sess?.creditsAvailable ?? 0) : 0);
   const combinedCredits = (passkeyLoggedIn || allowAnon) ? (sessionCredits + dbCredits) : 0;
 
   if (passkeyLoggedIn) {
