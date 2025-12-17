@@ -8,7 +8,7 @@ import { createRequire } from "module";
 import cookieParser from "cookie-parser";
 import cookieSession from "cookie-session";
 import Stripe from "stripe";
-import authRouter, { getPasskeySession, noteRenderComplete } from "./routes/auth";
+import authRouter, { getPasskeySession, noteRenderComplete, ensureSid } from "./routes/auth";
 import db, { ensureSchema, dbGet, dbAll, dbRun, USING_POSTGRES } from "./lib/db";
 import { addUserCredits, getAvailableCredits } from "./lib/credits";
 import { isSttEnabled, transcribeChunk } from "./lib/stt";
@@ -496,6 +496,34 @@ function getUserIdForRequest(req: Request): string | null {
   return null;
 }
 
+// Helper that ensures anon userId exists for script uploads
+function getEffectiveUserId(req: Request): string | null {
+  try {
+    const { passkeyLoggedIn, userId } = getPasskeySession(req as any);
+
+    // If passkey user, return it
+    if (passkeyLoggedIn && userId) {
+      return userId;
+    }
+
+    // Check if anon is allowed (ENFORCE_AUTH_GATE not set or false)
+    const ENFORCE_AUTH_GATE = /^true$/i.test(process.env.ENFORCE_AUTH_GATE || "");
+    if (!ENFORCE_AUTH_GATE) {
+      // Ensure session.sid exists
+      ensureSid(req, null as any);
+
+      // Get session userId (should be anon:<sid> from ensureSessionDefaults)
+      const sess = (req as any).session;
+      if (sess?.userId) {
+        return sess.userId;
+      }
+    }
+  } catch (e) {
+    console.warn("[auth] getEffectiveUserId: error getting session", (e as any)?.message || e);
+  }
+  return null;
+}
+
 async function persistScriptToDb(
   id: string,
   userId: string,
@@ -678,6 +706,41 @@ app.post("/debug/admin_merge_scripts", requireSecret, express.json(), async (req
   } catch (err) {
     console.error("[debug/admin_merge_scripts] failed", err);
     res.status(500).json({ error: "merge_failed" });
+  }
+});
+
+// 2.7) Admin orphan scripts diagnostics
+app.get("/debug/admin_orphan_scripts", requireSecret, async (req: Request, res: Response) => {
+  try {
+    // Count orphan scripts (user_id IS NULL OR user_id = '')
+    const countRow = await dbGet<{ n: number }>(
+      "SELECT COUNT(*) AS n FROM scripts WHERE user_id IS NULL OR user_id = ''"
+    );
+    const orphan_count = countRow?.n ?? 0;
+
+    // Get recent orphan scripts
+    const orderClause = USING_POSTGRES
+      ? "ORDER BY updated_at DESC"
+      : "ORDER BY datetime(updated_at) DESC";
+
+    const recentRows = await dbAll<{ id: string; user_id: string | null; title: string; updated_at: string }>(
+      `SELECT id, user_id, title, updated_at FROM scripts WHERE user_id IS NULL OR user_id = '' ${orderClause} LIMIT 25`
+    );
+    const recent = recentRows.map((row) => ({
+      id: row.id,
+      user_id: row.user_id,
+      title: row.title,
+      updated_at: row.updated_at,
+    }));
+
+    res.json({
+      ok: true,
+      orphan_count,
+      recent,
+    });
+  } catch (err) {
+    console.error("[debug/admin_orphan_scripts] failed", err);
+    res.status(500).json({ error: "diagnostics_failed" });
   }
 });
 
@@ -1028,7 +1091,11 @@ function mountFallbackDebugRoutes() {
     requireSecret,
     audit("/debug/upload_script_text"),
     async (req: Request, res: Response) => {
-      const userId = getUserIdForRequest(req);
+      const userId = getEffectiveUserId(req);
+      if (!userId) {
+        return res.status(401).json({ error: "unauthorized" });
+      }
+
       const title = String(req.body?.title || "Script");
       const text = String(req.body?.text || "");
       const id = genId("scr");
@@ -1049,7 +1116,11 @@ function mountFallbackDebugRoutes() {
     audit("/debug/upload_script_upload"),
     upload.single("pdf"),
     async (req: Request, res: Response) => {
-      const userId = getUserIdForRequest(req);
+      const userId = getEffectiveUserId(req);
+      if (!userId) {
+        return res.status(401).json({ error: "unauthorized" });
+      }
+
       const title = String((req.body as any)?.title || "PDF");
       const pdfBuf = (req as any).file?.buffer as Buffer | undefined;
       if (!pdfBuf) return res.status(400).json({ error: "missing pdf file" });

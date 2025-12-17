@@ -474,7 +474,7 @@ router.post("/passkey/login/start", (req, res) => {
 // --- PASSKEY LOGIN: FINISH (DEV MODE) ----------------------------------------
 // POST /auth/passkey/login/finish
 // Body: { id, rawId, response: { clientDataJSON, authenticatorData?, signature?, userHandle? }, type }
-router.post("/passkey/login/finish", express.json({ limit: "1mb" }), (req, res) => {
+router.post("/passkey/login/finish", express.json({ limit: "1mb" }), async (req, res) => {
   const sess = ensureSessionDefaults(req);
 
   if (!sess.authChallenge) {
@@ -503,6 +503,9 @@ router.post("/passkey/login/finish", express.json({ limit: "1mb" }), (req, res) 
   if (!typeOk)      return res.status(400).json({ ok: false, error: "type_mismatch" });
   if (!originOk)    return res.status(400).json({ ok: false, error: "origin_mismatch", expected: allowedOrigin, got: clientData.origin });
 
+  // Capture prior userId BEFORE marking logged in
+  const priorUserId = req.session?.userId;
+
   // Accept credentialId from the payload (survives restarts)
   sess.credentialId = String(id);
   sess.loggedIn = true;
@@ -510,6 +513,16 @@ router.post("/passkey/login/finish", express.json({ limit: "1mb" }), (req, res) 
 
   const stableUserId = deriveUserId(sess);
   if (stableUserId) sess.userId = stableUserId;
+
+  // Migrate anon scripts to passkey user
+  if (priorUserId && stableUserId && priorUserId.startsWith("anon:") && priorUserId !== stableUserId) {
+    try {
+      await dbRun("UPDATE scripts SET user_id = ? WHERE user_id = ?", [stableUserId, priorUserId]);
+      console.log("[auth] migrated anon scripts from %s to %s", priorUserId, stableUserId);
+    } catch (err) {
+      console.error("[auth] failed to migrate anon scripts from %s to %s", priorUserId, stableUserId, err);
+    }
+  }
 
   return res.json({ ok: true, userId: stableUserId || null });
 });
