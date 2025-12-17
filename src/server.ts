@@ -590,6 +590,47 @@ app.get("/debug/voices_probe", requireSecret, (_req: Request, res: Response) => 
   });
 });
 
+// 2.5) Admin scripts diagnostics
+app.get("/debug/admin_scripts_diag", requireSecret, async (req: Request, res: Response) => {
+  try {
+    const userId = getUserIdForRequest(req);
+
+    // Get script count by user
+    const byUserRows = await dbAll<{ user_id: string; count: number }>(
+      "SELECT user_id, COUNT(*) as count FROM scripts GROUP BY user_id"
+    );
+    const by_user = byUserRows.map((row) => ({
+      user_id: row.user_id,
+      count: typeof row.count === "number" ? row.count : 0,
+    }));
+
+    // Get recent scripts
+    const orderClause = USING_POSTGRES
+      ? "ORDER BY updated_at DESC"
+      : "ORDER BY datetime(updated_at) DESC";
+
+    const recentRows = await dbAll<{ id: string; user_id: string; title: string; updated_at: string }>(
+      `SELECT id, user_id, title, updated_at FROM scripts ${orderClause} LIMIT 25`
+    );
+    const recent = recentRows.map((row) => ({
+      id: row.id,
+      user_id: row.user_id,
+      title: row.title,
+      updated_at: row.updated_at,
+    }));
+
+    res.json({
+      using_postgres: USING_POSTGRES,
+      current_user_id: userId,
+      by_user,
+      recent,
+    });
+  } catch (err) {
+    console.error("[debug/admin_scripts_diag] failed", err);
+    res.status(500).json({ error: "diagnostics_failed" });
+  }
+});
+
 // 3) Single-line TTS for Rehearse/Diagnostics
 app.post("/debug/tts_line", requireSecret, async (req: Request, res: Response) => {
   try {

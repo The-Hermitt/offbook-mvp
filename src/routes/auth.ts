@@ -188,6 +188,11 @@ router.get("/session", async (req, res) => {
   const passkeyLoggedIn = Boolean(sess.loggedIn);
   const allowAnon = !ENFORCE_AUTH_GATE;
 
+  // Ensure anon identity is stable
+  if (allowAnon && sess && !sess.userId) {
+    sess.userId = `anon:${sid}`;
+  }
+
   let userId: string | null = null;
   if (passkeyLoggedIn) {
     userId = deriveUserId(sess);
@@ -195,19 +200,42 @@ router.get("/session", async (req, res) => {
     userId = sess.userId || `anon:${sid}`;
   }
 
-  // One-time migration: move legacy solo-tester data to this user
+  // One-time migration: move legacy solo-tester + old anon data to this user
   if (userId && userId !== "solo-tester") {
     try {
-      const LEGACY = "solo-tester";
+      // Determine legacy anon id from session
+      const anonLegacy = (sess && typeof sess.userId === "string" && sess.userId.startsWith("anon:") && sess.userId !== userId)
+        ? sess.userId
+        : null;
+
+      // Build list of legacy IDs to check (dedupe and skip current userId)
+      const legacyIds = ["solo-tester", anonLegacy]
+        .filter(Boolean)
+        .filter((id) => id !== userId) as string[];
+
       const hasMine = await dbGet<{ "1": number }>("SELECT 1 FROM scripts WHERE user_id = ? LIMIT 1", [userId]);
-      if (!hasMine) {
-        const hasLegacy = await dbGet<{ "1": number }>("SELECT 1 FROM scripts WHERE user_id = ? LIMIT 1", [LEGACY]);
-        if (hasLegacy) {
-          // Execute migration queries sequentially (transactions not supported in abstraction layer yet)
-          await dbRun("UPDATE scripts SET user_id = ? WHERE user_id = ?", [userId, LEGACY]);
-          await dbRun("UPDATE user_credits SET user_id = ? WHERE user_id = ?", [userId, LEGACY]);
-          await dbRun("UPDATE gallery_takes SET user_id = ? WHERE user_id = ?", [userId, LEGACY]);
-          console.log("[auth] migrated legacy solo-tester data to", userId);
+
+      if (!hasMine && legacyIds.length > 0) {
+        for (const legacyId of legacyIds) {
+          const hasLegacy = await dbGet<{ "1": number }>("SELECT 1 FROM scripts WHERE user_id = ? LIMIT 1", [legacyId]);
+          if (hasLegacy) {
+            // Migrate scripts
+            await dbRun("UPDATE scripts SET user_id = ? WHERE user_id = ?", [userId, legacyId]);
+
+            // Migrate user_credits only if destination doesn't exist
+            const hasDestCredits = await dbGet<{ "1": number }>("SELECT 1 FROM user_credits WHERE user_id = ? LIMIT 1", [userId]);
+            if (!hasDestCredits) {
+              await dbRun("UPDATE user_credits SET user_id = ? WHERE user_id = ?", [userId, legacyId]);
+            }
+
+            // Migrate gallery_takes only if destination doesn't exist
+            const hasDestGallery = await dbGet<{ "1": number }>("SELECT 1 FROM gallery_takes WHERE user_id = ? LIMIT 1", [userId]);
+            if (!hasDestGallery) {
+              await dbRun("UPDATE gallery_takes SET user_id = ? WHERE user_id = ?", [userId, legacyId]);
+            }
+
+            console.log("[auth] migrated legacy data from %s to %s", legacyId, userId);
+          }
         }
       }
     } catch (err) {
