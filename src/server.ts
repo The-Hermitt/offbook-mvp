@@ -631,6 +631,56 @@ app.get("/debug/admin_scripts_diag", requireSecret, async (req: Request, res: Re
   }
 });
 
+// 2.6) Admin merge scripts between users
+app.post("/debug/admin_merge_scripts", requireSecret, express.json(), async (req: Request, res: Response) => {
+  try {
+    const from_user_id = String(req.body?.from_user_id || "").trim();
+    const to_user_id = String(req.body?.to_user_id || "").trim();
+    const dry_run = Boolean(req.body?.dry_run);
+
+    // Validate
+    if (!from_user_id || !to_user_id) {
+      return res.status(400).json({ error: "from_user_id and to_user_id are required" });
+    }
+    if (from_user_id === to_user_id) {
+      return res.status(400).json({ error: "from_user_id and to_user_id must be different" });
+    }
+
+    // Count scripts before
+    const countRow = await dbGet<{ n: number }>(
+      "SELECT COUNT(*) AS n FROM scripts WHERE user_id = ?",
+      [from_user_id]
+    );
+    const scripts_before = countRow?.n ?? 0;
+
+    let scripts_moved = 0;
+
+    if (!dry_run) {
+      // Perform the merge
+      const result = await dbRun(
+        "UPDATE scripts SET user_id = ? WHERE user_id = ?",
+        [to_user_id, from_user_id]
+      );
+      scripts_moved = result.changes ?? 0;
+    } else {
+      // Dry run: scripts_moved would be the same as scripts_before
+      scripts_moved = scripts_before;
+    }
+
+    res.json({
+      ok: true,
+      using_postgres: USING_POSTGRES,
+      from_user_id,
+      to_user_id,
+      scripts_before,
+      scripts_moved,
+    });
+  } catch (err) {
+    console.error("[debug/admin_merge_scripts] failed", err);
+    res.status(500).json({ error: "merge_failed" });
+  }
+});
+
 // 3) Single-line TTS for Rehearse/Diagnostics
 app.post("/debug/tts_line", requireSecret, async (req: Request, res: Response) => {
   try {
