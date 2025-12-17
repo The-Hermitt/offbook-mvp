@@ -153,7 +153,8 @@ function shortSha256(input: string): string {
 
 function deriveUserId(sess: Sess | undefined | null): string {
   if (!sess) return "";
-  if (sess.credentialId && sess.credentialId.trim()) {
+  // Only return pk_* id when actually logged in
+  if (sess.loggedIn && sess.credentialId && sess.credentialId.trim()) {
     return `pk_${shortSha256(sess.credentialId.trim())}`;
   }
   if (sess.userId && sess.userId.trim()) return sess.userId.trim();
@@ -189,9 +190,11 @@ router.get("/session", async (req, res) => {
   const passkeyLoggedIn = Boolean(sess.loggedIn);
   const allowAnon = !ENFORCE_AUTH_GATE;
 
-  // Ensure anon identity is stable
-  if (allowAnon && sess && !sess.userId) {
-    sess.userId = `anon:${sid}`;
+  // Force logged-out sessions into anon identity
+  if (allowAnon && !passkeyLoggedIn) {
+    if (!sess.userId || !sess.userId.startsWith("anon:")) {
+      sess.userId = `anon:${sid}`;
+    }
   }
 
   let userId: string | null = null;
@@ -305,6 +308,16 @@ router.get("/session", async (req, res) => {
     });
   }
 
+  // Diagnostic logging when ?debug=1
+  if (String(req.query.debug || "") === "1") {
+    console.log("[auth/session] debug", {
+      sid,
+      passkeyLoggedIn,
+      sess_userId: sess.userId,
+      computed_userId: userId,
+    });
+  }
+
   res.setHeader("Cache-Control", "no-store");
 
   res.json({
@@ -358,6 +371,10 @@ router.post("/signout", (req, res) => {
   const sess = req.session as Sess;
   if (sess) {
     sess.loggedIn = false;
+    // Reset to anon identity
+    const sid = (sess.sid && typeof sess.sid === "string") ? sess.sid : crypto.randomUUID();
+    sess.sid = sid;
+    sess.userId = `anon:${sid}`;
   }
 
   return res.json({ ok: true });
@@ -378,10 +395,6 @@ router.post("/passkey/register/start", (req, res) => {
   const userId = (body.userId || "solo-tester");
   const userName = (body.userName || "solo@tester.example");
   const displayName = (body.displayName || "Solo Tester");
-
-  // Persist a stable, human-friendly user id for this session (dev only).
-  // This is what we want to use for per-user data like Gallery takes.
-  sess.userId = userId;
 
   // Minimal PublicKeyCredentialCreationOptions (no libs)
   const options: any = {
@@ -454,8 +467,8 @@ router.post("/passkey/register/finish", express.json({ limit: "1mb" }), (req, re
   if (!originOk)    return res.status(400).json({ ok: false, error: "origin_mismatch", expected: allowedOrigin, got: clientData.origin });
 
   sess.credentialId = String(id);
-  sess.userId = deriveUserId(sess) || "passkey:registered";
   sess.loggedIn = true;
+  sess.userId = deriveUserId(sess) || "passkey:registered";
   delete sess.regChallenge;
 
   return res.json({ ok: true, userId: sess.userId, credentialId: sess.credentialId, autoSignedIn: true });
