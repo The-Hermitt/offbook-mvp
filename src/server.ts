@@ -754,13 +754,28 @@ app.get("/api/my_scripts", async (req: Request, res: Response) => {
       return res.status(401).json({ error: "unauthorized" });
     }
 
+    // Dev-only override: ?all=1 with SHARED_SECRET shows all users' scripts
+    const sharedSecret = getSharedSecret();
+    const showAll = String(req.query.all || "") === "1" && sharedSecret && req.headers["x-shared-secret"] === sharedSecret;
+
     const orderClause = USING_POSTGRES
       ? "ORDER BY updated_at DESC"
       : "ORDER BY datetime(updated_at) DESC";
 
+    let query: string;
+    let params: any[];
+
+    if (showAll) {
+      query = `SELECT id, user_id, title, scene_count, updated_at FROM scripts WHERE is_deleted = 0 ${orderClause}`;
+      params = [];
+    } else {
+      query = `SELECT id, user_id, title, scene_count, updated_at FROM scripts WHERE user_id = ? AND is_deleted = 0 ${orderClause}`;
+      params = [userId];
+    }
+
     const rows = await dbAll<{ id: string; user_id: string; title: string; scene_count: number; updated_at: string }>(
-      `SELECT id, user_id, title, scene_count, updated_at FROM scripts WHERE user_id = ? ${orderClause}`,
-      [userId]
+      query,
+      params
     );
 
     const seen = new Set<string>();
@@ -781,6 +796,7 @@ app.get("/api/my_scripts", async (req: Request, res: Response) => {
 
     console.log("[scripts] /api/my_scripts", {
       userId,
+      showAll,
       count: scripts.length,
     });
 
