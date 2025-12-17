@@ -743,6 +743,73 @@ app.get("/debug/admin_orphan_scripts", requireSecret, async (req: Request, res: 
   }
 });
 
+// 2.8) Debug whoami - session diagnostics
+app.get("/debug/whoami", requireSecret, (req: Request, res: Response) => {
+  try {
+    const sess = (req as any).session;
+    const sid = sess?.sid || null;
+    const session_user_id = sess?.userId || null;
+    const resolved_user_id = getUserIdForRequest(req);
+    const ENFORCE_AUTH_GATE = /^true$/i.test(process.env.ENFORCE_AUTH_GATE || "");
+
+    res.json({
+      ok: true,
+      has_session: !!sess,
+      sid,
+      session_user_id,
+      resolved_user_id,
+      enforce_auth_gate: ENFORCE_AUTH_GATE,
+    });
+  } catch (err) {
+    console.error("[debug/whoami] failed", err);
+    res.status(500).json({ error: "diagnostics_failed" });
+  }
+});
+
+// 2.9) Debug my_scripts as admin - read-only script query for specific user
+app.get("/debug/my_scripts_as_admin", requireSecret, async (req: Request, res: Response) => {
+  try {
+    const user_id = String(req.query.user_id || "").trim();
+    if (!user_id) {
+      return res.status(400).json({ error: "user_id query param required" });
+    }
+
+    const orderClause = USING_POSTGRES
+      ? "ORDER BY updated_at DESC"
+      : "ORDER BY datetime(updated_at) DESC";
+
+    const query = `SELECT id, user_id, title, scene_count, updated_at FROM scripts WHERE user_id = ? AND is_deleted = 0 ${orderClause}`;
+    const rows = await dbAll<{ id: string; user_id: string; title: string; scene_count: number; updated_at: string }>(
+      query,
+      [user_id]
+    );
+
+    const seen = new Set<string>();
+    const scripts = rows
+      .filter((row) => {
+        if (!row || !row.id) return false;
+        if (seen.has(row.id)) return false;
+        seen.add(row.id);
+        return true;
+      })
+      .map((row) => ({
+        id: row.id,
+        title: row.title,
+        sceneCount: typeof row.scene_count === "number" ? row.scene_count : 0,
+        updatedAt: row.updated_at,
+      }));
+
+    res.json({
+      ok: true,
+      user_id,
+      scripts,
+    });
+  } catch (err) {
+    console.error("[debug/my_scripts_as_admin] failed", err);
+    res.status(500).json({ error: "query_failed" });
+  }
+});
+
 // 3) Single-line TTS for Rehearse/Diagnostics
 app.post("/debug/tts_line", requireSecret, async (req: Request, res: Response) => {
   try {
@@ -903,6 +970,10 @@ app.post(
 app.get("/api/my_scripts", async (req: Request, res: Response) => {
   try {
     const userId = getUserIdForRequest(req);
+
+    // Diagnostic logging
+    console.log("[my_scripts] resolved_user_id=", userId, "sid=", (req as any).session?.sid, "session_user_id=", (req as any).session?.userId);
+
     if (!userId) {
       return res.status(401).json({ error: "unauthorized" });
     }
