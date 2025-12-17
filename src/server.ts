@@ -621,15 +621,13 @@ app.get("/debug/voices_probe", requireSecret, (_req: Request, res: Response) => 
 // 2.5) Admin scripts diagnostics
 app.get("/debug/admin_scripts_diag", requireSecret, async (req: Request, res: Response) => {
   try {
-    const userId = getUserIdForRequest(req);
-
     // Get script count by user
-    const byUserRows = await dbAll<{ user_id: string; count: number }>(
-      "SELECT user_id, COUNT(*) as count FROM scripts GROUP BY user_id"
+    const countsByUserRows = await dbAll<{ user_id: string; n: number }>(
+      "SELECT user_id, COUNT(*) AS n FROM scripts GROUP BY user_id ORDER BY n DESC"
     );
-    const by_user = byUserRows.map((row) => ({
+    const counts_by_user = countsByUserRows.map((row) => ({
       user_id: row.user_id,
-      count: typeof row.count === "number" ? row.count : 0,
+      n: typeof row.n === "number" ? row.n : 0,
     }));
 
     // Get recent scripts
@@ -648,9 +646,10 @@ app.get("/debug/admin_scripts_diag", requireSecret, async (req: Request, res: Re
     }));
 
     res.json({
+      ok: true,
       using_postgres: USING_POSTGRES,
-      current_user_id: userId,
-      by_user,
+      db_hint: USING_POSTGRES ? "postgres" : "sqlite",
+      counts_by_user,
       recent,
     });
   } catch (err) {
