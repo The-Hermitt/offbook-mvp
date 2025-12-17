@@ -4099,19 +4099,45 @@ JANE: Ready?"></textarea>
 
 
 
-          // Optional friendly hint when signed out (only if block exists)
+          if (isSignedInForScripts) {
 
-          if (savedStatus && !isSignedInForScripts) {
+            // When signed IN: clear hint, reload scripts from server
 
-            savedStatus.textContent = "Sign in to access your saved scripts.";
+            if (savedStatus) {
 
-          }
+              savedStatus.textContent = "";
 
+            }
 
+            // Fetch and refresh saved scripts
 
-          // NEW: when signed out, also clear any currently loaded script from the viewer
+            if (typeof fetchSavedScriptsFromServer === "function") {
 
-          if (!isSignedInForScripts) {
+              fetchSavedScriptsFromServer().catch(err => console.error("Failed to fetch saved scripts:", err));
+
+            }
+
+          } else {
+
+            // When signed OUT: show hint, clear local list, clear UI
+
+            if (savedStatus) {
+
+              savedStatus.textContent = "Sign in to access your saved scripts.";
+
+            }
+
+            if (typeof S !== "undefined") {
+
+              S.savedScripts = [];
+
+            }
+
+            if (typeof renderSavedScriptsStrip === "function") {
+
+              renderSavedScriptsStrip();
+
+            }
 
             if (typeof clearCurrentScriptView === "function") {
 
@@ -5880,6 +5906,18 @@ JANE: Ready?"></textarea>
         if (S) {
 
           S.activeTab = name;
+
+        }
+
+        // Refresh saved scripts when entering Import tab while signed in
+
+        if (name === "import" && S?.auth?.passkey?.loggedIn) {
+
+          if (typeof fetchSavedScriptsFromServer === "function") {
+
+            fetchSavedScriptsFromServer().catch(err => console.error("Failed to refresh scripts on import tab:", err));
+
+          }
 
         }
 
