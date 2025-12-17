@@ -117,6 +117,32 @@ export async function ensureSchema(): Promise<void> {
       )
     `);
 
+    // Ensure is_deleted column exists
+    if (USING_POSTGRES) {
+      await dbExec(`
+        ALTER TABLE scripts ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN NOT NULL DEFAULT FALSE
+      `);
+      await dbExec(`
+        UPDATE scripts SET is_deleted = FALSE WHERE is_deleted IS NULL
+      `);
+    } else {
+      // SQLite: ALTER TABLE ADD COLUMN doesn't support IF NOT EXISTS
+      try {
+        await dbExec(`
+          ALTER TABLE scripts ADD COLUMN is_deleted INTEGER NOT NULL DEFAULT 0
+        `);
+        console.log("[db] Added is_deleted column to scripts table");
+      } catch (err: any) {
+        // Ignore "duplicate column name" error
+        if (!err?.message?.includes("duplicate column")) {
+          throw err;
+        }
+      }
+      await dbExec(`
+        UPDATE scripts SET is_deleted = 0 WHERE is_deleted IS NULL
+      `);
+    }
+
     // User credits table
     await dbExec(`
       CREATE TABLE IF NOT EXISTS user_credits (
