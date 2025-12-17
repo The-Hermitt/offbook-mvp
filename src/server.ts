@@ -291,6 +291,39 @@ app.post(
           return res.json({ received: true });
         }
 
+        // Idempotency check: attempt to record the event
+        let isNewEvent = false;
+        try {
+          if (USING_POSTGRES) {
+            // Postgres: INSERT ... ON CONFLICT DO NOTHING
+            const result = await dbRun(
+              "INSERT INTO billing_events (event_id, event_type, user_id) VALUES ($1, $2, $3) ON CONFLICT (event_id) DO NOTHING",
+              [eventId, eventType, userId]
+            );
+            isNewEvent = (result.rowCount || 0) > 0;
+          } else {
+            // SQLite: INSERT OR IGNORE
+            const result = await dbRun(
+              "INSERT OR IGNORE INTO billing_events (event_id, event_type, user_id) VALUES (?, ?, ?)",
+              [eventId, eventType, userId]
+            );
+            isNewEvent = (result.changes || 0) > 0;
+          }
+        } catch (err) {
+          console.error("[billing] failed to record billing event", err);
+          // If we can't record the event, fail safe and don't credit (to avoid double crediting)
+          return res.status(500).json({ ok: false, error: "event_recording_failed" });
+        }
+
+        // If duplicate event, return success without crediting
+        if (!isNewEvent) {
+          console.log("[billing] webhook duplicate event detected", {
+            eventId,
+            userId,
+          });
+          return res.json({ received: true, duplicate: true });
+        }
+
         // For now we hard-code the plan → credits mapping.
         // "credits-100" → 100 credits; adjust later if we add more plans.
         const creditsToGrant = 100;

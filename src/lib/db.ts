@@ -185,6 +185,16 @@ export async function ensureSchema(): Promise<void> {
       )
     `);
 
+    // Billing events table (for Stripe webhook idempotency)
+    await dbExec(`
+      CREATE TABLE IF NOT EXISTS billing_events (
+        event_id TEXT PRIMARY KEY,
+        event_type TEXT NOT NULL,
+        user_id TEXT,
+        created_at ${USING_POSTGRES ? 'TIMESTAMP DEFAULT NOW()' : "TEXT NOT NULL DEFAULT (datetime('now'))"}
+      )
+    `);
+
     // SQLite-specific: Add missing columns if needed
     if (!USING_POSTGRES) {
       await ensureGalleryTakesColumns();
