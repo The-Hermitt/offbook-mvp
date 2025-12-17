@@ -6,8 +6,9 @@ import db, { dbGet, dbRun } from "../lib/db";
 const INCLUDED_RENDERS_PER_MONTH = Number(process.env.INCLUDED_RENDERS_PER_MONTH || 0);
 const DEV_STARTING_CREDITS = Number(process.env.DEV_STARTING_CREDITS || 0);
 
-// In-memory session store for single-tester dev
+// Session type stored in req.session (extends cookie-session)
 type Sess = {
+  sid?: string;
   regChallenge?: string;
   authChallenge?: string;
   userId?: string;
@@ -21,7 +22,6 @@ type Sess = {
   periodStart?: string;
   periodEnd?: string;
 };
-const sessions = new Map<string, Sess>();
 
 function b64url(bytes: Buffer) {
   return bytes.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
@@ -52,55 +52,35 @@ function parseCookies(req: express.Request) {
   return out;
 }
 
-function setCookie(res: express.Response, name: string, value: string, req: express.Request) {
-  const isHttps = (req.headers["x-forwarded-proto"] === "https") || (req.protocol === "https");
-  res.cookie(name, value, {
-    httpOnly: true,
-    sameSite: "lax",
-    secure: !!isHttps,
-  });
-}
-
-function getOrCreateSid(req: express.Request, res: express.Response) {
-  const cookies = parseCookies(req);
-  let sid = cookies["ob_sid"];
-  if (!sid) {
-    sid = crypto.randomUUID();
-    setCookie(res, "ob_sid", sid, req);
+function ensureSessionDefaults(req: express.Request): Sess {
+  const sess = req.session as Sess;
+  if (!sess.sid || typeof sess.sid !== "string" || sess.sid.length < 10) {
+    sess.sid = crypto.randomUUID();
   }
-  if (!sessions.has(sid)) {
+  if (!sess.userId) {
+    sess.userId = `anon:${sess.sid}`;
+  }
+  if (!sess.plan) {
     const now = new Date();
     const start = new Date(now.getFullYear(), now.getMonth(), 1);
     const end = new Date(now.getFullYear(), now.getMonth() + 1, 1);
-    sessions.set(sid, {
-      userId: `anon:${sid}`,
-      plan: "none",
-      rendersUsed: 0,
-      creditsAvailable: DEV_STARTING_CREDITS,
-      periodStart: start.toISOString(),
-      periodEnd: end.toISOString(),
-    });
+    sess.plan = "none";
+    sess.rendersUsed = 0;
+    sess.creditsAvailable = DEV_STARTING_CREDITS;
+    sess.periodStart = start.toISOString();
+    sess.periodEnd = end.toISOString();
   }
-  return sid;
+  return sess;
 }
 
-export function ensureSid(req: express.Request, res: express.Response) {
-  return getOrCreateSid(req, res);
+export function ensureSid(req: express.Request, _res: express.Response) {
+  const sess = ensureSessionDefaults(req);
+  return sess.sid!;
 }
 
 export async function noteRenderComplete(req: express.Request) {
-  const cookies = parseCookies(req);
-  const sid = cookies["ob_sid"];
-  if (!sid) {
-    console.log("[credits] noteRenderComplete: missing ob_sid cookie");
-    return;
-  }
-
-  const sess = sessions.get(sid);
-  if (!sess) {
-    console.log("[credits] noteRenderComplete: no session for sid", sid);
-    return;
-  }
+  const sess = ensureSessionDefaults(req);
+  const sid = sess.sid!;
 
   const beforeUsed =
     typeof sess.rendersUsed === "number" ? sess.rendersUsed : 0;
@@ -181,17 +161,15 @@ function deriveUserId(sess: Sess | undefined | null): string {
 
 // Lightweight helper for other routes to read the passkey session state
 export function getPasskeySession(req: express.Request) {
-  const cookies = parseCookies(req);
-  const sid = cookies["ob_sid"];
-  const sess = sid ? sessions.get(sid) : undefined;
-  const passkeyLoggedIn = Boolean(sess?.loggedIn);
+  const sess = ensureSessionDefaults(req);
+  const passkeyLoggedIn = Boolean(sess.loggedIn);
   const allowAnon = !ENFORCE_AUTH_GATE;
 
   let userId: string | null = null;
   if (passkeyLoggedIn) {
     userId = deriveUserId(sess);
-  } else if (allowAnon && sess) {
-    userId = sess.userId || `anon:${sid}`;
+  } else if (allowAnon) {
+    userId = sess.userId || `anon:${sess.sid}`;
   }
 
   return { passkeyLoggedIn, userId };
@@ -199,21 +177,21 @@ export function getPasskeySession(req: express.Request) {
 
 // --- GET /auth/session -------------------------------------------------------
 router.get("/session", async (req, res) => {
-  const sid = getOrCreateSid(req, res);
-  const sess = sessions.get(sid);
+  const sess = ensureSessionDefaults(req);
+  const sid = sess.sid!;
 
   const cookies = parseCookies(req);
   const invited = (process.env.INVITE_CODE || "").trim()
     ? cookies["ob_invite"] === "ok"
     : true;
 
-  const passkeyLoggedIn = Boolean(sess?.loggedIn);
+  const passkeyLoggedIn = Boolean(sess.loggedIn);
   const allowAnon = !ENFORCE_AUTH_GATE;
 
   let userId: string | null = null;
   if (passkeyLoggedIn) {
     userId = deriveUserId(sess);
-  } else if (allowAnon && sess) {
+  } else if (allowAnon) {
     userId = sess.userId || `anon:${sid}`;
   }
 
@@ -337,10 +315,8 @@ router.post("/enter-code", express.json(), (req, res) => {
 router.post("/signout", (req, res) => {
   res.clearCookie("ob_invite");
 
-  const cookies = parseCookies(req);
-  const sid = cookies["ob_sid"];
-  if (sid && sessions.has(sid)) {
-    const sess = sessions.get(sid)!;
+  const sess = req.session as Sess;
+  if (sess) {
     sess.loggedIn = false;
   }
 
@@ -352,8 +328,7 @@ router.post("/signout", (req, res) => {
 // Body optional: { userId?: string, userName?: string, displayName?: string }
 // For solo dev we default to a single tester identity.
 router.post("/passkey/register/start", (req, res) => {
-  const sid = getOrCreateSid(req, res);
-  const sess = sessions.get(sid)!;
+  const sess = ensureSessionDefaults(req);
 
   const rpId = getRpId(req);
   const challenge = genChallenge();
@@ -410,8 +385,7 @@ router.post("/passkey/register/start", (req, res) => {
 // POST /auth/passkey/register/finish
 // Body: { id, rawId, response: { clientDataJSON, attestationObject? }, type }
 router.post("/passkey/register/finish", express.json({ limit: "1mb" }), (req, res) => {
-  const sid = getOrCreateSid(req, res);
-  const sess = sessions.get(sid)!;
+  const sess = ensureSessionDefaults(req);
 
   if (!sess.regChallenge) {
     return res.status(400).json({ ok: false, error: "no_challenge" });
@@ -444,15 +418,6 @@ router.post("/passkey/register/finish", express.json({ limit: "1mb" }), (req, re
   sess.loggedIn = true;
   delete sess.regChallenge;
 
-  // Auto sign-in after successful registration
-  const sid2 = getOrCreateSid(req, res);
-  const postSess = sessions.get(sid2) || {};
-  postSess.loggedIn = true;
-  postSess.credentialId = postSess.credentialId || sess.credentialId;
-  const autoUserId = deriveUserId(postSess);
-  if (autoUserId) postSess.userId = autoUserId;
-  sessions.set(sid2, postSess);
-
   return res.json({ ok: true, userId: sess.userId, credentialId: sess.credentialId, autoSignedIn: true });
 });
 
@@ -460,8 +425,7 @@ router.post("/passkey/register/finish", express.json({ limit: "1mb" }), (req, re
 // POST /auth/passkey/login/start
 // Body optional: { userId?: string } -- kept for parity; allowCredentials omitted for dev.
 router.post("/passkey/login/start", (req, res) => {
-  const sid = getOrCreateSid(req, res);
-  const sess = sessions.get(sid)!;
+  const sess = ensureSessionDefaults(req);
 
   const rpId = getRpId(req);
   const challenge = genChallenge();
@@ -483,14 +447,10 @@ router.post("/passkey/login/start", (req, res) => {
 // POST /auth/passkey/login/finish
 // Body: { id, rawId, response: { clientDataJSON, authenticatorData?, signature?, userHandle? }, type }
 router.post("/passkey/login/finish", express.json({ limit: "1mb" }), (req, res) => {
-  const sid = getOrCreateSid(req, res);
-  const sess = sessions.get(sid)!;
+  const sess = ensureSessionDefaults(req);
 
   if (!sess.authChallenge) {
     return res.status(400).json({ ok: false, error: "no_challenge" });
-  }
-  if (!sess.credentialId) {
-    return res.status(400).json({ ok: false, error: "no_registered_credential" });
   }
 
   const { id, response, type } = (req.body || {}) as any;
@@ -510,13 +470,13 @@ router.post("/passkey/login/finish", express.json({ limit: "1mb" }), (req, res) 
   const challengeOk = timingSafeEq(String(clientData.challenge || ""), sess.authChallenge);
   const typeOk = (type === "public-key") && (clientData.type === "webauthn.get");
   const originOk = (clientData.origin === allowedOrigin);
-  const credOk = (String(id) === sess.credentialId);
 
   if (!challengeOk) return res.status(400).json({ ok: false, error: "challenge_mismatch" });
   if (!typeOk)      return res.status(400).json({ ok: false, error: "type_mismatch" });
   if (!originOk)    return res.status(400).json({ ok: false, error: "origin_mismatch", expected: allowedOrigin, got: clientData.origin });
-  if (!credOk)      return res.status(401).json({ ok: false, error: "unknown_credential" });
 
+  // Accept credentialId from the payload (survives restarts)
+  sess.credentialId = String(id);
   sess.loggedIn = true;
   delete sess.authChallenge;
 
@@ -533,8 +493,8 @@ router.post("/dev/grant-credits", express.json(), (req, res) => {
                      /(^|[?&])dev(=1|&|$)/.test(req.url);
   if (!devToolsOn) return res.status(403).json({ ok: false, error: "dev_tools_disabled" });
 
-  const sid = getOrCreateSid(req, res);
-  const sess = sessions.get(sid)!;
+  const sess = ensureSessionDefaults(req);
+  const sid = sess.sid!;
 
   const amount = Number(req.body?.amount ?? 200) || 200;
   const before = typeof sess.creditsAvailable === "number"
@@ -568,8 +528,8 @@ router.post("/dev/use-credit", express.json(), async (req, res) => {
       .json({ ok: false, error: "dev_tools_disabled" });
   }
 
-  const sid = getOrCreateSid(req, res);
-  const sess = sessions.get(sid)!;
+  const sess = ensureSessionDefaults(req);
+  const sid = sess.sid!;
 
   const beforeUsed =
     typeof sess.rendersUsed === "number" ? sess.rendersUsed : 0;
