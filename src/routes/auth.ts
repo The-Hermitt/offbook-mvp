@@ -244,25 +244,35 @@ router.get("/session", async (req, res) => {
   }
 
   // Staging auto-seed credits (if STAGING_SEED_CREDITS is set)
+  // Skip when Stripe is configured to prevent masking purchased credits
   if (userId) {
-    const seed = parseInt(process.env.STAGING_SEED_CREDITS || "", 10);
-    if (Number.isFinite(seed) && seed > 0) {
-      try {
-        const row = await dbGet<{ total_credits?: number; used_credits?: number }>("SELECT total_credits, used_credits FROM user_credits WHERE user_id = ?", [userId]);
-        if (!row) {
-          await dbRun("INSERT INTO user_credits (user_id, total_credits, used_credits) VALUES (?, ?, 0)", [userId, seed]);
-          console.log("[auth] staging seed: created credits row with %d credits for userId=%s", seed, userId);
-        } else {
-          const total = row.total_credits ?? 0;
-          const used = row.used_credits ?? 0;
-          const available = total - used;
-          if (available <= 0) {
-            await dbRun("UPDATE user_credits SET total_credits = ? WHERE user_id = ?", [used + seed, userId]);
-            console.log("[auth] staging seed: replenished credits to %d for userId=%s", seed, userId);
+    const stripeEnabled = Boolean((process.env.STRIPE_SECRET_KEY || "").trim());
+    if (!stripeEnabled) {
+      const seed = parseInt(process.env.STAGING_SEED_CREDITS || "", 10);
+      if (Number.isFinite(seed) && seed > 0) {
+        try {
+          const row = await dbGet<{ total_credits?: number; used_credits?: number }>("SELECT total_credits, used_credits FROM user_credits WHERE user_id = ?", [userId]);
+          if (!row) {
+            await dbRun("INSERT INTO user_credits (user_id, total_credits, used_credits) VALUES (?, ?, 0)", [userId, seed]);
+            console.log("[auth] staging seed: created credits row with %d credits for userId=%s", seed, userId);
+          } else {
+            const total = row.total_credits ?? 0;
+            const used = row.used_credits ?? 0;
+            const available = total - used;
+            if (available <= 0) {
+              await dbRun("UPDATE user_credits SET total_credits = ? WHERE user_id = ?", [used + seed, userId]);
+              console.log("[auth] staging seed: replenished credits to %d for userId=%s", seed, userId);
+            }
           }
+        } catch (err) {
+          console.error("[auth] staging seed failed for userId=%s", userId, err);
         }
-      } catch (err) {
-        console.error("[auth] staging seed failed for userId=%s", userId, err);
+      }
+    } else {
+      // Log once when staging seed is skipped due to Stripe
+      const seed = parseInt(process.env.STAGING_SEED_CREDITS || "", 10);
+      if (Number.isFinite(seed) && seed > 0) {
+        console.log("[auth] staging seed skipped (Stripe enabled)");
       }
     }
   }
