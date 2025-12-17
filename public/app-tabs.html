@@ -13106,7 +13106,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
           try {
 
-            const resp = await fetch("/api/gallery", { credentials: "include" });
+            const resp = await fetch("/api/gallery", withSecretHeaders({ credentials: "include" }));
 
             if (resp.ok) {
 
@@ -13334,7 +13334,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
 
 
-          const resp = await fetch("/api/gallery/upload", {
+          const resp = await fetch("/api/gallery/upload", withSecretHeaders({
 
             method: "POST",
 
@@ -13342,7 +13342,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
             credentials: "include"
 
-          });
+          }));
 
 
 
@@ -13380,6 +13380,8 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
             console.log("[offbook] gallery upload ok, server id:", data.id);
 
+            setStatusRec("Uploaded to server.");
+
           }
 
         } catch (err) {
@@ -13400,7 +13402,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
         try{
 
-          const resp = await fetch("/api/gallery/notes", {
+          const resp = await fetch("/api/gallery/notes", withSecretHeaders({
 
             method: "POST",
 
@@ -13410,7 +13412,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
             credentials: "include"
 
-          });
+          }));
 
           if(!resp.ok){
 
@@ -13434,7 +13436,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
         try{
 
-          const resp = await fetch("/api/gallery/delete", {
+          const resp = await fetch("/api/gallery/delete", withSecretHeaders({
 
             method: "POST",
 
@@ -13444,7 +13446,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
             credentials: "include"
 
-          });
+          }));
 
           if(!resp.ok){
 
