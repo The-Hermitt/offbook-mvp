@@ -12031,6 +12031,8 @@ const savedStrip = document.getElementById("savedScriptsStrip");
           if(!r.ok){ clearInterval(dotsTimer); setStatusRec("Render error "+r.status+": "+JSON.stringify(j)); R.btnRender.disabled=false; return; }
 
           R.render_id = j.render_id;
+          try { localStorage.setItem("ob_last_render_id", R.render_id || ""); } catch {}
+          window.__OB_LAST_RENDER_ID = R.render_id || "";
 
           const poll = async ()=>{
 
@@ -13004,7 +13006,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
           notes:"",
 
-          readerRenderId: typeof renderId === "string" ? renderId : (typeof R?.render_id === "string" ? R.render_id : ""),
+          readerRenderId: typeof renderId === "string" ? renderId : (typeof R?.render_id === "string" ? R.render_id : (window.__OB_LAST_RENDER_ID || (()=>{ try { return localStorage.getItem("ob_last_render_id") || ""; } catch { return ""; } })())),
 
           userKey
 
@@ -13324,23 +13326,12 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
 
 
-          const renderIdForServer =
+          const rid =
+            (take && typeof take.readerRenderId === "string" && take.readerRenderId) ||
+            (typeof window.__OB_LAST_RENDER_ID === "string" && window.__OB_LAST_RENDER_ID) ||
+            (()=>{ try { return localStorage.getItem("ob_last_render_id") || ""; } catch { return ""; } })();
 
-            (typeof take.readerRenderId === "string" && take.readerRenderId) ||
-
-            (typeof take.renderId === "string" && take.renderId) ||
-
-            (typeof take.render_id === "string" && take.render_id) ||
-
-            (typeof R?.render_id === "string" && R.render_id) ||
-
-            null;
-
-          if (renderIdForServer) {
-
-            form.append("render_id", renderIdForServer);
-
-          }
+          if (rid) form.append("render_id", rid);
 
 
 
