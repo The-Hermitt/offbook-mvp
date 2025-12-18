@@ -12682,7 +12682,14 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
         try{
 
-          savedTake = await saveTakeToDB({ blob, isVid, aspect, renderId: R.render_id });
+          const derivedRenderId =
+            (typeof R?.render_id === "string" && R.render_id) ||
+            extractRenderIdFromUrl(R?.download_url) ||
+            extractRenderIdFromUrl((R?.audio && R.audio.src) ? R.audio.src : "") ||
+            extractRenderIdFromUrl(window.__OB_LAST_READER_URL) ||
+            "";
+
+          savedTake = await saveTakeToDB({ blob, isVid, aspect, renderId: derivedRenderId });
 
           setStatusRec("Saved to Gallery.");
 
@@ -12880,6 +12887,27 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
         return "TK" + String(num).padStart(2, "0");
 
+      }
+
+
+
+      function extractRenderIdFromUrl(url){
+        try{
+          if(!url || typeof url !== "string") return "";
+          const u = new URL(url, window.location.origin);
+          const p = u.pathname || "";
+          // common: /api/assets/<render_id>
+          const m = p.match(/\/api\/assets\/([^\/]+)/);
+          if(m && m[1]) return m[1];
+          // fallback: allow query param if ever used
+          const q = u.searchParams.get("render_id") || u.searchParams.get("id");
+          return q ? String(q) : "";
+        }catch{
+          // very loose fallback for non-URL strings
+          const s = String(url || "");
+          const m = s.match(/\/api\/assets\/([^\/\?]+)/);
+          return (m && m[1]) ? m[1] : "";
+        }
       }
 
 
