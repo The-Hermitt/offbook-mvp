@@ -1207,10 +1207,6 @@ export function initHttpRoutes(app: Express) {
       if (!readerId) {
         return res.status(404).json({ error: "reader_missing" });
       }
-      const readerFile = path.join(ASSETS_DIR, `${readerId}.mp3`);
-      if (!fs.existsSync(readerFile)) {
-        return res.status(404).json({ error: "reader_audio_missing" });
-      }
 
       const wantsDownload =
         (typeof req.query?.download === "string" && req.query.download === "1") ||
@@ -1219,7 +1215,9 @@ export function initHttpRoutes(app: Express) {
       // R2 storage path
       if (filePath.startsWith("r2:")) {
         const takeKey = filePath.slice(3);
-        const mixedKey = `takes/${user.id}/${id}.room.mp4`;
+        const mixedKey = `takes/${user.id}/${id}.mixed.mp4`;
+
+        console.log("[gallery/mixed] R2 mode: takeKey=%s mixedKey=%s", takeKey, mixedKey);
 
         // Check if mixed version already exists in R2
         let mixedExists = false;
@@ -1232,7 +1230,10 @@ export function initHttpRoutes(app: Express) {
         }
 
         if (!mixedExists) {
+          console.log("[gallery/mixed] Mixed not cached, generating: id=%s", id);
+
           // Download take from R2 to temp file
+          console.log("[gallery/mixed] Downloading take from R2: key=%s", takeKey);
           const takeUrl = await r2GetSignedUrl({ key: takeKey, expiresSeconds: 600 });
           const takeResp = await fetch(takeUrl);
           if (!takeResp.ok) {
@@ -1241,9 +1242,36 @@ export function initHttpRoutes(app: Express) {
           const takeBuffer = Buffer.from(await takeResp.arrayBuffer());
           const tempTakePath = path.join(os.tmpdir(), `take-${id}-${Date.now()}.webm`);
           await fsPromises.writeFile(tempTakePath, takeBuffer);
+          console.log("[gallery/mixed] Downloaded take: size=%d path=%s", takeBuffer.length, tempTakePath);
+
+          // Get reader audio (local or R2)
+          let readerPath: string;
+          const localReaderFile = path.join(ASSETS_DIR, `${readerId}.mp3`);
+          if (fs.existsSync(localReaderFile)) {
+            console.log("[gallery/mixed] Using local reader: path=%s", localReaderFile);
+            readerPath = localReaderFile;
+          } else if (r2Enabled()) {
+            console.log("[gallery/mixed] Downloading reader from R2: key=renders/%s.mp3", readerId);
+            const readerKey = `renders/${readerId}.mp3`;
+            const readerUrl = await r2GetSignedUrl({ key: readerKey, expiresSeconds: 600 });
+            const readerResp = await fetch(readerUrl);
+            if (!readerResp.ok) {
+              await fsPromises.unlink(tempTakePath).catch(() => {});
+              return res.status(404).json({ error: "reader_audio_missing" });
+            }
+            const readerBuffer = Buffer.from(await readerResp.arrayBuffer());
+            const tempReaderPath = path.join(os.tmpdir(), `reader-${readerId}-${Date.now()}.mp3`);
+            await fsPromises.writeFile(tempReaderPath, readerBuffer);
+            console.log("[gallery/mixed] Downloaded reader: size=%d path=%s", readerBuffer.length, tempReaderPath);
+            readerPath = tempReaderPath;
+          } else {
+            await fsPromises.unlink(tempTakePath).catch(() => {});
+            return res.status(404).json({ error: "reader_audio_missing" });
+          }
 
           // Generate mixed mp4 to temp output
           const tempOutPath = path.join(os.tmpdir(), `mixed-${id}-${Date.now()}.mp4`);
+          console.log("[gallery/mixed] Starting ffmpeg: outPath=%s", tempOutPath);
 
           const filter =
             "[1:a]aecho=0.35:0.25:14|22:0.10|0.06,highpass=f=180,lowpass=f=6000,volume=0.85[room];" +
@@ -1253,7 +1281,7 @@ export function initHttpRoutes(app: Express) {
             "-i",
             tempTakePath,
             "-i",
-            readerFile,
+            readerPath,
             "-filter_complex",
             filter,
             "-map",
@@ -1284,15 +1312,19 @@ export function initHttpRoutes(app: Express) {
 
           // Upload mixed mp4 to R2
           const mixedBuffer = await fsPromises.readFile(tempOutPath);
+          console.log("[gallery/mixed] Uploading mixed to R2: key=%s size=%d", mixedKey, mixedBuffer.length);
           await r2PutObject({ key: mixedKey, body: mixedBuffer, contentType: "video/mp4" });
 
           // Clean up temp files
           await fsPromises.unlink(tempTakePath).catch(() => {});
           await fsPromises.unlink(tempOutPath).catch(() => {});
+          if (readerPath !== localReaderFile) {
+            await fsPromises.unlink(readerPath).catch(() => {});
+          }
         }
 
         // Redirect to signed URL for the mixed asset
-        const safeName = `${(row as any)?.name || id}_room.mp4`;
+        const safeName = `${(row as any)?.name || id}-ROOM.mp4`;
         let signedUrl: string;
         if (wantsDownload) {
           signedUrl = await r2GetSignedUrl({
@@ -1306,6 +1338,7 @@ export function initHttpRoutes(app: Express) {
             contentType: "video/mp4",
           });
         }
+        console.log("[gallery/mixed] Serving R2 mixed: key=%s download=%s", mixedKey, wantsDownload);
         return res.redirect(302, signedUrl);
       }
 
@@ -1313,6 +1346,13 @@ export function initHttpRoutes(app: Express) {
       if (!fs.existsSync(filePath)) {
         return res.status(404).json({ error: "file_missing" });
       }
+
+      const readerFile = path.join(ASSETS_DIR, `${readerId}.mp3`);
+      if (!fs.existsSync(readerFile)) {
+        return res.status(404).json({ error: "reader_audio_missing" });
+      }
+
+      console.log("[gallery/mixed] Local mode: takePath=%s", filePath);
 
       const takeStat = fs.statSync(filePath);
       const readerStat = fs.statSync(readerFile);
@@ -1324,6 +1364,7 @@ export function initHttpRoutes(app: Express) {
           Math.max(takeStat.mtimeMs, readerStat.mtimeMs);
 
       if (needsRebuild) {
+        console.log("[gallery/mixed] Rebuilding local mixed: id=%s", id);
         const filter =
           "[1:a]aecho=0.35:0.25:14|22:0.10|0.06,highpass=f=180,lowpass=f=6000,volume=0.85[room];" +
           "[0:a][room]amix=inputs=2:duration=first:dropout_transition=4[aout]";
@@ -1362,6 +1403,7 @@ export function initHttpRoutes(app: Express) {
         }
       }
 
+      console.log("[gallery/mixed] Serving local mixed: path=%s", outPath);
       res.type("video/mp4");
       return res.sendFile(outPath);
     } catch (err) {

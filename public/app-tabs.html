@@ -14207,9 +14207,68 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
 
           btnRoom?.addEventListener("click", async ()=>{
+            if (!btnRoom) return;
+            const prevLabel = btnRoom.textContent;
+            btnRoom.textContent = "Mixing…";
+            btnRoom.disabled = true;
 
-            showToastOnce("Room mix is coming back soon — use Download for now.");
+            try {
+              const cleanName = (s) => String(s||"")
+                .replace(/[^\w\s-]/g, "")
+                .trim()
+                .replace(/\s+/g, "-")
+                .slice(0, 60) || "offbook-take";
 
+              const id = take.serverId || take.id;
+              if (!id) throw new Error("No file available for this take.");
+
+              const url = `/api/gallery/${encodeURIComponent(id)}/mixed_file?download=1`;
+              const resp = await fetch(url, withSecretHeaders({
+                method: "GET",
+                credentials: "include",
+                cache: "no-store"
+              }));
+
+              if (!resp.ok) {
+                throw new Error(`Room export failed (${resp.status})`);
+              }
+
+              const blob = await resp.blob();
+              const mime = blob.type || "video/mp4";
+              const filenameBase = cleanName(take.label || take.name || "offbook-take");
+              const filename = `${filenameBase}-ROOM.mp4`;
+
+              try {
+                const file = new File([blob], filename, { type: mime });
+                const canShareFiles =
+                  !!navigator.share &&
+                  (!navigator.canShare || navigator.canShare({ files: [file] }));
+
+                if (canShareFiles) {
+                  await navigator.share({ files: [file], title: filename });
+                  return;
+                }
+              } catch (shareErr) {
+                console.warn("[offbook] share failed, falling back", shareErr);
+              }
+
+              const objUrl = URL.createObjectURL(blob);
+              const a = document.createElement("a");
+              a.href = objUrl;
+              a.download = filename;
+              a.rel = "noopener";
+              document.body.appendChild(a);
+              a.click();
+              a.remove();
+              setTimeout(()=>URL.revokeObjectURL(objUrl), 20000);
+
+            } catch (err) {
+              console.warn("[offbook] room export failed", err);
+              alert("Room export failed: " + (err?.message || String(err)));
+            } finally {
+              btnRoom.disabled = false;
+              btnRoom.textContent = prevLabel;
+            }
           });
 
 
