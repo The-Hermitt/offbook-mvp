@@ -12302,6 +12302,15 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
       async function startRecording(){
 
+        // Room export needs a server reader render id
+        const lastRid = (() => { try { return localStorage.getItem("ob_last_render_id") || ""; } catch { return ""; } })();
+        const ridNow = (typeof R?.render_id === "string" && R.render_id) || lastRid;
+
+        if (!ridNow) {
+          alert("Tap Render first (Record tab). Room export needs the reader track.");
+          return;
+        }
+
         await hardResumeOnGesture();
 
         try { await ensureReaderCtx(); } catch {}
@@ -13008,7 +13017,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
           notes:"",
 
-          renderId: (R.lastCompletedRenderId || R.render_id || null),
+          renderId: renderId || (R.lastCompletedRenderId || R.render_id || null),
 
           render_id: (typeof R !== "undefined" && R && R.render_id) ? String(R.render_id) : "",
 
