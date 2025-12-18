@@ -12302,12 +12302,24 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
       async function startRecording(){
 
-        // Room export needs a server reader render id
-        const lastRid = (() => { try { return localStorage.getItem("ob_last_render_id") || ""; } catch { return ""; } })();
-        const ridNow = (typeof R?.render_id === "string" && R.render_id) || lastRid;
+        // Room export needs a server reader render id.
+        // If it's missing, auto-run prepareReader() once so the take uploads with reader_render_id.
+        let lastRid = (() => { try { return localStorage.getItem("ob_last_render_id") || ""; } catch { return ""; } })();
+        let ridNow = (typeof R?.render_id === "string" && R.render_id) || lastRid;
 
         if (!ridNow) {
-          alert("Tap Render first (Record tab). Room export needs the reader track.");
+          try {
+            setStatusRec("Preparing reader track for Room…");
+            await prepareReader();
+          } catch (e) {
+            console.warn("[offbook] prepareReader failed", e);
+          }
+          lastRid = (() => { try { return localStorage.getItem("ob_last_render_id") || ""; } catch { return ""; } })();
+          ridNow = (typeof R?.render_id === "string" && R.render_id) || lastRid;
+        }
+
+        if (!ridNow) {
+          alert("Tap Render (Record tab) to prepare the reader track for Room export.");
           return;
         }
 
