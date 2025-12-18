@@ -5,6 +5,7 @@ import multer from "multer";
 import * as path from "path";
 import * as fs from "fs";
 import { promises as fsPromises } from "fs";
+import * as os from "os";
 import crypto from "crypto";
 import { spawn } from "child_process";
 import db, { GalleryStore, dbGet, dbAll, dbRun, USING_POSTGRES, galleryListByUser, galleryGetById, gallerySave, galleryDeleteById, galleryUpdateNotes } from "./lib/db";
@@ -1123,6 +1124,10 @@ export function initHttpRoutes(app: Express) {
               // Delete from R2
               const key = filePath.slice(3);
               await r2DeleteObject(key);
+
+              // Also delete the cached room mix
+              const mixedKey = `takes/${user.id}/${takeId}.room.mp4`;
+              await r2DeleteObject(mixedKey).catch(() => {});
             } else if (fs.existsSync(filePath)) {
               // Delete from local disk
               fs.unlinkSync(filePath);
@@ -1196,7 +1201,7 @@ export function initHttpRoutes(app: Express) {
 
       const filePath = (row as any).file_path as string;
       const readerId = (row as any).reader_render_id as string | undefined;
-      if (!filePath || !fs.existsSync(filePath)) {
+      if (!filePath) {
         return res.status(404).json({ error: "file_missing" });
       }
       if (!readerId) {
@@ -1205,6 +1210,108 @@ export function initHttpRoutes(app: Express) {
       const readerFile = path.join(ASSETS_DIR, `${readerId}.mp3`);
       if (!fs.existsSync(readerFile)) {
         return res.status(404).json({ error: "reader_audio_missing" });
+      }
+
+      const wantsDownload =
+        (typeof req.query?.download === "string" && req.query.download === "1") ||
+        (typeof req.query?.dl === "string" && req.query.dl === "1");
+
+      // R2 storage path
+      if (filePath.startsWith("r2:")) {
+        const takeKey = filePath.slice(3);
+        const mixedKey = `takes/${user.id}/${id}.room.mp4`;
+
+        // Check if mixed version already exists in R2
+        let mixedExists = false;
+        try {
+          const testUrl = await r2GetSignedUrl({ key: mixedKey, expiresSeconds: 60 });
+          const testResp = await fetch(testUrl, { method: "HEAD" });
+          mixedExists = testResp.ok;
+        } catch {
+          mixedExists = false;
+        }
+
+        if (!mixedExists) {
+          // Download take from R2 to temp file
+          const takeUrl = await r2GetSignedUrl({ key: takeKey, expiresSeconds: 600 });
+          const takeResp = await fetch(takeUrl);
+          if (!takeResp.ok) {
+            return res.status(404).json({ error: "take_download_failed" });
+          }
+          const takeBuffer = Buffer.from(await takeResp.arrayBuffer());
+          const tempTakePath = path.join(os.tmpdir(), `take-${id}-${Date.now()}.webm`);
+          await fsPromises.writeFile(tempTakePath, takeBuffer);
+
+          // Generate mixed mp4 to temp output
+          const tempOutPath = path.join(os.tmpdir(), `mixed-${id}-${Date.now()}.mp4`);
+
+          const filter =
+            "[1:a]aecho=0.35:0.25:14|22:0.10|0.06,highpass=f=180,lowpass=f=6000,volume=0.85[room];" +
+            "[0:a][room]amix=inputs=2:duration=first:dropout_transition=4[aout]";
+          const baseArgs = [
+            "-y",
+            "-i",
+            tempTakePath,
+            "-i",
+            readerFile,
+            "-filter_complex",
+            filter,
+            "-map",
+            "0:v",
+            "-map",
+            "[aout]",
+            "-c:a",
+            "aac",
+            "-movflags",
+            "+faststart",
+          ];
+
+          try {
+            await runFfmpeg([...baseArgs, "-c:v", "copy", tempOutPath]);
+          } catch (err) {
+            console.warn("[gallery] mixed copy failed, retrying with transcode", err);
+            await runFfmpeg([
+              ...baseArgs,
+              "-c:v",
+              "libx264",
+              "-preset",
+              "veryfast",
+              "-crf",
+              "22",
+              tempOutPath,
+            ]);
+          }
+
+          // Upload mixed mp4 to R2
+          const mixedBuffer = await fsPromises.readFile(tempOutPath);
+          await r2PutObject({ key: mixedKey, body: mixedBuffer, contentType: "video/mp4" });
+
+          // Clean up temp files
+          await fsPromises.unlink(tempTakePath).catch(() => {});
+          await fsPromises.unlink(tempOutPath).catch(() => {});
+        }
+
+        // Redirect to signed URL for the mixed asset
+        const safeName = `${(row as any)?.name || id}_room.mp4`;
+        let signedUrl: string;
+        if (wantsDownload) {
+          signedUrl = await r2GetSignedUrl({
+            key: mixedKey,
+            downloadName: safeName,
+            contentType: "video/mp4",
+          });
+        } else {
+          signedUrl = await r2GetSignedUrl({
+            key: mixedKey,
+            contentType: "video/mp4",
+          });
+        }
+        return res.redirect(302, signedUrl);
+      }
+
+      // Local disk storage path
+      if (!fs.existsSync(filePath)) {
+        return res.status(404).json({ error: "file_missing" });
       }
 
       const takeStat = fs.statSync(filePath);
@@ -1218,7 +1325,7 @@ export function initHttpRoutes(app: Express) {
 
       if (needsRebuild) {
         const filter =
-          "[1:a]aecho=0.6:0.5:30|45:0.25,highpass=f=160,lowpass=f=7200,volume=0.55[room];" +
+          "[1:a]aecho=0.35:0.25:14|22:0.10|0.06,highpass=f=180,lowpass=f=6000,volume=0.85[room];" +
           "[0:a][room]amix=inputs=2:duration=first:dropout_transition=4[aout]";
         const baseArgs = [
           "-y",
