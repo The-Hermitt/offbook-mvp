@@ -5,7 +5,6 @@ import multer from "multer";
 import * as path from "path";
 import * as fs from "fs";
 import { promises as fsPromises } from "fs";
-import * as os from "os";
 import crypto from "crypto";
 import { spawn } from "child_process";
 import db, { GalleryStore, dbGet, dbAll, dbRun, USING_POSTGRES, galleryListByUser, galleryGetById, gallerySave, galleryDeleteById, galleryUpdateNotes } from "./lib/db";
@@ -1215,7 +1214,7 @@ export function initHttpRoutes(app: Express) {
       // R2 storage path
       if (filePath.startsWith("r2:")) {
         const takeKey = filePath.slice(3);
-        const mixedKey = `takes/${user.id}/${id}.mixed.mp4`;
+        const mixedKey = `mixed/${user.id}/${id}.mp4`;
 
         console.log("[gallery/mixed] R2 mode: takeKey=%s mixedKey=%s", takeKey, mixedKey);
 
@@ -1240,7 +1239,7 @@ export function initHttpRoutes(app: Express) {
             return res.status(404).json({ error: "take_download_failed" });
           }
           const takeBuffer = Buffer.from(await takeResp.arrayBuffer());
-          const tempTakePath = path.join(os.tmpdir(), `take-${id}-${Date.now()}.webm`);
+          const tempTakePath = path.join(UPLOADS_TMP_DIR, `take-${id}-${Date.now()}.webm`);
           await fsPromises.writeFile(tempTakePath, takeBuffer);
           console.log("[gallery/mixed] Downloaded take: size=%d path=%s", takeBuffer.length, tempTakePath);
 
@@ -1260,7 +1259,7 @@ export function initHttpRoutes(app: Express) {
               return res.status(404).json({ error: "reader_audio_missing" });
             }
             const readerBuffer = Buffer.from(await readerResp.arrayBuffer());
-            const tempReaderPath = path.join(os.tmpdir(), `reader-${readerId}-${Date.now()}.mp3`);
+            const tempReaderPath = path.join(UPLOADS_TMP_DIR, `reader-${readerId}-${Date.now()}.mp3`);
             await fsPromises.writeFile(tempReaderPath, readerBuffer);
             console.log("[gallery/mixed] Downloaded reader: size=%d path=%s", readerBuffer.length, tempReaderPath);
             readerPath = tempReaderPath;
@@ -1270,7 +1269,7 @@ export function initHttpRoutes(app: Express) {
           }
 
           // Generate mixed mp4 to temp output
-          const tempOutPath = path.join(os.tmpdir(), `mixed-${id}-${Date.now()}.mp4`);
+          const tempOutPath = path.join(UPLOADS_TMP_DIR, `mixed-${id}-${Date.now()}.mp4`);
           console.log("[gallery/mixed] Starting ffmpeg: outPath=%s", tempOutPath);
 
           const filter =
