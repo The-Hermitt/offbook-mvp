@@ -4,6 +4,7 @@ import express from "express";
 import multer from "multer";
 import * as path from "path";
 import * as fs from "fs";
+import { promises as fsPromises } from "fs";
 import crypto from "crypto";
 import { spawn } from "child_process";
 import db, { GalleryStore, dbGet, dbAll, dbRun, USING_POSTGRES, galleryListByUser, galleryGetById, gallerySave, galleryDeleteById, galleryUpdateNotes } from "./lib/db";
@@ -12,6 +13,7 @@ import { isSttEnabled, transcribeChunk } from "./lib/stt";
 import { makeAuditMiddleware } from "./lib/audit";
 import { makeRateLimiters } from "./middleware/rateLimit";
 import { getPasskeySession, noteRenderComplete, ensureSid } from "./routes/auth";
+import { r2Enabled, r2PutObject, r2GetSignedUrl, r2DeleteObject } from "./lib/r2";
 
 // ---------- Types ----------
 type SceneLine = { speaker: string; text: string };
@@ -1009,19 +1011,35 @@ export function initHttpRoutes(app: Express) {
         const sizeNum = Number.isFinite(sizeNumRaw) ? sizeNumRaw : file.size;
         const mime = mime_type || file.mimetype || "video/webm";
 
-        const baseDir = path.join(
-          process.cwd(),
-          "uploads",
-          "gallery",
-          String(user.id)
-        );
-        fs.mkdirSync(baseDir, { recursive: true });
-
         const ext = path.extname(file.originalname || "") || ".webm";
-        const finalName = `${takeId}${ext}`;
-        const finalPath = path.join(baseDir, finalName);
+        let file_path: string;
 
-        fs.renameSync(file.path, finalPath);
+        if (r2Enabled()) {
+          // Upload to R2
+          const buffer = await fsPromises.readFile(file.path);
+          const key = `takes/${user.id}/${takeId}${ext}`;
+          await r2PutObject({ key, body: buffer, contentType: mime });
+
+          // Delete temp file
+          await fsPromises.unlink(file.path).catch(() => {});
+
+          file_path = `r2:${key}`;
+        } else {
+          // Local disk storage
+          const baseDir = path.join(
+            process.cwd(),
+            "uploads",
+            "gallery",
+            String(user.id)
+          );
+          fs.mkdirSync(baseDir, { recursive: true });
+
+          const finalName = `${takeId}${ext}`;
+          const finalPath = path.join(baseDir, finalName);
+          fs.renameSync(file.path, finalPath);
+
+          file_path = finalPath;
+        }
 
         const notesVal =
           typeof notes === "string"
@@ -1052,7 +1070,7 @@ export function initHttpRoutes(app: Express) {
           note: noteVal,
           notes: notesVal,
           reader_render_id: readerRenderId,
-          file_path: finalPath,
+          file_path: file_path,
         });
 
         console.log(
@@ -1061,7 +1079,7 @@ export function initHttpRoutes(app: Express) {
           String(takeId),
           sizeNum,
           mime,
-          finalPath
+          file_path
         );
 
         res.json({
@@ -1100,11 +1118,18 @@ export function initHttpRoutes(app: Express) {
 
         const filePath = (row as any).file_path as string;
         try {
-          if (filePath && fs.existsSync(filePath)) {
-            fs.unlinkSync(filePath);
+          if (filePath) {
+            if (filePath.startsWith("r2:")) {
+              // Delete from R2
+              const key = filePath.slice(3);
+              await r2DeleteObject(key);
+            } else if (fs.existsSync(filePath)) {
+              // Delete from local disk
+              fs.unlinkSync(filePath);
+            }
           }
         } catch (e) {
-          console.warn("[gallery] unlink failed for", takeId, e);
+          console.warn("[gallery] delete failed for", takeId, e);
         }
 
         await galleryDeleteById(takeId, String(user.id));
@@ -1252,9 +1277,11 @@ export function initHttpRoutes(app: Express) {
       }
 
       const filePath = (row as any).file_path as string;
-      if (!filePath || !fs.existsSync(filePath)) {
+      if (!filePath) {
         return res.status(404).json({ error: "file_missing" });
       }
+
+      console.log("[gallery] serve id=%s storage=%s", id, filePath?.startsWith("r2:") ? "r2" : "local");
 
       const wantsDownload =
         (typeof req.query?.download === "string" && req.query.download === "1") ||
@@ -1263,17 +1290,44 @@ export function initHttpRoutes(app: Express) {
       const rawName =
         (row as any)?.name ||
         (row as any)?.label ||
-        path.basename(filePath);
+        "take";
       const safeName =
         (rawName &&
           String(rawName)
             .replace(/[\\\/]/g, "_")
             .replace(/[^\w.-]+/g, "_")
             .slice(0, 80)) ||
-        path.basename(filePath);
+        "take.webm";
+
+      const mime = (row as any).mime_type as string | undefined;
+
+      // R2 storage
+      if (filePath.startsWith("r2:")) {
+        const key = filePath.slice(3);
+        let signedUrl: string;
+
+        if (wantsDownload) {
+          signedUrl = await r2GetSignedUrl({
+            key,
+            downloadName: safeName,
+            contentType: mime,
+          });
+        } else {
+          signedUrl = await r2GetSignedUrl({
+            key,
+            contentType: mime,
+          });
+        }
+
+        return res.redirect(302, signedUrl);
+      }
+
+      // Local disk storage
+      if (!fs.existsSync(filePath)) {
+        return res.status(404).json({ error: "file_missing" });
+      }
 
       // Force the correct MIME type for Safari, even if the extension is odd.
-      const mime = (row as any).mime_type as string | undefined;
       if (mime && typeof mime === "string") {
         res.type(mime);
       }
