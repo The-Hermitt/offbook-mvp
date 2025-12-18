@@ -13006,6 +13006,8 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
           notes:"",
 
+          render_id: (typeof R !== "undefined" && R && R.render_id) ? String(R.render_id) : "",
+
           readerRenderId: typeof renderId === "string" ? renderId : (typeof R?.render_id === "string" ? R.render_id : (window.__OB_LAST_RENDER_ID || (()=>{ try { return localStorage.getItem("ob_last_render_id") || ""; } catch { return ""; } })())),
 
           userKey
@@ -13326,13 +13328,15 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
 
 
-          // Attach reader render_id so /mixed_file can find the reader audio later
+          // Attach reader render id so Room (mixdown) can work in production
           const rid =
-            (take && typeof take.readerRenderId === "string" && take.readerRenderId.trim()) ? take.readerRenderId.trim() :
-            (typeof R !== "undefined" && R && typeof R.render_id === "string" && R.render_id.trim()) ? R.render_id.trim() :
-            "";
+            take.render_id ||
+            take.renderId ||
+            take.reader_render_id ||
+            take.readerRenderId ||
+            (typeof R !== "undefined" && R && R.render_id);
 
-          if (rid) form.append("render_id", rid);
+          if (rid) form.append("render_id", String(rid));
 
 
 
