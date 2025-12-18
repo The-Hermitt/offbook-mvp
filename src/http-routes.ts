@@ -1180,6 +1180,7 @@ export function initHttpRoutes(app: Express) {
   api.get("/gallery/:id/mixed_file", requireUser, async (req: Request, res: Response) => {
     try {
       if (!mixdownEnabled) {
+        console.warn("[gallery/mixed] 404 mixdown_disabled");
         return res.status(404).send("Not Found");
       }
 
@@ -1195,15 +1196,18 @@ export function initHttpRoutes(app: Express) {
 
       const row = await galleryGetById(id, String(user.id));
       if (!row) {
+        console.warn("[gallery/mixed] 404 not_found id=%s user=%s", id, user.id);
         return res.status(404).json({ error: "not_found" });
       }
 
       const filePath = (row as any).file_path as string;
       const readerId = (row as any).reader_render_id as string | undefined;
       if (!filePath) {
+        console.warn("[gallery/mixed] 404 file_missing id=%s user=%s", id, user.id);
         return res.status(404).json({ error: "file_missing" });
       }
       if (!readerId) {
+        console.warn("[gallery/mixed] 404 reader_missing id=%s user=%s", id, user.id);
         return res.status(404).json({ error: "reader_missing" });
       }
 
@@ -1236,6 +1240,7 @@ export function initHttpRoutes(app: Express) {
           const takeUrl = await r2GetSignedUrl({ key: takeKey, expiresSeconds: 600 });
           const takeResp = await fetch(takeUrl);
           if (!takeResp.ok) {
+            console.warn("[gallery/mixed] 404 take_download_failed id=%s user=%s takeKey=%s", id, user.id, takeKey);
             return res.status(404).json({ error: "take_download_failed" });
           }
           const takeBuffer = Buffer.from(await takeResp.arrayBuffer());
@@ -1255,6 +1260,7 @@ export function initHttpRoutes(app: Express) {
             const readerUrl = await r2GetSignedUrl({ key: readerKey, expiresSeconds: 600 });
             const readerResp = await fetch(readerUrl);
             if (!readerResp.ok) {
+              console.warn("[gallery/mixed] 404 reader_audio_missing (R2) id=%s user=%s readerId=%s", id, user.id, readerId);
               await fsPromises.unlink(tempTakePath).catch(() => {});
               return res.status(404).json({ error: "reader_audio_missing" });
             }
@@ -1264,6 +1270,7 @@ export function initHttpRoutes(app: Express) {
             console.log("[gallery/mixed] Downloaded reader: size=%d path=%s", readerBuffer.length, tempReaderPath);
             readerPath = tempReaderPath;
           } else {
+            console.warn("[gallery/mixed] 404 reader_audio_missing (local) id=%s user=%s readerId=%s", id, user.id, readerId);
             await fsPromises.unlink(tempTakePath).catch(() => {});
             return res.status(404).json({ error: "reader_audio_missing" });
           }
@@ -1343,11 +1350,13 @@ export function initHttpRoutes(app: Express) {
 
       // Local disk storage path
       if (!fs.existsSync(filePath)) {
+        console.warn("[gallery/mixed] 404 file_missing (local disk) id=%s user=%s filePath=%s", id, user.id, filePath);
         return res.status(404).json({ error: "file_missing" });
       }
 
       const readerFile = path.join(ASSETS_DIR, `${readerId}.mp3`);
       if (!fs.existsSync(readerFile)) {
+        console.warn("[gallery/mixed] 404 reader_audio_missing (local disk) id=%s user=%s readerId=%s", id, user.id, readerId);
         return res.status(404).json({ error: "reader_audio_missing" });
       }
 

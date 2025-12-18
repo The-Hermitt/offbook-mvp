@@ -14230,7 +14230,12 @@ const savedStrip = document.getElementById("savedScriptsStrip");
               }));
 
               if (!resp.ok) {
-                throw new Error(`Room export failed (${resp.status})`);
+                let body = "";
+                try { body = await resp.text(); } catch {}
+                body = (body || "").trim();
+                // keep it short for alert
+                const detail = body ? `: ${body.slice(0, 220)}` : "";
+                throw new Error(`Room export failed (${resp.status})${detail}`);
               }
 
               const blob = await resp.blob();
