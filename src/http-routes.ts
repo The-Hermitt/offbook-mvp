@@ -412,9 +412,37 @@ export function initHttpRoutes(app: Express) {
   });
 
   // GET /debug/whoami - shows current user session info
-  debug.get("/whoami", (req: Request, res: Response) => {
-    const { passkeyLoggedIn, userId } = getPasskeySession(req as any);
-    res.json({ passkeyLoggedIn, userId });
+  debug.get("/whoami", requireUser, (req: Request, res: Response) => {
+    const user = (req as any).user || res.locals.user;
+    res.json({ ok: true, userId: String(user.id || "") });
+  });
+
+  debug.get("/gallery_row", requireUser, async (req: Request, res: Response) => {
+    const user = (req as any).user || res.locals.user;
+    const id = String(req.query.id || "");
+    if (!id) {
+      return res.status(400).json({ error: "id_required" });
+    }
+
+    try {
+      const row = await galleryGetById(id, String(user.id));
+      if (!row) {
+        return res.json({ found: false, id, userId: String(user.id) });
+      }
+
+      const rowData = row as any;
+      return res.json({
+        found: true,
+        id,
+        userId: String(user.id),
+        file_path: rowData.file_path,
+        reader_render_id: rowData.reader_render_id,
+        name: rowData.name,
+      });
+    } catch (err) {
+      console.error("[debug/gallery_row] error", err);
+      return res.status(500).json({ error: "internal_error" });
+    }
   });
 
   // GET /debug/my_scripts - list scripts owned by current user
@@ -1064,6 +1092,15 @@ export function initHttpRoutes(app: Express) {
           typeof render_id === "string" && render_id.trim()
             ? render_id.trim()
             : null;
+
+        console.log(
+          "[gallery] upload incoming: user=%s id=%s size=%s mime=%s reader_render_id=%s",
+          user.id,
+          takeId,
+          sizeNum,
+          mime,
+          readerRenderId ? "yes" : "no"
+        );
 
         await gallerySave({
           id: String(takeId),
