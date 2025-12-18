@@ -12020,9 +12020,18 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
         }
 
+        const scene = (S.scenes && S.scenes[S.currentSceneIndex || 0]) || S.scenes?.[0];
+        const scene_id = scene?.id || scene?.scene_id || S.scene_id || "";
+        const role = (S.role || "").trim().toUpperCase();
+
+        if (!S.script_id || !scene_id || !role) {
+          alert("Missing script/scene/role. Go to Assign and pick your role/scene first.");
+          return;
+        }
+
         try{
 
-          const r = await fetch("/debug/render", withSecretHeaders({ method:"POST", headers:{...JSON_HDRS}, body:JSON.stringify({ script_id:S.script_id, my_role:(S.role||"").toUpperCase(), pace_ms:0 }) }));
+          const r = await fetch("/debug/render", withSecretHeaders({ method:"POST", headers:{...JSON_HDRS}, body:JSON.stringify({ script_id:S.script_id, scene_id, role, my_role:role, pace:"normal", pace_ms:0 }) }));
 
           if(handleUnauthorized(r)){ clearInterval(dotsTimer); setStatusRec("Locked."); R.btnRender.disabled=false; return; }
 
