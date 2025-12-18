@@ -906,6 +906,18 @@ export function initHttpRoutes(app: Express) {
     const renderId = crypto.randomUUID();
     renders.set(renderId, { status: "working", accounted: false });
     const file = writeSilentMp3(renderId);
+
+    // Upload reader MP3 to R2 immediately so Room mixdown can find it later
+    if (r2Enabled()) {
+      try {
+        const buffer = fs.readFileSync(file);
+        await r2PutObject({ key: `renders/${renderId}.mp3`, body: buffer, contentType: "audio/mpeg" });
+        console.log("[render] uploaded reader mp3 to R2: renders/%s.mp3 bytes=%d", renderId, buffer.length);
+      } catch (err) {
+        console.warn("[render] failed to upload reader mp3 to R2 rid=%s", renderId, err);
+      }
+    }
+
     const job = { status: "complete" as const, file, accounted: false };
     try {
       console.log(
