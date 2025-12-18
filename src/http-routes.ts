@@ -1126,7 +1126,7 @@ export function initHttpRoutes(app: Express) {
               await r2DeleteObject(key);
 
               // Also delete the cached room mix
-              const mixedKey = `takes/${user.id}/${takeId}.room.mp4`;
+              const mixedKey = `takes/${user.id}/${takeId}.mixed.mp4`;
               await r2DeleteObject(mixedKey).catch(() => {});
             } else if (fs.existsSync(filePath)) {
               // Delete from local disk
