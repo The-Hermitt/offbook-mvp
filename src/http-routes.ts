@@ -726,6 +726,13 @@ export function initHttpRoutes(app: Express) {
       const id = crypto.randomUUID();
       const dest = path.join(ASSETS_DIR, `${id}.mp3`);
       fs.copyFileSync(outPath, dest);
+
+      if (r2Enabled()) {
+        const buffer = fs.readFileSync(dest);
+        await r2PutObject({ key: `renders/${id}.mp3`, body: buffer, contentType: "audio/mpeg" });
+        console.log("[tts_line] uploaded to R2: renders/%s.mp3", id);
+      }
+
       const base = baseUrlFrom(req);
       return res.json({ ok: true, url: `${base}/api/assets/${id}` });
     } catch (err: any) {
@@ -1500,11 +1507,48 @@ export function initHttpRoutes(app: Express) {
     }
   });
 
-  api.get("/assets/:render_id", (req: Request, res: Response) => {
-    const file = path.join(ASSETS_DIR, `${String(req.params.render_id)}.mp3`);
-    if (!fs.existsSync(file)) return res.status(404).send("Not Found");
-    res.setHeader("Content-Type", "audio/mpeg");
-    fs.createReadStream(file).pipe(res);
+  api.get("/assets/:render_id", async (req: Request, res: Response) => {
+    const id = String(req.params.render_id);
+    const localPath = path.join(ASSETS_DIR, `${id}.mp3`);
+    const r2Key = `renders/${id}.mp3`;
+
+    if (fs.existsSync(localPath)) {
+      res.setHeader("Content-Type", "audio/mpeg");
+      res.setHeader("Accept-Ranges", "bytes");
+
+      if (r2Enabled()) {
+        // Check if already in R2
+        let r2Exists = false;
+        try {
+          const signedUrl = await r2GetSignedUrl({ key: r2Key, expiresSeconds: 60 });
+          const headResp = await fetch(signedUrl, { method: "HEAD" });
+          r2Exists = headResp.ok;
+        } catch {}
+
+        if (!r2Exists) {
+          // Upload to R2 for future use
+          const buffer = fs.readFileSync(localPath);
+          await r2PutObject({ key: r2Key, body: buffer, contentType: "audio/mpeg" });
+          console.log("[assets] uploaded reader to R2: id=%s key=%s", id, r2Key);
+        }
+      }
+
+      return fs.createReadStream(localPath).pipe(res);
+    }
+
+    // No local file
+    if (r2Enabled()) {
+      try {
+        const signedUrl = await r2GetSignedUrl({ key: r2Key, expiresSeconds: 900 });
+        const headResp = await fetch(signedUrl, { method: "HEAD" });
+        if (headResp.ok) {
+          res.setHeader("Content-Type", "audio/mpeg");
+          return res.redirect(302, signedUrl);
+        }
+      } catch {}
+    }
+
+    return res.status(404).send("Not Found");
   });
 
   // Mount routers on the main app
