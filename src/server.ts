@@ -14,6 +14,7 @@ import { addUserCredits, getAvailableCredits } from "./lib/credits";
 import { isSttEnabled, transcribeChunk } from "./lib/stt";
 import { makeAuditMiddleware } from "./lib/audit";
 import { makeRateLimiters } from "./middleware/rateLimit";
+import { r2Enabled, r2PutObject } from "./lib/r2";
 
 const app = express();
 const PORT = Number(process.env.PORT || 3010);
@@ -1470,6 +1471,26 @@ function mountFallbackDebugRoutes() {
 
         const mp3 = concatMp3(chunks.length ? chunks : [await openaiTts(" ", "alloy", "tts-1")]);
         mem.assets.set(rid, mp3);
+
+        // Persist reader MP3 to disk (helps /api/assets and local fallback)
+        try {
+          const diskPath = path.join(ASSETS_DIR, `${rid}.mp3`);
+          await fs.promises.writeFile(diskPath, mp3);
+          console.log("[render] wrote reader mp3 to disk: %s bytes=%d", diskPath, mp3.length);
+        } catch (err) {
+          console.warn("[render] failed to write reader mp3 to disk rid=%s", rid, err);
+        }
+
+        // Persist reader MP3 to R2 so Room mixdown can fetch renders/<rid>.mp3 on Render
+        if (r2Enabled()) {
+          try {
+            const key = `renders/${rid}.mp3`;
+            await r2PutObject({ key, body: mp3, contentType: "audio/mpeg" });
+            console.log("[render] uploaded reader mp3 to R2: key=%s bytes=%d", key, mp3.length);
+          } catch (err) {
+            console.warn("[render] failed to upload reader mp3 to R2 rid=%s", rid, err);
+          }
+        }
 
         job.status = "complete";
         job.url = `/api/assets/${rid}`;
