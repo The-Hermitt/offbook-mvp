@@ -12052,6 +12052,8 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
               R.audio.load();
 
+              R.lastCompletedRenderId = R.render_id;
+
               clearInterval(dotsTimer);
 
               setStatusRec("Reader ready.");
@@ -13006,6 +13008,8 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
           notes:"",
 
+          renderId: (R.lastCompletedRenderId || R.render_id || null),
+
           render_id: (typeof R !== "undefined" && R && R.render_id) ? String(R.render_id) : "",
 
           readerRenderId: typeof renderId === "string" ? renderId : (typeof R?.render_id === "string" ? R.render_id : (window.__OB_LAST_RENDER_ID || (()=>{ try { return localStorage.getItem("ob_last_render_id") || ""; } catch { return ""; } })())),
@@ -13328,13 +13332,11 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
 
 
-          // Attach reader render id so Room (mixdown) can work in production
+          // attach reader render id so Room export can mix
           const rid =
-            take.render_id ||
-            take.renderId ||
-            take.reader_render_id ||
-            take.readerRenderId ||
-            (typeof R !== "undefined" && R && R.render_id);
+            (take && (take.renderId || take.readerRenderId)) ||
+            (typeof R !== "undefined" && (R.lastCompletedRenderId || R.render_id)) ||
+            "";
 
           if (rid) form.append("render_id", String(rid));
 
