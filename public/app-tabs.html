@@ -13290,15 +13290,23 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
       async function uploadTakeToServer(take) {
 
-        try {
+        // Guard against double uploads
+        if (take._uploadPromise) return await take._uploadPromise;
 
-          const userKey = getSignedInUserKey();
+        const uploadPromise = (async () => {
+          try {
 
-          if (!userKey) return; // not signed in, skip
+            const userKey = getSignedInUserKey();
+
+            if (!userKey) return; // not signed in, skip
 
 
 
-          if (!take || !take.blob) return;
+            if (!take || !take.blob) return;
+
+            // Mark as uploading
+            take.uploading = true;
+            await GalleryDB.put(take);
 
 
 
@@ -13447,6 +13455,9 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
             setStatusRec("Uploaded: " + String(data.id).slice(0,8));
 
+            // Persist serverId
+            await GalleryDB.put(take);
+
           }
 
         } catch (err) {
@@ -13455,7 +13466,15 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
           alert("Gallery upload error: " + (err?.message || String(err)).slice(0,200));
 
+        } finally {
+          // Clear uploading flag
+          take.uploading = false;
+          await GalleryDB.put(take);
         }
+      })();
+
+      take._uploadPromise = uploadPromise;
+      return uploadPromise;
 
       }
 
@@ -13681,6 +13700,12 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
           const noteSafe = escapeHtml(t.notes ?? t.note ?? "");
 
+          const isUploaded = !!t.serverId;
+          const isUploading = t.uploading;
+          const roomBtnLabel = isUploading ? "Uploading…" : "Room";
+          const roomBtnDisabled = isUploading ? "disabled" : "";
+          const uploadMeta = (!isUploaded && !isUploading) ? " • uploading" : "";
+
           return `
 
             <div class="take-card" data-id="${escapeHtml(t.id)}">
@@ -13693,7 +13718,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
                   <div style="font-weight:700">${shortName}</div>
 
-                  <div class="take-meta">${meta}</div>
+                  <div class="take-meta">${meta}${uploadMeta}</div>
 
                 </div>
 
@@ -13703,7 +13728,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
                   <button type="button" class="btn sm" data-act="dl">Download</button>
 
-                  <button type="button" class="btn sm secondary" data-act="room">Room</button>
+                  <button type="button" class="btn sm secondary" data-act="room" ${roomBtnDisabled}>${roomBtnLabel}</button>
 
                   <button type="button" class="btn sm secondary" data-act="del">Delete</button>
 
@@ -14278,6 +14303,17 @@ const savedStrip = document.getElementById("savedScriptsStrip");
             btnRoom.disabled = true;
 
             try {
+              // Ensure upload completes before Room export
+              if (!take.serverId) {
+                btnRoom.textContent = "Uploading…";
+                await uploadTakeToServer(take);
+                await loadTakes();
+                if (!take.serverId) {
+                  throw new Error("This take is still uploading. Wait a moment and try again.");
+                }
+                btnRoom.textContent = "Mixing…";
+              }
+
               const cleanName = (s) => String(s||"")
                 .replace(/[^\w\s-]/g, "")
                 .trim()
