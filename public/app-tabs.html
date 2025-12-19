@@ -11721,30 +11721,6 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
 
 
-      function restoreReaderDirectMonitor(){
-
-        if(R.readerCtx && R.readerGain){
-
-          try{ R.readerGain.disconnect(); }catch{}
-
-          try{ R.readerGain.__obProbeConnected = false; }catch{}
-
-          try{ tapReaderNode(R.readerGain); R.readerGain.connect(R.readerCtx.destination); R.readerDirectConnected = true; }
-
-          catch{}
-
-        }
-
-        R.readerBridge = null;
-
-        R.readerBridgeSource = null;
-
-        R.readerRecordGain = null;
-
-      }
-
-
-
       function setRailStates(){
 
         R.btnCamera.setAttribute("aria-pressed", R.cameraOn ? "true":"false");
