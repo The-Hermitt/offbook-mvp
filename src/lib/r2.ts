@@ -41,18 +41,25 @@ function getClient(): S3Client {
 // Upload object to R2
 export async function r2PutObject(opts: {
   key: string;
-  body: Buffer | Uint8Array;
+  body: Buffer | Uint8Array | import("stream").Readable;
   contentType: string;
+  contentLength?: number;
 }): Promise<void> {
   const bucket = process.env.R2_BUCKET;
   if (!bucket) throw new Error("R2_BUCKET not set");
 
-  const command = new PutObjectCommand({
+  const commandInput: any = {
     Bucket: bucket,
     Key: opts.key,
     Body: opts.body,
     ContentType: opts.contentType,
-  });
+  };
+
+  if (opts.contentLength !== undefined) {
+    commandInput.ContentLength = opts.contentLength;
+  }
+
+  const command = new PutObjectCommand(commandInput);
 
   await getClient().send(command);
 }

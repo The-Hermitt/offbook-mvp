@@ -13437,7 +13437,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
             console.log("[offbook] gallery upload ok, server id:", data.id);
 
-            setStatusRec("Uploaded to server.");
+            setStatusRec("Uploaded: " + String(data.id).slice(0,8));
 
           }
 
@@ -13445,7 +13445,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
           console.warn("uploadTakeToServer error", err);
 
-          alert("Gallery upload error. Please try again and mention this to Rodrigo.");
+          alert("Gallery upload error: " + (err?.message || String(err)).slice(0,200));
 
         }
 

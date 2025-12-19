@@ -1063,9 +1063,9 @@ export function initHttpRoutes(app: Express) {
 
         if (r2Enabled()) {
           // Upload to R2
-          const buffer = await fsPromises.readFile(file.path);
+          const stream = fs.createReadStream(file.path);
           const key = `takes/${user.id}/${takeId}${ext}`;
-          await r2PutObject({ key, body: buffer, contentType: mime });
+          await r2PutObject({ key, body: stream, contentType: mime, contentLength: file.size });
 
           // Delete temp file
           await fsPromises.unlink(file.path).catch(() => {});
