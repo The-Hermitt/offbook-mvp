@@ -14,7 +14,7 @@ import { makeAuditMiddleware } from "./lib/audit";
 import { makeRateLimiters } from "./middleware/rateLimit";
 import { getPasskeySession, noteRenderComplete, ensureSid } from "./routes/auth";
 import { r2Enabled, r2PutObject, r2GetSignedUrl, r2DeleteObject } from "./lib/r2";
-import ffmpegStatic from "ffmpeg-static";
+import ffmpegPath from "ffmpeg-static";
 
 // ---------- Types ----------
 type SceneLine = { speaker: string; text: string };
@@ -391,9 +391,9 @@ export function initHttpRoutes(app: Express) {
 
   function runFfmpeg(args: string[]): Promise<void> {
     return new Promise((resolve, reject) => {
-      const ffmpegPath = process.env.FFMPEG_PATH || ffmpegStatic || "ffmpeg";
-      console.log("[ffmpeg] using binary: %s", ffmpegPath);
-      const proc = spawn(ffmpegPath, args);
+      const bin = (ffmpegPath as unknown as string) || "ffmpeg";
+      console.log("[ffmpeg] using binary: %s", bin);
+      const proc = spawn(bin, args);
       let stderr = "";
       proc.stderr?.on("data", (d) => (stderr += d.toString()));
       proc.on("error", (err) => reject(err));
@@ -527,6 +527,33 @@ export function initHttpRoutes(app: Express) {
     }
     const curatedVoices = ["alloy", "echo", "fable", "onyx", "nova", "shimmer"];
     res.json({ ok: true, voices: curatedVoices });
+  });
+
+  // GET /debug/ffmpeg - check if ffmpeg is available
+  debug.get("/ffmpeg", audit("/debug/ffmpeg"), async (req: Request, res: Response) => {
+    try {
+      const bin = (ffmpegPath as unknown as string) || "ffmpeg";
+      const proc = spawn(bin, ["-version"]);
+
+      let stdout = "";
+      let stderr = "";
+
+      proc.stdout?.on("data", (d) => (stdout += d.toString()));
+      proc.stderr?.on("data", (d) => (stderr += d.toString()));
+
+      await new Promise<void>((resolve, reject) => {
+        proc.on("error", (err) => reject(err));
+        proc.on("close", (code) => {
+          if (code === 0) resolve();
+          else reject(new Error(`ffmpeg -version exited with code ${code}`));
+        });
+      });
+
+      const version = stdout.split("\n")[0] || stderr.split("\n")[0] || "unknown";
+      res.json({ ok: true, bin, version });
+    } catch (err: any) {
+      res.json({ ok: false, error: err?.message || String(err) });
+    }
   });
 
   // POST /debug/upload_script_text
@@ -1293,6 +1320,9 @@ export function initHttpRoutes(app: Express) {
 
         if (!mixedExists) {
           console.log("[gallery/mixed] Mixed not cached, generating: id=%s", id);
+
+          // Ensure temp dir exists
+          await fsPromises.mkdir(UPLOADS_TMP_DIR, { recursive: true });
 
           // Download take from R2 to temp file
           console.log("[gallery/mixed] Downloading take from R2: key=%s", takeKey);
