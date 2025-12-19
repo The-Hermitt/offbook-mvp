@@ -53,6 +53,7 @@ const renders = new Map<string, {
   err?: string;
   accounted?: boolean;
 }>();
+const clientLogs: any[] = [];
 
 type ScriptRow = {
   id: string;
@@ -581,6 +582,40 @@ export function initHttpRoutes(app: Express) {
       console.error("[debug/r2_head] error for key=%s:", key, err);
       return res.status(500).json({ ok: false, error: "head_failed" });
     }
+  });
+
+  // POST /debug/client_log - client error beacon
+  debug.post("/client_log", audit("/debug/client_log"), express.json(), (req: Request, res: Response) => {
+    const body = req.body || {};
+    const level = body.level || "info";
+    const message = body.message || "";
+    const where = body.where || "";
+
+    const entry = {
+      ts: Date.now(),
+      ip: req.ip,
+      ua: req.get("user-agent"),
+      body,
+    };
+
+    clientLogs.push(entry);
+
+    // Keep only last 50 entries
+    if (clientLogs.length > 50) {
+      clientLogs.splice(0, clientLogs.length - 50);
+    }
+
+    console.log("[client_log] %s %s %s", level, where, message);
+    return res.json({ ok: true });
+  });
+
+  // GET /debug/client_logs - view client logs
+  debug.get("/client_logs", audit("/debug/client_logs"), (req: Request, res: Response) => {
+    return res.json({
+      ok: true,
+      count: clientLogs.length,
+      logs: clientLogs,
+    });
   });
 
   // GET /debug/ffmpeg - check if ffmpeg is available

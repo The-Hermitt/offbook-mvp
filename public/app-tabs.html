@@ -3195,11 +3195,16 @@ JANE: Ready?"></textarea>
 
     import { expectedMinMsFor, AFTER_ADV_COOLDOWN_MS, isSpeaking, endsWithDashy, readyForAdvance, progressRatio } from "./js/speech-timing.js";
 
-    // Maximum time we’ll sit on a single “my” line once we’ve heard speech
+    const __obSecret = new URLSearchParams(location.search).get("secret") || "";
+    function __postClientLog(payload) { fetch(`/debug/client_log?secret=${encodeURIComponent(__obSecret)}`, {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(payload)}).catch(()=>{}); }
+    window.addEventListener("error", (e)=> __postClientLog({level:"error", where:"window.error", message:String(e.message||e.error||"error"), stack: e.error && e.error.stack ? String(e.error.stack) : ""}));
+    window.addEventListener("unhandledrejection", (e)=> __postClientLog({level:"error", where:"unhandledrejection", message:String(e.reason||"rejection"), stack: e.reason && e.reason.stack ? String(e.reason.stack) : ""}));
+
+    // Maximum time we'll sit on a single "my" line once we've heard speech
 
     // before we force an advance. Shared by Rehearse and Record so they
 
-    // behave the same. Tuned to stop “ghosting” without feeling rushed.
+    // behave the same. Tuned to stop "ghosting" without feeling rushed.
 
     const MAX_MY_LINE_MS = 9000; // ~9s safety net
 
@@ -14958,11 +14963,31 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
       if (document.readyState === "loading") {
 
-        document.addEventListener("DOMContentLoaded", boot, { once:true });
+        document.addEventListener("DOMContentLoaded", () => {
+          try { boot(); }
+          catch (err) {
+            __postClientLog({ level:"fatal", where:"boot()", message:String(err), stack: err && err.stack ? String(err.stack) : "" });
+            const div = document.createElement("div");
+            div.style.position="fixed"; div.style.left="12px"; div.style.right="12px"; div.style.bottom="84px";
+            div.style.zIndex="99999"; div.style.padding="12px"; div.style.borderRadius="12px";
+            div.style.background="rgba(160,0,0,0.92)"; div.style.color="white"; div.style.fontSize="14px";
+            div.textContent = "OffBook UI crashed during boot(). Open /debug/client_logs?secret=1976 to see details.";
+            document.body.appendChild(div);
+          }
+        }, { once:true });
 
       } else {
 
-        boot();
+        try { boot(); }
+        catch (err) {
+          __postClientLog({ level:"fatal", where:"boot()", message:String(err), stack: err && err.stack ? String(err.stack) : "" });
+          const div = document.createElement("div");
+          div.style.position="fixed"; div.style.left="12px"; div.style.right="12px"; div.style.bottom="84px";
+          div.style.zIndex="99999"; div.style.padding="12px"; div.style.borderRadius="12px";
+          div.style.background="rgba(160,0,0,0.92)"; div.style.color="white"; div.style.fontSize="14px";
+          div.textContent = "OffBook UI crashed during boot(). Open /debug/client_logs?secret=1976 to see details.";
+          document.body.appendChild(div);
+        }
 
       }
 
