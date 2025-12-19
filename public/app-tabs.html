@@ -13449,15 +13449,14 @@ const savedStrip = document.getElementById("savedScriptsStrip");
           if (data && data.id) {
 
             take.serverId = data.id;
-            take.id = data.id; // ensure Room/download uses the DB id
+
+            // Keep local take.id stable (IndexedDB key). Persist serverId for Room/download.
+            try { await GalleryDB.put(take); } catch (e) {
+              console.warn("[offbook] failed to persist serverId", e);
+            }
 
             console.log("[offbook] gallery upload ok, server id:", data.id);
-
             setStatusRec("Uploaded: " + String(data.id).slice(0,8));
-
-            // Persist serverId
-            await GalleryDB.put(take);
-
           }
 
         } catch (err) {
@@ -14243,19 +14242,17 @@ const savedStrip = document.getElementById("savedScriptsStrip");
                 blob = take.blob;
               } else {
                 if (!id) throw new Error("No file available for this take.");
-          
-                const url = `/api/gallery/${encodeURIComponent(id)}/file`;
-                const resp = await fetch(url, withSecretHeaders({
-                  method: "GET",
-                  credentials: "include",
-                  cache: "no-store"
-                }));
-          
-                if (!resp.ok) {
-                  throw new Error(`Download failed (${resp.status})`);
-                }
-          
-                blob = await resp.blob();
+
+                // Avoid iOS Safari blob/clone issues: open the server download directly.
+                const url = `/api/gallery/${encodeURIComponent(id)}/file?download=1`;
+                const a = document.createElement("a");
+                a.href = url;
+                a.rel = "noopener";
+                a.target = "_blank";
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                return;
               }
           
               const mime = blob.type || "video/mp4";
@@ -14303,70 +14300,24 @@ const savedStrip = document.getElementById("savedScriptsStrip");
             btnRoom.disabled = true;
 
             try {
-              // Ensure upload completes before Room export
-              if (!take.serverId) {
-                btnRoom.textContent = "Uploading…";
-                await uploadTakeToServer(take);
-                await loadTakes();
-                if (!take.serverId) {
-                  throw new Error("This take is still uploading. Wait a moment and try again.");
-                }
-                btnRoom.textContent = "Mixing…";
+              const id = take.serverId || take.id;
+
+              // If this take still only exists locally (fresh recording), block Room until upload completes.
+              if (take.blob instanceof Blob && !take.serverId) {
+                throw new Error("Room is available after upload finishes. Wait for "Uploaded: …" then try again.");
               }
 
-              const cleanName = (s) => String(s||"")
-                .replace(/[^\w\s-]/g, "")
-                .trim()
-                .replace(/\s+/g, "-")
-                .slice(0, 60) || "offbook-take";
-
-              const id = take.serverId || take.id;
               if (!id) throw new Error("No file available for this take.");
 
               const url = `/api/gallery/${encodeURIComponent(id)}/mixed_file?download=1`;
-              const resp = await fetch(url, withSecretHeaders({
-                method: "GET",
-                credentials: "include",
-                cache: "no-store"
-              }));
-
-              if (!resp.ok) {
-                let body = "";
-                try { body = await resp.text(); } catch {}
-                body = (body || "").trim();
-                // keep it short for alert
-                const detail = body ? `: ${body.slice(0, 220)}` : "";
-                throw new Error(`Room export failed (${resp.status})${detail}`);
-              }
-
-              const blob = await resp.blob();
-              const mime = blob.type || "video/mp4";
-              const filenameBase = cleanName(take.label || take.name || "offbook-take");
-              const filename = `${filenameBase}-ROOM.mp4`;
-
-              try {
-                const file = new File([blob], filename, { type: mime });
-                const canShareFiles =
-                  !!navigator.share &&
-                  (!navigator.canShare || navigator.canShare({ files: [file] }));
-
-                if (canShareFiles) {
-                  await navigator.share({ files: [file], title: filename });
-                  return;
-                }
-              } catch (shareErr) {
-                console.warn("[offbook] share failed, falling back", shareErr);
-              }
-
-              const objUrl = URL.createObjectURL(blob);
               const a = document.createElement("a");
-              a.href = objUrl;
-              a.download = filename;
+              a.href = url;
               a.rel = "noopener";
+              a.target = "_blank";
               document.body.appendChild(a);
               a.click();
               a.remove();
-              setTimeout(()=>URL.revokeObjectURL(objUrl), 20000);
+              return;
 
             } catch (err) {
               console.warn("[offbook] room export failed", err);
