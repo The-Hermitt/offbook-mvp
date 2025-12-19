@@ -391,9 +391,7 @@ export function initHttpRoutes(app: Express) {
 
   function runFfmpeg(args: string[]): Promise<void> {
     return new Promise((resolve, reject) => {
-      const bin = (ffmpegPath as unknown as string) || "ffmpeg";
-      console.log("[ffmpeg] using binary: %s", bin);
-      const proc = spawn(bin, args);
+      const proc = spawn(process.env.FFMPEG_BIN || ffmpegPath || "ffmpeg", args);
       let stderr = "";
       proc.stderr?.on("data", (d) => (stderr += d.toString()));
       proc.on("error", (err) => reject(err));
