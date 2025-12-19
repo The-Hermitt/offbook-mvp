@@ -409,12 +409,22 @@ export function initHttpRoutes(app: Express) {
     return new Promise((resolve, reject) => {
       const proc = spawn(FFMPEG_BIN, args);
       let stderr = "";
-      proc.stderr?.on("data", (d) => (stderr += d.toString()));
+      proc.stderr?.on("data", (d) => {
+        stderr += d.toString();
+        // Keep last 65536 chars max
+        if (stderr.length > 65536) {
+          stderr = stderr.slice(-65536);
+        }
+      });
       proc.on("error", (err) => reject(err));
       proc.on("close", (code) => {
         if (code === 0) return resolve();
-        const stderrTail = stderr.slice(-2000);
-        const err = new Error(`ffmpeg exited with code ${code}. bin=${FFMPEG_BIN} args=${JSON.stringify(args)} stderr=${stderrTail}`);
+        const stderrTail = stderr.slice(-16384);
+        const err: any = new Error(`ffmpeg exited with code ${code}. bin=${FFMPEG_BIN} args=${JSON.stringify(args)} stderr=${stderrTail}`);
+        err.ffmpeg_code = code;
+        err.ffmpeg_bin = FFMPEG_BIN;
+        err.ffmpeg_args = args;
+        err.ffmpeg_stderr_tail = stderrTail;
         return reject(err);
       });
     });
@@ -1524,13 +1534,37 @@ export function initHttpRoutes(app: Express) {
       console.log("[gallery/mixed] Serving local mixed: path=%s", outPath);
       res.type("video/mp4");
       return res.sendFile(outPath);
-    } catch (err) {
+    } catch (err: any) {
       console.error("Error in GET /api/gallery/:id/mixed_file", err);
-      return res.status(500).json({
+
+      const response: any = {
         error: "internal_error",
         stage,
         message: (err as Error)?.message?.slice(0, 1500) || String(err).slice(0, 1500),
-      });
+      };
+
+      // Include ffmpeg debug info if available
+      if (err.ffmpeg_code !== undefined) {
+        const argsToInclude = err.ffmpeg_args?.slice(0, 200) || [];
+        const stderrTail = (err.ffmpeg_stderr_tail || "").slice(0, 16384);
+
+        response.ffmpeg = {
+          code: err.ffmpeg_code,
+          bin: err.ffmpeg_bin,
+          args: argsToInclude,
+          stderr_tail: stderrTail,
+        };
+
+        console.warn("[gallery/mixed] ffmpeg_failed", {
+          stage,
+          code: err.ffmpeg_code,
+          bin: err.ffmpeg_bin,
+          args_len: err.ffmpeg_args?.length || 0,
+          stderr_tail_len: stderrTail.length,
+        });
+      }
+
+      return res.status(500).json(response);
     }
   });
 
