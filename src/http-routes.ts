@@ -7,6 +7,8 @@ import * as fs from "fs";
 import { promises as fsPromises } from "fs";
 import crypto from "crypto";
 import { spawn } from "child_process";
+import os from "os";
+import { createRequire } from "module";
 import db, { GalleryStore, dbGet, dbAll, dbRun, USING_POSTGRES, galleryListByUser, galleryGetById, gallerySave, galleryDeleteById, galleryUpdateNotes } from "./lib/db";
 import { generateReaderMp3, ttsProvider } from "./lib/tts";
 import { isSttEnabled, transcribeChunk } from "./lib/stt";
@@ -389,15 +391,30 @@ export function initHttpRoutes(app: Express) {
     process.env.MIXDOWN_ENABLED !== "0" &&
     process.env.MIXDOWN_ENABLED.toLowerCase() !== "false";
 
+  // Resolve ffmpeg binary path
+  let FFMPEG_BIN = "ffmpeg";
+  try {
+    if (process.env.FFMPEG_PATH) {
+      FFMPEG_BIN = process.env.FFMPEG_PATH;
+    } else {
+      const require = createRequire(import.meta.url);
+      const ffmpegStatic = require("ffmpeg-static");
+      if (ffmpegStatic) FFMPEG_BIN = ffmpegStatic;
+    }
+  } catch {
+    // Fall back to "ffmpeg"
+  }
+
   function runFfmpeg(args: string[]): Promise<void> {
     return new Promise((resolve, reject) => {
-      const proc = spawn(process.env.FFMPEG_BIN || ffmpegPath || "ffmpeg", args);
+      const proc = spawn(FFMPEG_BIN, args);
       let stderr = "";
       proc.stderr?.on("data", (d) => (stderr += d.toString()));
       proc.on("error", (err) => reject(err));
       proc.on("close", (code) => {
         if (code === 0) return resolve();
-        const err = new Error(`ffmpeg exited with code ${code}: ${stderr}`);
+        const stderrTail = stderr.slice(-2000);
+        const err = new Error(`ffmpeg exited with code ${code}. bin=${FFMPEG_BIN} args=${JSON.stringify(args)} stderr=${stderrTail}`);
         return reject(err);
       });
     });
@@ -530,8 +547,7 @@ export function initHttpRoutes(app: Express) {
   // GET /debug/ffmpeg - check if ffmpeg is available
   debug.get("/ffmpeg", audit("/debug/ffmpeg"), async (req: Request, res: Response) => {
     try {
-      const bin = (ffmpegPath as unknown as string) || "ffmpeg";
-      const proc = spawn(bin, ["-version"]);
+      const proc = spawn(FFMPEG_BIN, ["-version"]);
 
       let stdout = "";
       let stderr = "";
@@ -548,7 +564,7 @@ export function initHttpRoutes(app: Express) {
       });
 
       const version = stdout.split("\n")[0] || stderr.split("\n")[0] || "unknown";
-      res.json({ ok: true, bin, version });
+      res.json({ ok: true, bin: FFMPEG_BIN, version });
     } catch (err: any) {
       res.json({ ok: false, error: err?.message || String(err) });
     }
@@ -1262,6 +1278,7 @@ export function initHttpRoutes(app: Express) {
   );
 
   api.get("/gallery/:id/mixed_file", requireUser, async (req: Request, res: Response) => {
+    let stage = "start";
     try {
       if (!mixdownEnabled) {
         console.warn("[gallery/mixed] 404 mixdown_disabled");
@@ -1319,10 +1336,12 @@ export function initHttpRoutes(app: Express) {
         if (!mixedExists) {
           console.log("[gallery/mixed] Mixed not cached, generating: id=%s", id);
 
-          // Ensure temp dir exists
-          await fsPromises.mkdir(UPLOADS_TMP_DIR, { recursive: true });
+          // Ensure temp dir exists (use OS temp for Render-safety)
+          const tmpBase = path.join(os.tmpdir(), "offbook");
+          await fsPromises.mkdir(tmpBase, { recursive: true });
 
           // Download take from R2 to temp file
+          stage = "download_take";
           console.log("[gallery/mixed] Downloading take from R2: key=%s", takeKey);
           const takeUrl = await r2GetSignedUrl({ key: takeKey, expiresSeconds: 600 });
           const takeResp = await fetch(takeUrl);
@@ -1331,11 +1350,12 @@ export function initHttpRoutes(app: Express) {
             return res.status(404).json({ error: "take_download_failed" });
           }
           const takeBuffer = Buffer.from(await takeResp.arrayBuffer());
-          const tempTakePath = path.join(UPLOADS_TMP_DIR, `take-${id}-${Date.now()}.webm`);
+          const tempTakePath = path.join(tmpBase, `take-${id}-${Date.now()}.webm`);
           await fsPromises.writeFile(tempTakePath, takeBuffer);
           console.log("[gallery/mixed] Downloaded take: size=%d path=%s", takeBuffer.length, tempTakePath);
 
           // Get reader audio (local or R2)
+          stage = "download_reader";
           let readerPath: string;
           const localReaderFile = path.join(ASSETS_DIR, `${readerId}.mp3`);
           if (fs.existsSync(localReaderFile)) {
@@ -1352,7 +1372,7 @@ export function initHttpRoutes(app: Express) {
               return res.status(404).json({ error: "reader_audio_missing" });
             }
             const readerBuffer = Buffer.from(await readerResp.arrayBuffer());
-            const tempReaderPath = path.join(UPLOADS_TMP_DIR, `reader-${readerId}-${Date.now()}.mp3`);
+            const tempReaderPath = path.join(tmpBase, `reader-${readerId}-${Date.now()}.mp3`);
             await fsPromises.writeFile(tempReaderPath, readerBuffer);
             console.log("[gallery/mixed] Downloaded reader: size=%d path=%s", readerBuffer.length, tempReaderPath);
             readerPath = tempReaderPath;
@@ -1363,7 +1383,7 @@ export function initHttpRoutes(app: Express) {
           }
 
           // Generate mixed mp4 to temp output
-          const tempOutPath = path.join(UPLOADS_TMP_DIR, `mixed-${id}-${Date.now()}.mp4`);
+          const tempOutPath = path.join(tmpBase, `mixed-${id}-${Date.now()}.mp4`);
           console.log("[gallery/mixed] Starting ffmpeg: outPath=%s", tempOutPath);
 
           const filter =
@@ -1388,9 +1408,11 @@ export function initHttpRoutes(app: Express) {
           ];
 
           try {
+            stage = "ffmpeg_copy";
             await runFfmpeg([...baseArgs, "-c:v", "copy", tempOutPath]);
           } catch (err) {
             console.warn("[gallery] mixed copy failed, retrying with transcode", err);
+            stage = "ffmpeg_transcode";
             await runFfmpeg([
               ...baseArgs,
               "-c:v",
@@ -1404,6 +1426,7 @@ export function initHttpRoutes(app: Express) {
           }
 
           // Upload mixed mp4 to R2
+          stage = "upload_mixed";
           const mixedBuffer = await fsPromises.readFile(tempOutPath);
           console.log("[gallery/mixed] Uploading mixed to R2: key=%s size=%d", mixedKey, mixedBuffer.length);
           await r2PutObject({ key: mixedKey, body: mixedBuffer, contentType: "video/mp4" });
@@ -1503,11 +1526,11 @@ export function initHttpRoutes(app: Express) {
       return res.sendFile(outPath);
     } catch (err) {
       console.error("Error in GET /api/gallery/:id/mixed_file", err);
-      const response: any = { error: "internal_error" };
-      if (req.query.secret && typeof req.query.secret === "string" && req.query.secret.trim()) {
-        response.detail = String(err?.message || err).slice(0, 1500);
-      }
-      return res.status(500).json(response);
+      return res.status(500).json({
+        error: "internal_error",
+        stage,
+        message: (err as Error)?.message?.slice(0, 1500) || String(err).slice(0, 1500),
+      });
     }
   });
 
