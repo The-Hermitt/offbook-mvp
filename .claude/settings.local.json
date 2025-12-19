@@ -9,7 +9,11 @@
       "Bash(curl:*)",
       "Bash(npm install)",
       "Bash(timeout 15 npm run dev)",
-      "Bash(npm install:*)"
+      "Bash(npm install:*)",
+      "Bash(node --check:*)",
+      "Bash(cat:*)",
+      "Bash(python3:*)",
+      "Bash(python:*)"
     ]
   }
 }
