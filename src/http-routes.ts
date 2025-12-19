@@ -15,7 +15,7 @@ import { isSttEnabled, transcribeChunk } from "./lib/stt";
 import { makeAuditMiddleware } from "./lib/audit";
 import { makeRateLimiters } from "./middleware/rateLimit";
 import { getPasskeySession, noteRenderComplete, ensureSid } from "./routes/auth";
-import { r2Enabled, r2PutObject, r2GetSignedUrl, r2DeleteObject } from "./lib/r2";
+import { r2Enabled, r2PutObject, r2GetSignedUrl, r2DeleteObject, r2HeadObject } from "./lib/r2";
 import ffmpegPath from "ffmpeg-static";
 
 // ---------- Types ----------
@@ -552,6 +552,35 @@ export function initHttpRoutes(app: Express) {
     }
     const curatedVoices = ["alloy", "echo", "fable", "onyx", "nova", "shimmer"];
     res.json({ ok: true, voices: curatedVoices });
+  });
+
+  // GET /debug/r2_head - check if an R2 object exists
+  debug.get("/r2_head", audit("/debug/r2_head"), async (req: Request, res: Response) => {
+    const key = String(req.query.key || "").trim();
+
+    // Validate key parameter
+    if (!key) {
+      return res.status(400).json({ ok: false, error: "missing_key" });
+    }
+
+    // Reject dangerous keys
+    if (key.includes("..") || key.startsWith("/")) {
+      return res.status(400).json({ ok: false, error: "bad_key" });
+    }
+
+    // Check if R2 is enabled
+    if (!r2Enabled()) {
+      return res.status(200).json({ ok: false, error: "r2_disabled" });
+    }
+
+    try {
+      const headResult = await r2HeadObject(key);
+      console.log("[debug/r2_head] key=%s exists=%s", key, headResult.exists);
+      return res.json({ ok: true, key, ...headResult });
+    } catch (err) {
+      console.error("[debug/r2_head] error for key=%s:", key, err);
+      return res.status(500).json({ ok: false, error: "head_failed" });
+    }
   });
 
   // GET /debug/ffmpeg - check if ffmpeg is available

@@ -1,5 +1,5 @@
 // src/lib/r2.ts
-import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
+import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand, HeadObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
 // Check if all required R2 env vars are present
@@ -106,4 +106,39 @@ export async function r2DeleteObject(key: string): Promise<void> {
   });
 
   await getClient().send(command);
+}
+
+// Check if an object exists in R2 and return metadata
+export async function r2HeadObject(key: string): Promise<{
+  exists: boolean;
+  size?: number;
+  etag?: string;
+  contentType?: string;
+  lastModified?: Date;
+}> {
+  const bucket = process.env.R2_BUCKET;
+  if (!bucket) throw new Error("R2_BUCKET not set");
+
+  const command = new HeadObjectCommand({
+    Bucket: bucket,
+    Key: key,
+  });
+
+  try {
+    const response = await getClient().send(command);
+    return {
+      exists: true,
+      size: response.ContentLength,
+      etag: response.ETag,
+      contentType: response.ContentType,
+      lastModified: response.LastModified,
+    };
+  } catch (err: any) {
+    // S3-style NotFound error
+    if (err?.name === "NotFound" || err?.$metadata?.httpStatusCode === 404) {
+      return { exists: false };
+    }
+    // Rethrow other errors
+    throw err;
+  }
 }
