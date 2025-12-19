@@ -14339,7 +14339,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
               // If this take still only exists locally (fresh recording), block Room until upload completes.
               if (take.blob instanceof Blob && !take.serverId) {
-                throw new Error("Room is available after upload finishes. Wait for "Uploaded: …" then try again.");
+                throw new Error("Room is available after upload finishes. Wait for 'Uploaded: ...' then try again.");
               }
 
               if (!id) throw new Error("No file available for this take.");
