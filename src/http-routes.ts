@@ -14,6 +14,7 @@ import { makeAuditMiddleware } from "./lib/audit";
 import { makeRateLimiters } from "./middleware/rateLimit";
 import { getPasskeySession, noteRenderComplete, ensureSid } from "./routes/auth";
 import { r2Enabled, r2PutObject, r2GetSignedUrl, r2DeleteObject } from "./lib/r2";
+import ffmpegStatic from "ffmpeg-static";
 
 // ---------- Types ----------
 type SceneLine = { speaker: string; text: string };
@@ -390,7 +391,9 @@ export function initHttpRoutes(app: Express) {
 
   function runFfmpeg(args: string[]): Promise<void> {
     return new Promise((resolve, reject) => {
-      const proc = spawn("ffmpeg", args);
+      const ffmpegPath = process.env.FFMPEG_PATH || ffmpegStatic || "ffmpeg";
+      console.log("[ffmpeg] using binary: %s", ffmpegPath);
+      const proc = spawn(ffmpegPath, args);
       let stderr = "";
       proc.stderr?.on("data", (d) => (stderr += d.toString()));
       proc.on("error", (err) => reject(err));
@@ -1472,7 +1475,11 @@ export function initHttpRoutes(app: Express) {
       return res.sendFile(outPath);
     } catch (err) {
       console.error("Error in GET /api/gallery/:id/mixed_file", err);
-      return res.status(500).json({ error: "internal_error" });
+      const response: any = { error: "internal_error" };
+      if (req.query.secret && typeof req.query.secret === "string" && req.query.secret.trim()) {
+        response.detail = String(err?.message || err).slice(0, 1500);
+      }
+      return res.status(500).json(response);
     }
   });
 
