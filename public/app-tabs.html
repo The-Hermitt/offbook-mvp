@@ -12716,8 +12716,16 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
         try{
 
+          const lastRid = (() => {
+            try { return localStorage.getItem("ob_last_render_id") || ""; }
+            catch { return ""; }
+          })();
+
           const derivedRenderId =
             (typeof R?.render_id === "string" && R.render_id) ||
+            (typeof R?.lastCompletedRenderId === "string" && R.lastCompletedRenderId) ||
+            (typeof window.__OB_LAST_RENDER_ID === "string" && window.__OB_LAST_RENDER_ID) ||
+            lastRid ||
             extractRenderIdFromUrl(R?.download_url) ||
             extractRenderIdFromUrl((R?.audio && R.audio.src) ? R.audio.src : "") ||
             extractRenderIdFromUrl(window.__OB_LAST_READER_URL) ||
