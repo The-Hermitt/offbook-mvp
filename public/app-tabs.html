@@ -13319,7 +13319,42 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
       }
 
+      // iOS detection for upload fallback
+      const IS_IOS = /iP(hone|ad|od)/.test(navigator.userAgent);
 
+      // XHR-based upload helper for iOS (avoids DataCloneError with Blobs in fetch)
+      function uploadViaXHR(formData) {
+        return new Promise((resolve, reject) => {
+          const xhr = new XMLHttpRequest();
+          xhr.open("POST", "/api/gallery/upload");
+
+          // Apply headers from withSecretHeaders
+          const headers = withSecretHeaders({ headers: {} }).headers || {};
+          for (const [key, value] of Object.entries(headers)) {
+            if (value) xhr.setRequestHeader(key, String(value));
+          }
+
+          xhr.withCredentials = true;
+
+          xhr.onload = () => {
+            if (xhr.status >= 200 && xhr.status < 300) {
+              try {
+                const data = JSON.parse(xhr.responseText);
+                resolve(data);
+              } catch (e) {
+                reject(new Error("Failed to parse server response"));
+              }
+            } else {
+              const errText = (xhr.responseText || "").slice(0, 200);
+              reject(new Error(`Upload failed (${xhr.status}).\n\n${errText}`));
+            }
+          };
+
+          xhr.onerror = () => reject(new Error("Network error during upload"));
+
+          xhr.send(formData);
+        });
+      }
 
       async function uploadTakeToServer(take) {
 
@@ -13437,11 +13472,13 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
           );
 
-          let resp;
           let data;
 
-          try {
-            resp = await fetch("/api/gallery/upload", withSecretHeaders({
+          // Use XHR directly on iOS to avoid DataCloneError with Blobs in fetch
+          if (IS_IOS) {
+            data = await uploadViaXHR(form);
+          } else {
+            const resp = await fetch("/api/gallery/upload", withSecretHeaders({
 
               method: "POST",
 
@@ -13455,72 +13492,17 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
               const txt = await resp.text().catch(() => "");
 
-              console.warn("uploadTakeToServer failed", resp.status, txt);
-
-              // Surface this on device since there is no console
-
-              alert(
-
-                "Gallery upload failed (" +
-
-                  resp.status +
-
-                  ").\n\n" +
-
-                  (txt || "").slice(0, 200)
-
-              );
-
-              return;
+              throw new Error(`Upload failed (${resp.status}).\n\n${txt.slice(0, 200)}`);
 
             }
 
             data = await resp.json().catch(() => null);
-
-          } catch (fetchErr) {
-            // iOS-safe fallback: retry with XMLHttpRequest on DataCloneError
-            const isCloneError = fetchErr?.name === "DataCloneError" ||
-                                 (fetchErr?.message && String(fetchErr.message).toLowerCase().includes("clone"));
-
-            if (!isCloneError) throw fetchErr;
-
-            console.warn("[offbook] fetch failed with clone error, retrying with XMLHttpRequest", fetchErr);
-
-            data = await new Promise((resolve, reject) => {
-              const xhr = new XMLHttpRequest();
-              xhr.open("POST", "/api/gallery/upload");
-
-              // Apply headers from withSecretHeaders
-              const headers = withSecretHeaders({ headers: {} }).headers || {};
-              for (const [key, value] of Object.entries(headers)) {
-                if (value) xhr.setRequestHeader(key, String(value));
-              }
-
-              xhr.withCredentials = true;
-
-              xhr.onload = () => {
-                if (xhr.status >= 200 && xhr.status < 300) {
-                  try {
-                    resolve(JSON.parse(xhr.responseText));
-                  } catch (e) {
-                    resolve(null);
-                  }
-                } else {
-                  const errText = (xhr.responseText || "").slice(0, 200);
-                  alert("Gallery upload failed (" + xhr.status + ").\n\n" + errText);
-                  reject(new Error("XHR upload failed: " + xhr.status));
-                }
-              };
-
-              xhr.onerror = () => reject(new Error("XHR network error"));
-
-              xhr.send(form);
-            });
           }
 
           if (data && data.id) {
 
             take.serverId = data.id;
+            take.uploadStatus = `Uploaded: ${String(data.id).slice(0,8)}`;
 
             // Keep local take.id stable (IndexedDB key). Persist serverId for Room/download.
             try { await GalleryDB.put(take); } catch (e) {
@@ -13528,19 +13510,26 @@ const savedStrip = document.getElementById("savedScriptsStrip");
             }
 
             console.log("[offbook] gallery upload ok, server id:", data.id);
-            setStatusRec("Uploaded: " + String(data.id).slice(0,8));
+            setStatusRec(take.uploadStatus);
           }
 
         } catch (err) {
 
           console.warn("uploadTakeToServer error", err);
 
+          take.uploadStatus = "Upload failed (tap Retry)";
+          try { await GalleryDB.put(take); } catch (e) {
+            console.warn("[offbook] failed to persist uploadStatus", e);
+          }
+
           alert("Gallery upload error: " + (err?.message || String(err)).slice(0,200));
 
         } finally {
           // Clear uploading flag
           take.uploading = false;
-          await GalleryDB.put(take);
+          try { await GalleryDB.put(take); } catch (e) {
+            console.warn("[offbook] failed to clear uploading flag", e);
+          }
         }
       })();
 
@@ -14377,7 +14366,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
               const id = take.serverId || take.id;
 
               // If this take still only exists locally (fresh recording), block Room until upload completes.
-              if (take.blob instanceof Blob && !take.serverId) {
+              if (take.blob instanceof Blob && !take.serverId && !(take.uploadStatus && take.uploadStatus.startsWith("Uploaded:"))) {
                 throw new Error("Room is available after upload finishes. Wait for 'Uploaded: ...' then try again.");
               }
 
