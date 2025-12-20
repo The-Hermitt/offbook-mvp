@@ -4,6 +4,7 @@ import express from "express";
 import multer from "multer";
 import * as path from "path";
 import * as fs from "fs";
+import * as os from "os";
 import crypto from "crypto";
 import { spawn } from "child_process";
 import db, { dbGet, dbAll, dbRun, USING_POSTGRES, listByUserAsync, getByIdAsync, saveAsync, deleteByIdAsync, updateNotesAsync } from "./lib/db";
@@ -1293,38 +1294,38 @@ export function initHttpRoutes(app: Express) {
       const isR2Take = filePath.startsWith("r2://");
       let actualTakeFile = filePath;
 
+      // Check if mixed file already exists in R2 (unless force=1)
+      const outKey = `mixed/${user.id}/${id}.mp4`;
+      if (!force && r2Enabled()) {
+        try {
+          const mixHead = await r2Head(outKey);
+          if (mixHead.exists) {
+            console.log("[gallery/mixed_file] Found existing mix in R2: key=%s", outKey);
+            // Stream from R2
+            const { stream, contentType, contentLength } = await r2GetObjectStream(outKey);
+            res.setHeader("Content-Type", contentType || "video/mp4");
+            if (contentLength !== undefined) {
+              res.setHeader("Content-Length", contentLength);
+            }
+            if (wantsDownload) {
+              const safeName = takeName.replace(/[^\w.-]+/g, "_").slice(0, 80) || "take";
+              res.setHeader("Content-Disposition", `attachment; filename="${safeName}-room.mp4"`);
+            }
+            return stream.pipe(res);
+          }
+        } catch (err) {
+          console.warn("[gallery/mixed_file] R2 mix check failed:", err);
+        }
+      }
+
       // Handle R2 take - download to temp
       if (isR2Take) {
         const r2Key = filePath.substring(5); // Remove "r2://" prefix
-        const mixKey = `mix/${user.id}/${id}.mixed.mp4`;
-
-        // Check if mixed file already exists in R2 (unless force=1)
-        if (!force && r2Enabled()) {
-          try {
-            const mixHead = await r2Head(mixKey);
-            if (mixHead.exists) {
-              console.log("[gallery/mixed_file] Found existing mix in R2: key=%s", mixKey);
-              // Stream from R2
-              const { stream, contentType, contentLength } = await r2GetObjectStream(mixKey);
-              res.setHeader("Content-Type", contentType || "video/mp4");
-              if (contentLength !== undefined) {
-                res.setHeader("Content-Length", contentLength);
-              }
-              if (wantsDownload) {
-                const safeName = takeName.replace(/[^\w.-]+/g, "_").slice(0, 80) || "take";
-                res.setHeader("Content-Disposition", `attachment; filename="${safeName}.mixed.mp4"`);
-              }
-              return stream.pipe(res);
-            }
-          } catch (err) {
-            console.warn("[gallery/mixed_file] R2 mix check failed:", err);
-          }
-        }
 
         // Download take from R2 to temp
-        const tmpDir = path.join(process.cwd(), "uploads", "tmp");
+        const tmpDir = path.join(os.tmpdir(), "offbook-room");
         fs.mkdirSync(tmpDir, { recursive: true });
-        tempTakeFile = path.join(tmpDir, `${id}.take.tmp`);
+        tempTakeFile = path.join(tmpDir, `${id}.mp4`);
 
         console.log("[gallery/mixed_file] Downloading take from R2 to temp: key=%s", r2Key);
         const { stream: takeStream } = await r2GetObjectStream(r2Key);
@@ -1353,9 +1354,9 @@ export function initHttpRoutes(app: Express) {
           const r2Key = `renders/${readerId}.mp3`;
           console.log("[gallery/mixed_file] Downloading reader from R2 to temp: key=%s", r2Key);
 
-          const tmpDir = path.join(process.cwd(), "uploads", "tmp");
+          const tmpDir = path.join(os.tmpdir(), "offbook-room");
           fs.mkdirSync(tmpDir, { recursive: true });
-          tempReaderFile = path.join(tmpDir, `${readerId}.reader.mp3`);
+          tempReaderFile = path.join(tmpDir, `${readerId}.mp3`);
 
           const { stream: readerStream } = await r2GetObjectStream(r2Key);
           await new Promise<void>((resolve, reject) => {
@@ -1371,16 +1372,11 @@ export function initHttpRoutes(app: Express) {
         }
       }
 
-      // Determine output path
-      let outPath: string;
-      if (isR2Take) {
-        const tmpDir = path.join(process.cwd(), "uploads", "tmp");
-        fs.mkdirSync(tmpDir, { recursive: true });
-        tempOutputFile = path.join(tmpDir, `${id}.mixed.mp4`);
-        outPath = tempOutputFile;
-      } else {
-        outPath = path.join(path.dirname(filePath), `${id}.mixed.mp4`);
-      }
+      // Determine output path - always use temp dir to avoid path.dirname(r2://)
+      const tmpDir = path.join(os.tmpdir(), "offbook-room");
+      fs.mkdirSync(tmpDir, { recursive: true });
+      const outPath = path.join(tmpDir, `${id}.mixed.mp4`);
+      tempOutputFile = outPath;
 
       // Run ffmpeg to create mixed file
       const filter =
@@ -1421,25 +1417,50 @@ export function initHttpRoutes(app: Express) {
         ]);
       }
 
-      // Upload to R2 if take was from R2
-      if (isR2Take && r2Enabled()) {
-        const mixKey = `mix/${user.id}/${id}.mixed.mp4`;
-        console.log("[gallery/mixed_file] Uploading mixed file to R2: key=%s", mixKey);
-        await r2PutFile(mixKey, outPath, "video/mp4");
+      // Upload to R2 if enabled
+      if (r2Enabled()) {
+        console.log("[gallery/mixed_file] Uploading mixed file to R2: key=%s", outKey);
+        await r2PutFile(outKey, outPath, "video/mp4");
       }
 
       // Send file
       res.type("video/mp4");
       if (wantsDownload) {
         const safeName = takeName.replace(/[^\w.-]+/g, "_").slice(0, 80) || "take";
-        res.setHeader("Content-Disposition", `attachment; filename="${safeName}.mixed.mp4"`);
+        res.setHeader("Content-Disposition", `attachment; filename="${safeName}-room.mp4"`);
       }
-      return res.sendFile(outPath);
+
+      // Stream file and cleanup after
+      res.sendFile(outPath, (err) => {
+        // Cleanup temp files after sending (best effort)
+        if (tempTakeFile) {
+          try {
+            fs.unlinkSync(tempTakeFile);
+          } catch (e) {
+            console.warn("[gallery/mixed_file] Failed to cleanup temp take file:", e);
+          }
+        }
+        if (tempReaderFile) {
+          try {
+            fs.unlinkSync(tempReaderFile);
+          } catch (e) {
+            console.warn("[gallery/mixed_file] Failed to cleanup temp reader file:", e);
+          }
+        }
+        if (tempOutputFile) {
+          try {
+            fs.unlinkSync(tempOutputFile);
+          } catch (e) {
+            console.warn("[gallery/mixed_file] Failed to cleanup temp output file:", e);
+          }
+        }
+        if (err) {
+          console.error("[gallery/mixed_file] Error sending file:", err);
+        }
+      });
     } catch (err) {
       console.error("Error in GET /api/gallery/:id/mixed_file", err);
-      return res.status(500).json({ error: "internal_error" });
-    } finally {
-      // Cleanup temp files (best effort)
+      // Cleanup temp files on error (best effort)
       if (tempTakeFile) {
         try {
           fs.unlinkSync(tempTakeFile);
@@ -1461,6 +1482,7 @@ export function initHttpRoutes(app: Express) {
           console.warn("[gallery/mixed_file] Failed to cleanup temp output file:", e);
         }
       }
+      return res.status(500).json({ error: "internal_error" });
     }
   });
 
