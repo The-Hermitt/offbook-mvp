@@ -6371,6 +6371,18 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
         updateImportPersistenceDebug();
 
+        // Restore last Assign selection for Record tab Render
+        if(!S.script_id || !S.role){
+          try{
+            const stored = localStorage.getItem("offbook:last_assign");
+            if(stored){
+              const parsed = JSON.parse(stored);
+              if(parsed.script_id && !S.script_id) S.script_id = parsed.script_id;
+              if(parsed.role && !S.role) S.role = parsed.role;
+            }
+          }catch{}
+        }
+
 
 
         // Debug + UX: show how many saved scripts we see on this device
@@ -8418,7 +8430,22 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
         sel.value=S.role||"";
 
-        sel.onchange=()=>{ S.role=sel.value; buildVoicePickers(); hydrateRehearse(); applyEditModeUI(); };
+        sel.onchange=()=>{
+          S.role=sel.value;
+          buildVoicePickers();
+          hydrateRehearse();
+          applyEditModeUI();
+          // Persist Assign selection for Record tab Render
+          if(S.script_id && S.role){
+            try{
+              localStorage.setItem("offbook:last_assign", JSON.stringify({
+                script_id: S.script_id,
+                scene_id: S.script_id,
+                role: S.role
+              }));
+            }catch{}
+          }
+        };
 
         buildVoicePickers();
 
@@ -12167,7 +12194,27 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
       async function prepareReader(){
 
-        if(!S.script_id){ setStatusRec("Import & Assign first."); return; }
+        // Get script_id, scene_id, role with fallback to localStorage
+        let script_id = S.script_id;
+        let scene_id = S.script_id; // scene_id = script_id in this app
+        let role = S.role;
+
+        if(!script_id || !role){
+          try{
+            const stored = localStorage.getItem("offbook:last_assign");
+            if(stored){
+              const parsed = JSON.parse(stored);
+              if(!script_id && parsed.script_id) script_id = parsed.script_id;
+              if(!scene_id && parsed.scene_id) scene_id = parsed.scene_id;
+              if(!role && parsed.role) role = parsed.role;
+            }
+          }catch{}
+        }
+
+        if(!script_id || !scene_id || !role){
+          setStatusRec("Pick a role in Assign first.");
+          return;
+        }
 
         let dots = 0;
 
@@ -12193,7 +12240,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
         try{
 
-          const r = await fetch("/debug/render", withSecretHeaders({ method:"POST", headers:{...JSON_HDRS}, body:JSON.stringify({ script_id:S.script_id, my_role:(S.role||"").toUpperCase(), pace_ms:0 }) }));
+          const r = await fetch("/debug/render", withSecretHeaders({ method:"POST", headers:{...JSON_HDRS}, body:JSON.stringify({ script_id, scene_id, role: role.toUpperCase(), pace_ms:0 }) }));
 
           if(handleUnauthorized(r)){ clearInterval(dotsTimer); setStatusRec("Locked."); R.btnRender.disabled=false; return; }
 
