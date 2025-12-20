@@ -406,6 +406,21 @@ export function initHttpRoutes(app: Express) {
     // Fall back to "ffmpeg"
   }
 
+  class FfmpegError extends Error {
+    bin: string;
+    args: string[];
+    code: number | null;
+    stderrTail: string;
+    constructor(opts: { bin: string; args: string[]; code: number | null; stderrTail: string }) {
+      super(`ffmpeg exited with code ${opts.code}`);
+      this.name = "FfmpegError";
+      this.bin = opts.bin;
+      this.args = opts.args;
+      this.code = opts.code;
+      this.stderrTail = opts.stderrTail;
+    }
+  }
+
   function runFfmpeg(args: string[]): Promise<void> {
     return new Promise((resolve, reject) => {
       const proc = spawn(FFMPEG_BIN, args);
@@ -421,12 +436,12 @@ export function initHttpRoutes(app: Express) {
       proc.on("close", (code) => {
         if (code === 0) return resolve();
         const stderrTail = stderr.slice(-16384);
-        const err: any = new Error(`ffmpeg exited with code ${code}. bin=${FFMPEG_BIN} args=${JSON.stringify(args)} stderr=${stderrTail}`);
-        err.ffmpeg_code = code;
-        err.ffmpeg_bin = FFMPEG_BIN;
-        err.ffmpeg_args = args;
-        err.ffmpeg_stderr_tail = stderrTail;
-        return reject(err);
+        return reject(new FfmpegError({
+          bin: FFMPEG_BIN,
+          args,
+          code,
+          stderrTail,
+        }));
       });
     });
   }
@@ -1601,30 +1616,33 @@ export function initHttpRoutes(app: Express) {
     } catch (err: any) {
       console.error("Error in GET /api/gallery/:id/mixed_file", err);
 
+      const e: any = err;
+      const isFfmpeg = e?.name === "FfmpegError";
+
       const response: any = {
         error: "internal_error",
         stage,
-        message: (err as Error)?.message?.slice(0, 1500) || String(err).slice(0, 1500),
+        message: (e?.message || String(e)).slice(0, 4000),
       };
 
       // Include ffmpeg debug info if available
-      if (err.ffmpeg_code !== undefined) {
-        const argsToInclude = err.ffmpeg_args?.slice(0, 200) || [];
-        const stderrTail = (err.ffmpeg_stderr_tail || "").slice(0, 16384);
+      if (isFfmpeg) {
+        const stderrTail = (e.stderrTail || "").slice(-16000);
 
         response.ffmpeg = {
-          code: err.ffmpeg_code,
-          bin: err.ffmpeg_bin,
-          args: argsToInclude,
+          code: e.code ?? null,
+          bin: e.bin,
+          args: e.args,
           stderr_tail: stderrTail,
         };
 
-        console.warn("[gallery/mixed] ffmpeg_failed", {
+        console.error("[gallery/mixed] ffmpeg_failed", {
           stage,
-          code: err.ffmpeg_code,
-          bin: err.ffmpeg_bin,
-          args_len: err.ffmpeg_args?.length || 0,
+          code: e.code,
+          bin: e.bin,
+          args_len: e.args?.length || 0,
           stderr_tail_len: stderrTail.length,
+          stderr_tail: stderrTail,
         });
       }
 
