@@ -10,6 +10,7 @@
     "health": "node -e \"fetch('http://localhost:'+(process.env.PORT||3010)+'/health').then(r=>r.text()).then(console.log).catch(e=>{console.error(e);process.exit(1)})\""
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.956.0",
     "@simplewebauthn/server": "^13.2.2",
     "better-sqlite3": "^12.4.1",
     "cookie-parser": "^1.4.6",

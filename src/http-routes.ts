@@ -12,6 +12,7 @@ import { isSttEnabled, transcribeChunk } from "./lib/stt";
 import { makeAuditMiddleware } from "./lib/audit";
 import { makeRateLimiters } from "./middleware/rateLimit";
 import { getPasskeySession, noteRenderComplete, ensureSid } from "./routes/auth";
+import { r2Enabled, r2PutFile, r2GetObjectStream, r2Head, r2Delete } from "./lib/r2";
 
 // ---------- Types ----------
 type SceneLine = { speaker: string; text: string };
@@ -494,6 +495,32 @@ export function initHttpRoutes(app: Express) {
     }
     const curatedVoices = ["alloy", "echo", "fable", "onyx", "nova", "shimmer"];
     res.json({ ok: true, voices: curatedVoices });
+  });
+
+  // GET /debug/r2_head?key=<key>
+  debug.get("/r2_head", audit("/debug/r2_head"), async (req: Request, res: Response) => {
+    try {
+      const key = String(req.query.key || "");
+      if (!key) {
+        return res.status(400).json({ ok: false, error: "key_required" });
+      }
+
+      if (!r2Enabled()) {
+        return res.json({ ok: false, error: "r2_not_enabled" });
+      }
+
+      const result = await r2Head(key);
+      return res.json({
+        ok: true,
+        key,
+        exists: result.exists,
+        contentLength: result.contentLength,
+        contentType: result.contentType,
+      });
+    } catch (err) {
+      console.error("[debug/r2_head] error:", err);
+      return res.status(500).json({ ok: false, error: "r2_head_failed" });
+    }
   });
 
   // POST /debug/upload_script_text
@@ -979,7 +1006,7 @@ export function initHttpRoutes(app: Express) {
     "/gallery/upload",
     requireUser,
     galleryUpload.single("file"),
-    (req: Request, res: Response) => {
+    async (req: Request, res: Response) => {
       try {
         const user = (req as any).user || res.locals.user;
         if (!user || !user.id) {
@@ -1044,6 +1071,39 @@ export function initHttpRoutes(app: Express) {
             ? render_id.trim()
             : null;
 
+        // R2 upload if enabled
+        let filePath = finalPath;
+        let storageInfo: any = undefined;
+
+        if (r2Enabled()) {
+          const r2Key = `gallery/${user.id}/${takeId}${ext}`;
+          try {
+            await r2PutFile(r2Key, finalPath, mime);
+            filePath = `r2://${r2Key}`;
+            storageInfo = { type: "r2", key: r2Key };
+            console.log(
+              "[gallery] upload saved to R2: user=%s id=%s key=%s size=%d mime=%s",
+              String(user.id),
+              String(takeId),
+              r2Key,
+              sizeNum,
+              mime
+            );
+          } catch (err) {
+            console.error("[gallery] R2 upload failed, falling back to local:", err);
+            // Keep local file_path on R2 failure
+          }
+        } else {
+          console.log(
+            "[gallery] upload saved locally: user=%s id=%s size=%d mime=%s path=%s",
+            String(user.id),
+            String(takeId),
+            sizeNum,
+            mime,
+            finalPath
+          );
+        }
+
         GalleryStore.save({
           id: String(takeId),
           user_id: String(user.id),
@@ -1056,23 +1116,20 @@ export function initHttpRoutes(app: Express) {
           note: noteVal,
           notes: notesVal,
           reader_render_id: readerRenderId,
-          file_path: finalPath,
+          file_path: filePath,
         });
 
-        console.log(
-          "[gallery] upload saved: user=%s id=%s size=%d mime=%s path=%s",
-          String(user.id),
-          String(takeId),
-          sizeNum,
-          mime,
-          finalPath
-        );
-
-        res.json({
+        const response: any = {
           ok: true,
           id: String(takeId),
           created_at: createdAtNum,
-        });
+        };
+
+        if (storageInfo) {
+          response.storage = storageInfo;
+        }
+
+        res.json(response);
       } catch (err) {
         console.error("Error in POST /api/gallery/upload", err);
         res.status(500).json({ error: "internal_error" });
@@ -1085,7 +1142,7 @@ export function initHttpRoutes(app: Express) {
     "/gallery/delete",
     requireUser,
     express.json(),
-    (req: Request, res: Response) => {
+    async (req: Request, res: Response) => {
       try {
         const user = (req as any).user || res.locals.user;
         if (!user || !user.id) {
@@ -1103,12 +1160,25 @@ export function initHttpRoutes(app: Express) {
         }
 
         const filePath = (row as any).file_path as string;
-        try {
-          if (filePath && fs.existsSync(filePath)) {
-            fs.unlinkSync(filePath);
+
+        // Delete from R2 if stored there
+        if (filePath && filePath.startsWith("r2://")) {
+          const r2Key = filePath.substring(5); // Remove "r2://" prefix
+          try {
+            await r2Delete(r2Key);
+            console.log("[gallery] Deleted from R2: key=%s", r2Key);
+          } catch (e) {
+            console.warn("[gallery] R2 delete failed for", r2Key, e);
           }
-        } catch (e) {
-          console.warn("[gallery] unlink failed for", takeId, e);
+        } else {
+          // Delete local file
+          try {
+            if (filePath && fs.existsSync(filePath)) {
+              fs.unlinkSync(filePath);
+            }
+          } catch (e) {
+            console.warn("[gallery] unlink failed for", takeId, e);
+          }
         }
 
         GalleryStore.deleteById(takeId, String(user.id));
@@ -1242,7 +1312,7 @@ export function initHttpRoutes(app: Express) {
     }
   });
 
-  api.get("/gallery/:id/file", requireUser, (req: Request, res: Response) => {
+  api.get("/gallery/:id/file", requireUser, async (req: Request, res: Response) => {
     try {
       const user = (req as any).user || res.locals.user;
       if (!user || !user.id) {
@@ -1256,7 +1326,7 @@ export function initHttpRoutes(app: Express) {
       }
 
       const filePath = (row as any).file_path as string;
-      if (!filePath || !fs.existsSync(filePath)) {
+      if (!filePath) {
         return res.status(404).json({ error: "file_missing" });
       }
 
@@ -1267,26 +1337,72 @@ export function initHttpRoutes(app: Express) {
       const rawName =
         (row as any)?.name ||
         (row as any)?.label ||
-        path.basename(filePath);
+        "download";
       const safeName =
         (rawName &&
           String(rawName)
             .replace(/[\\\/]/g, "_")
             .replace(/[^\w.-]+/g, "_")
             .slice(0, 80)) ||
-        path.basename(filePath);
+        "download";
 
-      // Force the correct MIME type for Safari, even if the extension is odd.
-      const mime = (row as any).mime_type as string | undefined;
-      if (mime && typeof mime === "string") {
-        res.type(mime);
+      // Check if file is stored in R2
+      if (filePath.startsWith("r2://")) {
+        const r2Key = filePath.substring(5); // Remove "r2://" prefix
+        const mime = (row as any).mime_type as string | undefined;
+        const rangeHeader = req.headers.range;
+
+        try {
+          const { stream, contentType, contentLength, contentRange, statusCode } =
+            await r2GetObjectStream(r2Key, rangeHeader);
+
+          // Set headers
+          res.setHeader("Accept-Ranges", "bytes");
+
+          if (mime && typeof mime === "string") {
+            res.setHeader("Content-Type", mime);
+          } else if (contentType) {
+            res.setHeader("Content-Type", contentType);
+          }
+
+          if (contentLength !== undefined) {
+            res.setHeader("Content-Length", contentLength);
+          }
+
+          if (contentRange) {
+            res.setHeader("Content-Range", contentRange);
+          }
+
+          if (wantsDownload) {
+            res.setHeader("Content-Disposition", `attachment; filename="${safeName}"`);
+          }
+
+          res.status(statusCode);
+          stream.pipe(res);
+        } catch (err) {
+          console.error("[gallery] R2 stream failed for key:", r2Key, err);
+          return res.status(500).json({ error: "r2_stream_failed" });
+        }
+      } else {
+        // Local file
+        if (!fs.existsSync(filePath)) {
+          return res.status(404).json({ error: "file_missing" });
+        }
+
+        const pathSafeName = path.basename(filePath);
+
+        // Force the correct MIME type for Safari, even if the extension is odd.
+        const mime = (row as any).mime_type as string | undefined;
+        if (mime && typeof mime === "string") {
+          res.type(mime);
+        }
+
+        if (wantsDownload) {
+          return res.download(filePath, safeName);
+        }
+
+        res.sendFile(filePath);
       }
-
-      if (wantsDownload) {
-        return res.download(filePath, safeName);
-      }
-
-      res.sendFile(filePath);
     } catch (err) {
       console.error("Error in GET /api/gallery/:id/file", err);
       res.status(500).json({ error: "internal_error" });
