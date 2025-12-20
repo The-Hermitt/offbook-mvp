@@ -3013,6 +3013,20 @@ JANE: Ready?"></textarea>
 
         </div>
 
+        <div id="profileDisplayNameBlock" style="display:none; margin-top:12px;">
+
+          <label>Display name</label>
+
+          <div style="display:flex; gap:8px; align-items:center;">
+
+            <input id="profileDisplayNameInput" type="text" placeholder="Enter your display name" style="flex:1;" />
+
+            <button id="btnSaveDisplayName" class="btn secondary">Save</button>
+
+          </div>
+
+        </div>
+
         <div id="entitlementLine" class="small" style="display:none"></div>
 
         <div id="devEntButtons" style="display:none; margin-top:6px;">
@@ -3935,37 +3949,25 @@ JANE: Ready?"></textarea>
 
 
 
-            let displayText = "Not signed in";
+            const isSignedIn = Boolean(rawUserId);
 
 
 
-            if (rawUserId) {
+            // Fetch and render profile
 
-              const rawStr = String(rawUserId);
+            if (isSignedIn) {
 
+              fetchAndRenderProfile(rawUserId);
 
+            } else {
 
-              // For passkey-style IDs (e.g. "passkey:LGluR9jLzKorF-…"),
+              userIdEl.textContent = "Not signed in.";
 
-              // show a clean, human label instead of the long token.
+              const displayNameBlock = document.getElementById("profileDisplayNameBlock");
 
-              if (rawStr.startsWith("passkey:")) {
-
-                displayText = "Passkey (this device)";
-
-              } else {
-
-                // For any other kind of ID (email, etc.), show it as-is.
-
-                displayText = rawStr;
-
-              }
+              if (displayNameBlock) displayNameBlock.style.display = "none";
 
             }
-
-
-
-            userIdEl.textContent = displayText;
 
 
 
@@ -4879,6 +4881,164 @@ JANE: Ready?"></textarea>
 
 
 
+      // Profile display name functions
+
+      async function fetchAndRenderProfile(userId) {
+
+        const userIdEl = document.getElementById("settings-session-user-id");
+
+        const displayNameBlock = document.getElementById("profileDisplayNameBlock");
+
+        const displayNameInput = document.getElementById("profileDisplayNameInput");
+
+
+
+        try {
+
+          const res = await fetch("/api/profile", withSecretHeaders());
+
+          const data = await res.json();
+
+
+
+          const displayName = data.display_name || null;
+
+
+
+          // Format short ID: pk_886d5e…b0a
+
+          let shortId = "";
+
+          if (userId && userId.startsWith("passkey:")) {
+
+            const token = userId.substring(8); // Remove "passkey:" prefix
+
+            if (token.length > 10) {
+
+              const prefix = token.substring(0, 7);
+
+              const suffix = token.substring(token.length - 3);
+
+              shortId = `pk_${prefix}…${suffix}`;
+
+            } else {
+
+              shortId = `pk_${token}`;
+
+            }
+
+          }
+
+
+
+          // Render sign-in status
+
+          if (userIdEl) {
+
+            if (displayName) {
+
+              userIdEl.innerHTML = `Signed in as <strong>${displayName}</strong><br><span style="font-size:11px;color:var(--muted);">${shortId}</span>`;
+
+            } else {
+
+              userIdEl.innerHTML = `Signed in as <strong>${shortId}</strong>`;
+
+            }
+
+          }
+
+
+
+          // Show display name input and populate it
+
+          if (displayNameBlock) {
+
+            displayNameBlock.style.display = "";
+
+          }
+
+          if (displayNameInput) {
+
+            displayNameInput.value = displayName || "";
+
+          }
+
+        } catch (err) {
+
+          console.error("Failed to fetch profile:", err);
+
+          if (userIdEl) {
+
+            userIdEl.textContent = "Signed in (profile error)";
+
+          }
+
+        }
+
+      }
+
+
+
+      function wireProfileSaveButton() {
+
+        const btn = document.getElementById("btnSaveDisplayName");
+
+        const input = document.getElementById("profileDisplayNameInput");
+
+
+
+        if (!btn || !input) return;
+
+
+
+        btn.addEventListener("click", async () => {
+
+          const displayName = input.value.trim();
+
+
+
+          try {
+
+            const res = await fetch("/api/profile", withSecretHeaders({
+
+              method: "POST",
+
+              headers: { "Content-Type": "application/json" },
+
+              body: JSON.stringify({ display_name: displayName }),
+
+            }));
+
+
+
+            if (!res.ok) {
+
+              throw new Error("Failed to save display name");
+
+            }
+
+
+
+            // Refresh profile display
+
+            await refreshAuthUI();
+
+            alert("Display name saved.");
+
+          } catch (err) {
+
+            console.error("Failed to save display name:", err);
+
+            alert("Failed to save display name. Please try again.");
+
+          }
+
+        });
+
+      }
+
+
+
       function wireSettingsPasskeyButtons(){
 
         const btnReg = document.getElementById("btnRegisterPasskey");
@@ -5056,6 +5216,8 @@ JANE: Ready?"></textarea>
       }
 
       wireSettingsPasskeyButtons();
+
+      wireProfileSaveButton();
 
       wireAddCreditsButton();
 

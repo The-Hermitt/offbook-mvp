@@ -1409,6 +1409,63 @@ export function initHttpRoutes(app: Express) {
     }
   });
 
+  // --- Profile API ---
+  api.get("/profile", secretGuard, async (req: Request, res: Response) => {
+    try {
+      const { passkeyLoggedIn, userId } = getPasskeySession(req as any);
+
+      if (!passkeyLoggedIn || !userId) {
+        return res.json({ user_id: null, display_name: null });
+      }
+
+      // Get display_name from users table
+      const user = await dbGet<{ display_name?: string }>(
+        `SELECT display_name FROM users WHERE id = ?`,
+        [userId]
+      );
+
+      return res.json({
+        user_id: userId,
+        display_name: user?.display_name || null,
+      });
+    } catch (err) {
+      console.error("Error in GET /api/profile", err);
+      return res.status(500).json({ error: "internal_error" });
+    }
+  });
+
+  api.post("/profile", secretGuard, express.json(), async (req: Request, res: Response) => {
+    try {
+      const { passkeyLoggedIn, userId } = getPasskeySession(req as any);
+
+      if (!passkeyLoggedIn || !userId) {
+        return res.status(401).json({ error: "not_logged_in" });
+      }
+
+      const displayName = String((req.body as any)?.display_name || "").trim();
+
+      // Upsert into users table
+      if (USING_POSTGRES) {
+        await dbRun(
+          `INSERT INTO users (id, display_name) VALUES (?, ?)
+           ON CONFLICT(id) DO UPDATE SET display_name = EXCLUDED.display_name`,
+          [userId, displayName || null]
+        );
+      } else {
+        await dbRun(
+          `INSERT INTO users (id, display_name) VALUES (?, ?)
+           ON CONFLICT(id) DO UPDATE SET display_name = excluded.display_name`,
+          [userId, displayName || null]
+        );
+      }
+
+      return res.json({ ok: true });
+    } catch (err) {
+      console.error("Error in POST /api/profile", err);
+      return res.status(500).json({ error: "internal_error" });
+    }
+  });
+
   api.get("/assets/:render_id", (req: Request, res: Response) => {
     const file = path.join(ASSETS_DIR, `${String(req.params.render_id)}.mp3`);
     if (!fs.existsSync(file)) return res.status(404).send("Not Found");

@@ -92,6 +92,25 @@ export async function ensureSchema(): Promise<void> {
       )
     `);
 
+    // Add display_name column if missing
+    if (USING_POSTGRES) {
+      await dbExec(`
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS display_name TEXT
+      `);
+    } else {
+      try {
+        await dbExec(`
+          ALTER TABLE users ADD COLUMN display_name TEXT
+        `);
+        console.log("[db] Added display_name column to users table");
+      } catch (err: any) {
+        // Ignore "duplicate column name" error
+        if (!err?.message?.includes("duplicate column")) {
+          throw err;
+        }
+      }
+    }
+
     // WebAuthn credentials table
     await dbExec(`
       CREATE TABLE IF NOT EXISTS webauthn_credentials (
