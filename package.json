@@ -10,8 +10,6 @@
     "health": "node -e \"fetch('http://localhost:'+(process.env.PORT||3010)+'/health').then(r=>r.text()).then(console.log).catch(e=>{console.error(e);process.exit(1)})\""
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.699.0",
-    "@aws-sdk/s3-request-presigner": "^3.699.0",
     "@simplewebauthn/server": "^13.2.2",
     "better-sqlite3": "^12.4.1",
     "cookie-parser": "^1.4.6",
@@ -19,7 +17,6 @@
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
     "express": "^4.21.2",
-    "ffmpeg-static": "^5.3.0",
     "multer": "^1.4.5-lts.2",
     "openai": "^4.104.0",
     "pdf-parse": "^1.1.4",
