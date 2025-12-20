@@ -3684,7 +3684,14 @@ JANE: Ready?"></textarea>
 
       const auth = (typeof S !== "undefined" && S) ? S.auth : null;
 
-      if (!auth) return null;
+      if (!auth) {
+        // Fallback to last known user to prevent empty gallery during auth init
+        try {
+          return localStorage.getItem("ob_lastKnownUserKey") || null;
+        } catch {
+          return null;
+        }
+      }
 
 
 
@@ -3724,9 +3731,16 @@ JANE: Ready?"></textarea>
 
         null;
 
+      const userKey = id ? `user:${id}` : null;
 
+      // Store last known user key for fallback during auth init
+      if (userKey) {
+        try {
+          localStorage.setItem("ob_lastKnownUserKey", userKey);
+        } catch {}
+      }
 
-      return id ? `user:${id}` : null;
+      return userKey;
 
     }
 
@@ -13026,15 +13040,23 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
           const created = t.created || 0;
 
-          if(now - created > MAX_AGE_MS){ await GalleryDB.del(t.id); continue; }
+          // Only prune local-only items (not synced to server) by age
+          if(now - created > MAX_AGE_MS && !t.serverId && !t.fromServer){
+            await GalleryDB.del(t.id);
+            continue;
+          }
 
           recent.push(t);
 
         }
 
+        // Only prune local-only items by count (keep server-synced items)
         if(recent.length > MAX_ITEMS){
 
-          for(const t of recent.slice(MAX_ITEMS)){ await GalleryDB.del(t.id); }
+          const localOnly = recent.filter(t => !t.serverId && !t.fromServer);
+          const toDelete = localOnly.slice(MAX_ITEMS);
+
+          for(const t of toDelete){ await GalleryDB.del(t.id); }
 
         }
 
@@ -13113,6 +13135,8 @@ const savedStrip = document.getElementById("savedScriptsStrip");
       /* ---- Gallery rendering with filters + actions ---- */
 
       async function loadTakes() {
+
+        let remoteFetchError = null;
 
         try {
 
@@ -13260,6 +13284,15 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
                 }));
 
+                // Persist remote items to IndexedDB for offline access
+                for (const item of remoteItems) {
+                  try {
+                    await GalleryDB.put(item);
+                  } catch (e) {
+                    console.warn("Failed to cache remote item", item.id, e);
+                  }
+                }
+
               }
 
             }
@@ -13267,6 +13300,8 @@ const savedStrip = document.getElementById("savedScriptsStrip");
           } catch (err) {
 
             console.warn("Failed to load server gallery items", err);
+
+            remoteFetchError = err;
 
           }
 
@@ -13314,6 +13349,22 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
           renderGallery();
 
+          // Show remote sync error if fetch failed but we have local/cached items
+          if (remoteFetchError && merged.length > 0) {
+            const wrap = $("#takes");
+            if (wrap) {
+              const errDiv = document.createElement("div");
+              errDiv.className = "hint";
+              errDiv.style.background = "rgba(255,165,0,0.1)";
+              errDiv.style.border = "1px solid rgba(255,165,0,0.3)";
+              errDiv.style.padding = "8px";
+              errDiv.style.marginBottom = "12px";
+              errDiv.style.borderRadius = "4px";
+              errDiv.textContent = "⚠️ Remote sync failed. Showing cached takes.";
+              wrap.insertBefore(errDiv, wrap.firstChild);
+            }
+          }
+
         } catch (err) {
 
           console.warn("[offbook] gallery load error", err);
@@ -13322,7 +13373,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
           if (wrap) {
 
-            wrap.innerHTML = `<p class="hint">Gallery storage unavailable on this device.</p>`;
+            wrap.innerHTML = `<p class="hint" style="background:rgba(255,0,0,0.1);border:1px solid rgba(255,0,0,0.3);padding:8px;">Gallery error: ${String(err.message || err).slice(0, 100)}</p>`;
 
           }
 
