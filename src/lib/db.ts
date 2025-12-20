@@ -357,3 +357,138 @@ export const GalleryStore = {
       .run(notes, notes, id, userId);
   },
 };
+
+// ---------- Async GalleryStore methods (Postgres-compatible) ----------
+
+export async function listByUserAsync(userId: string) {
+  return await dbAll<any>(
+    `SELECT id, user_id, script_id, scene_id, name, mime_type, size, created_at, note, notes, reader_render_id
+     FROM gallery_takes
+     WHERE user_id = ?
+     ORDER BY created_at DESC`,
+    [userId]
+  );
+}
+
+export async function getByIdAsync(id: string, userId: string) {
+  return await dbGet<any>(
+    `SELECT id, user_id, script_id, scene_id, name, mime_type, size, created_at, note, notes, reader_render_id, file_path
+     FROM gallery_takes
+     WHERE id = ? AND user_id = ?`,
+    [id, userId]
+  );
+}
+
+export async function saveAsync(take: {
+  id: string;
+  user_id: string;
+  script_id?: string | null;
+  scene_id?: string | null;
+  name: string;
+  mime_type?: string | null;
+  size?: number | null;
+  created_at: number;
+  note?: string | null;
+  notes?: string | null;
+  reader_render_id?: string | null;
+  file_path: string;
+}) {
+  const notesVal =
+    typeof take.notes === "string"
+      ? take.notes
+      : typeof take.note === "string"
+      ? take.note
+      : "";
+  const noteVal =
+    typeof take.note === "string"
+      ? take.note
+      : typeof take.notes === "string"
+      ? take.notes
+      : null;
+  const readerRenderIdVal =
+    typeof take.reader_render_id === "string" && take.reader_render_id.trim()
+      ? take.reader_render_id.trim()
+      : null;
+
+  if (USING_POSTGRES) {
+    // Postgres upsert using ON CONFLICT
+    await dbRun(
+      `INSERT INTO gallery_takes
+         (id, user_id, script_id, scene_id, name, mime_type, size, created_at, note, notes, reader_render_id, file_path)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET
+         user_id = EXCLUDED.user_id,
+         script_id = EXCLUDED.script_id,
+         scene_id = EXCLUDED.scene_id,
+         name = EXCLUDED.name,
+         mime_type = EXCLUDED.mime_type,
+         size = EXCLUDED.size,
+         created_at = EXCLUDED.created_at,
+         note = EXCLUDED.note,
+         notes = EXCLUDED.notes,
+         reader_render_id = EXCLUDED.reader_render_id,
+         file_path = EXCLUDED.file_path`,
+      [
+        take.id,
+        take.user_id,
+        take.script_id || null,
+        take.scene_id || null,
+        take.name,
+        take.mime_type || null,
+        take.size || null,
+        take.created_at,
+        noteVal,
+        notesVal,
+        readerRenderIdVal,
+        take.file_path,
+      ]
+    );
+  } else {
+    // SQLite uses named parameters with @
+    await dbRun(
+      `INSERT INTO gallery_takes
+         (id, user_id, script_id, scene_id, name, mime_type, size, created_at, note, notes, reader_render_id, file_path)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET
+         user_id = excluded.user_id,
+         script_id = excluded.script_id,
+         scene_id = excluded.scene_id,
+         name = excluded.name,
+         mime_type = excluded.mime_type,
+         size = excluded.size,
+         created_at = excluded.created_at,
+         note = excluded.note,
+         notes = excluded.notes,
+         reader_render_id = excluded.reader_render_id,
+         file_path = excluded.file_path`,
+      [
+        take.id,
+        take.user_id,
+        take.script_id || null,
+        take.scene_id || null,
+        take.name,
+        take.mime_type || null,
+        take.size || null,
+        take.created_at,
+        noteVal,
+        notesVal,
+        readerRenderIdVal,
+        take.file_path,
+      ]
+    );
+  }
+}
+
+export async function deleteByIdAsync(id: string, userId: string) {
+  return await dbRun(
+    `DELETE FROM gallery_takes WHERE id = ? AND user_id = ?`,
+    [id, userId]
+  );
+}
+
+export async function updateNotesAsync(id: string, userId: string, notes: string) {
+  return await dbRun(
+    `UPDATE gallery_takes SET notes = ?, note = ? WHERE id = ? AND user_id = ?`,
+    [notes, notes, id, userId]
+  );
+}

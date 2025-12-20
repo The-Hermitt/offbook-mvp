@@ -6,7 +6,7 @@ import * as path from "path";
 import * as fs from "fs";
 import crypto from "crypto";
 import { spawn } from "child_process";
-import db, { GalleryStore, dbGet, dbAll, dbRun, USING_POSTGRES } from "./lib/db";
+import db, { dbGet, dbAll, dbRun, USING_POSTGRES, listByUserAsync, getByIdAsync, saveAsync, deleteByIdAsync, updateNotesAsync } from "./lib/db";
 import { generateReaderMp3, ttsProvider } from "./lib/tts";
 import { isSttEnabled, transcribeChunk } from "./lib/stt";
 import { makeAuditMiddleware } from "./lib/audit";
@@ -944,12 +944,12 @@ export function initHttpRoutes(app: Express) {
   app.use("/debug", debugLimiter, debug);
 
   // --- Gallery API (per-user, authenticated; metadata only) ------------------
-  api.get("/gallery", (req: Request, res: Response) => {
+  api.get("/gallery", async (req: Request, res: Response) => {
     const userId = getUserIdOr401(req, res);
     if (!userId) return;
 
     try {
-      const rows = GalleryStore.listByUser(userId);
+      const rows = await listByUserAsync(userId);
       console.log(
         "[gallery] list for user=%s, count=%d",
         userId,
@@ -973,13 +973,13 @@ export function initHttpRoutes(app: Express) {
     }
   });
 
-  api.get("/gallery/:id", (req: Request, res: Response) => {
+  api.get("/gallery/:id", async (req: Request, res: Response) => {
     const userId = getUserIdOr401(req, res);
     if (!userId) return;
 
     try {
       const id = String(req.params.id || "");
-      const row = GalleryStore.getById(id, userId);
+      const row = await getByIdAsync(id, userId);
 
       if (!row) {
         return res.status(404).json({ error: "not_found" });
@@ -1104,7 +1104,7 @@ export function initHttpRoutes(app: Express) {
           );
         }
 
-        GalleryStore.save({
+        await saveAsync({
           id: String(takeId),
           user_id: String(user.id),
           script_id: script_id || null,
@@ -1154,7 +1154,7 @@ export function initHttpRoutes(app: Express) {
           return res.status(400).json({ error: "take_id_required" });
         }
 
-        const row = GalleryStore.getById(takeId, String(user.id));
+        const row = await getByIdAsync(takeId, String(user.id));
         if (!row) {
           return res.status(404).json({ error: "not_found" });
         }
@@ -1181,7 +1181,7 @@ export function initHttpRoutes(app: Express) {
           }
         }
 
-        GalleryStore.deleteById(takeId, String(user.id));
+        await deleteByIdAsync(takeId, String(user.id));
         return res.json({ ok: true });
       } catch (err) {
         console.error("Error in POST /api/gallery/delete", err);
@@ -1194,7 +1194,7 @@ export function initHttpRoutes(app: Express) {
     "/gallery/notes",
     requireUser,
     express.json(),
-    (req: Request, res: Response) => {
+    async (req: Request, res: Response) => {
       try {
         const user = (req as any).user || res.locals.user;
         if (!user || !user.id) {
@@ -1208,12 +1208,12 @@ export function initHttpRoutes(app: Express) {
           return res.status(400).json({ error: "take_id_required" });
         }
 
-        const row = GalleryStore.getById(takeId, String(user.id));
+        const row = await getByIdAsync(takeId, String(user.id));
         if (!row) {
           return res.status(404).json({ error: "not_found" });
         }
 
-        GalleryStore.updateNotes(takeId, String(user.id), notes);
+        await updateNotesAsync(takeId, String(user.id), notes);
         return res.json({ ok: true });
       } catch (err) {
         console.error("Error in POST /api/gallery/notes", err);
@@ -1238,7 +1238,7 @@ export function initHttpRoutes(app: Express) {
         return res.status(400).json({ error: "id_required" });
       }
 
-      const row = GalleryStore.getById(id, String(user.id));
+      const row = await getByIdAsync(id, String(user.id));
       if (!row) {
         return res.status(404).json({ error: "not_found" });
       }
@@ -1320,7 +1320,7 @@ export function initHttpRoutes(app: Express) {
       }
 
       const id = req.params.id;
-      const row = GalleryStore.getById(String(id), String(user.id));
+      const row = await getByIdAsync(String(id), String(user.id));
       if (!row) {
         return res.status(404).json({ error: "not_found" });
       }
