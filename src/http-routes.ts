@@ -751,6 +751,18 @@ export function initHttpRoutes(app: Express) {
       const id = crypto.randomUUID();
       const dest = path.join(ASSETS_DIR, `${id}.mp3`);
       fs.copyFileSync(outPath, dest);
+
+      // Upload to R2 if enabled
+      if (r2Enabled()) {
+        try {
+          const r2Key = `renders/${id}.mp3`;
+          await r2PutFile(r2Key, dest, "audio/mpeg");
+          console.log("[debug/tts_line] Uploaded to R2: key=%s", r2Key);
+        } catch (err) {
+          console.warn("[debug/tts_line] R2 upload failed:", err);
+        }
+      }
+
       const base = baseUrlFrom(req);
       return res.json({ ok: true, url: `${base}/api/assets/${id}` });
     } catch (err: any) {
@@ -896,6 +908,18 @@ export function initHttpRoutes(app: Express) {
     const renderId = crypto.randomUUID();
     renders.set(renderId, { status: "working", accounted: false });
     const file = writeSilentMp3(renderId);
+
+    // Upload to R2 if enabled
+    if (r2Enabled()) {
+      try {
+        const r2Key = `renders/${renderId}.mp3`;
+        await r2PutFile(r2Key, file, "audio/mpeg");
+        console.log("[debug/render] Uploaded to R2: key=%s", r2Key);
+      } catch (err) {
+        console.warn("[debug/render] R2 upload failed:", err);
+      }
+    }
+
     const job = { status: "complete" as const, file, accounted: false };
     try {
       console.log(
@@ -1223,6 +1247,10 @@ export function initHttpRoutes(app: Express) {
   );
 
   api.get("/gallery/:id/mixed_file", requireUser, async (req: Request, res: Response) => {
+    let tempTakeFile: string | null = null;
+    let tempReaderFile: string | null = null;
+    let tempOutputFile: string | null = null;
+
     try {
       if (!mixdownEnabled) {
         return res.status(404).send("Not Found");
@@ -1245,70 +1273,194 @@ export function initHttpRoutes(app: Express) {
 
       const filePath = (row as any).file_path as string;
       const readerId = (row as any).reader_render_id as string | undefined;
-      if (!filePath || !fs.existsSync(filePath)) {
+      const takeName = (row as any).name || "take";
+
+      if (!filePath) {
         return res.status(404).json({ error: "file_missing" });
       }
       if (!readerId) {
         return res.status(404).json({ error: "reader_missing" });
       }
-      const readerFile = path.join(ASSETS_DIR, `${readerId}.mp3`);
-      if (!fs.existsSync(readerFile)) {
-        return res.status(404).json({ error: "reader_audio_missing" });
-      }
 
-      const takeStat = fs.statSync(filePath);
-      const readerStat = fs.statSync(readerFile);
-      const outPath = path.join(path.dirname(filePath), `${id}.mixed.mp4`);
-      const outExists = fs.existsSync(outPath);
-      const needsRebuild =
-        !outExists ||
-        fs.statSync(outPath).mtimeMs <
-          Math.max(takeStat.mtimeMs, readerStat.mtimeMs);
+      // Check if download is requested
+      const wantsDownload =
+        (typeof req.query?.download === "string" && req.query.download === "1") ||
+        (typeof req.query?.dl === "string" && req.query.dl === "1");
 
-      if (needsRebuild) {
-        const filter =
-          "[1:a]aecho=0.6:0.5:30|45:0.25,highpass=f=160,lowpass=f=7200,volume=0.55[room];" +
-          "[0:a][room]amix=inputs=2:duration=first:dropout_transition=4[aout]";
-        const baseArgs = [
-          "-y",
-          "-i",
-          filePath,
-          "-i",
-          readerFile,
-          "-filter_complex",
-          filter,
-          "-map",
-          "0:v",
-          "-map",
-          "[aout]",
-          "-c:a",
-          "aac",
-          "-movflags",
-          "+faststart",
-        ];
+      const force = String(req.query?.force || "") === "1";
 
-        try {
-          await runFfmpeg([...baseArgs, "-c:v", "copy", outPath]);
-        } catch (err) {
-          console.warn("[gallery] mixed copy failed, retrying with transcode", err);
-          await runFfmpeg([
-            ...baseArgs,
-            "-c:v",
-            "libx264",
-            "-preset",
-            "veryfast",
-            "-crf",
-            "22",
-            outPath,
-          ]);
+      // Determine if take is from R2
+      const isR2Take = filePath.startsWith("r2://");
+      let actualTakeFile = filePath;
+
+      // Handle R2 take - download to temp
+      if (isR2Take) {
+        const r2Key = filePath.substring(5); // Remove "r2://" prefix
+        const mixKey = `mix/${user.id}/${id}.mixed.mp4`;
+
+        // Check if mixed file already exists in R2 (unless force=1)
+        if (!force && r2Enabled()) {
+          try {
+            const mixHead = await r2Head(mixKey);
+            if (mixHead.exists) {
+              console.log("[gallery/mixed_file] Found existing mix in R2: key=%s", mixKey);
+              // Stream from R2
+              const { stream, contentType, contentLength } = await r2GetObjectStream(mixKey);
+              res.setHeader("Content-Type", contentType || "video/mp4");
+              if (contentLength !== undefined) {
+                res.setHeader("Content-Length", contentLength);
+              }
+              if (wantsDownload) {
+                const safeName = takeName.replace(/[^\w.-]+/g, "_").slice(0, 80) || "take";
+                res.setHeader("Content-Disposition", `attachment; filename="${safeName}.mixed.mp4"`);
+              }
+              return stream.pipe(res);
+            }
+          } catch (err) {
+            console.warn("[gallery/mixed_file] R2 mix check failed:", err);
+          }
+        }
+
+        // Download take from R2 to temp
+        const tmpDir = path.join(process.cwd(), "uploads", "tmp");
+        fs.mkdirSync(tmpDir, { recursive: true });
+        tempTakeFile = path.join(tmpDir, `${id}.take.tmp`);
+
+        console.log("[gallery/mixed_file] Downloading take from R2 to temp: key=%s", r2Key);
+        const { stream: takeStream } = await r2GetObjectStream(r2Key);
+        await new Promise<void>((resolve, reject) => {
+          const writeStream = fs.createWriteStream(tempTakeFile!);
+          takeStream.pipe(writeStream);
+          writeStream.on("finish", () => resolve());
+          writeStream.on("error", reject);
+        });
+
+        actualTakeFile = tempTakeFile;
+      } else {
+        // Local take
+        if (!fs.existsSync(filePath)) {
+          return res.status(404).json({ error: "file_missing" });
         }
       }
 
+      // Handle reader MP3
+      const readerFile = path.join(ASSETS_DIR, `${readerId}.mp3`);
+      let actualReaderFile = readerFile;
+
+      if (!fs.existsSync(readerFile)) {
+        // Try to download from R2
+        if (r2Enabled()) {
+          const r2Key = `renders/${readerId}.mp3`;
+          console.log("[gallery/mixed_file] Downloading reader from R2 to temp: key=%s", r2Key);
+
+          const tmpDir = path.join(process.cwd(), "uploads", "tmp");
+          fs.mkdirSync(tmpDir, { recursive: true });
+          tempReaderFile = path.join(tmpDir, `${readerId}.reader.mp3`);
+
+          const { stream: readerStream } = await r2GetObjectStream(r2Key);
+          await new Promise<void>((resolve, reject) => {
+            const writeStream = fs.createWriteStream(tempReaderFile!);
+            readerStream.pipe(writeStream);
+            writeStream.on("finish", () => resolve());
+            writeStream.on("error", reject);
+          });
+
+          actualReaderFile = tempReaderFile;
+        } else {
+          return res.status(404).json({ error: "reader_audio_missing" });
+        }
+      }
+
+      // Determine output path
+      let outPath: string;
+      if (isR2Take) {
+        const tmpDir = path.join(process.cwd(), "uploads", "tmp");
+        fs.mkdirSync(tmpDir, { recursive: true });
+        tempOutputFile = path.join(tmpDir, `${id}.mixed.mp4`);
+        outPath = tempOutputFile;
+      } else {
+        outPath = path.join(path.dirname(filePath), `${id}.mixed.mp4`);
+      }
+
+      // Run ffmpeg to create mixed file
+      const filter =
+        "[1:a]aecho=0.6:0.5:30|45:0.25,highpass=f=160,lowpass=f=7200,volume=0.55[room];" +
+        "[0:a][room]amix=inputs=2:duration=first:dropout_transition=4[aout]";
+      const baseArgs = [
+        "-y",
+        "-i",
+        actualTakeFile,
+        "-i",
+        actualReaderFile,
+        "-filter_complex",
+        filter,
+        "-map",
+        "0:v",
+        "-map",
+        "[aout]",
+        "-c:a",
+        "aac",
+        "-movflags",
+        "+faststart",
+      ];
+
+      console.log("[gallery/mixed_file] Running ffmpeg for take=%s", id);
+      try {
+        await runFfmpeg([...baseArgs, "-c:v", "copy", outPath]);
+      } catch (err) {
+        console.warn("[gallery/mixed_file] mixed copy failed, retrying with transcode", err);
+        await runFfmpeg([
+          ...baseArgs,
+          "-c:v",
+          "libx264",
+          "-preset",
+          "veryfast",
+          "-crf",
+          "22",
+          outPath,
+        ]);
+      }
+
+      // Upload to R2 if take was from R2
+      if (isR2Take && r2Enabled()) {
+        const mixKey = `mix/${user.id}/${id}.mixed.mp4`;
+        console.log("[gallery/mixed_file] Uploading mixed file to R2: key=%s", mixKey);
+        await r2PutFile(mixKey, outPath, "video/mp4");
+      }
+
+      // Send file
       res.type("video/mp4");
+      if (wantsDownload) {
+        const safeName = takeName.replace(/[^\w.-]+/g, "_").slice(0, 80) || "take";
+        res.setHeader("Content-Disposition", `attachment; filename="${safeName}.mixed.mp4"`);
+      }
       return res.sendFile(outPath);
     } catch (err) {
       console.error("Error in GET /api/gallery/:id/mixed_file", err);
       return res.status(500).json({ error: "internal_error" });
+    } finally {
+      // Cleanup temp files (best effort)
+      if (tempTakeFile) {
+        try {
+          fs.unlinkSync(tempTakeFile);
+        } catch (e) {
+          console.warn("[gallery/mixed_file] Failed to cleanup temp take file:", e);
+        }
+      }
+      if (tempReaderFile) {
+        try {
+          fs.unlinkSync(tempReaderFile);
+        } catch (e) {
+          console.warn("[gallery/mixed_file] Failed to cleanup temp reader file:", e);
+        }
+      }
+      if (tempOutputFile) {
+        try {
+          fs.unlinkSync(tempOutputFile);
+        } catch (e) {
+          console.warn("[gallery/mixed_file] Failed to cleanup temp output file:", e);
+        }
+      }
     }
   });
 
@@ -1466,11 +1618,47 @@ export function initHttpRoutes(app: Express) {
     }
   });
 
-  api.get("/assets/:render_id", (req: Request, res: Response) => {
-    const file = path.join(ASSETS_DIR, `${String(req.params.render_id)}.mp3`);
-    if (!fs.existsSync(file)) return res.status(404).send("Not Found");
-    res.setHeader("Content-Type", "audio/mpeg");
-    fs.createReadStream(file).pipe(res);
+  api.get("/assets/:render_id", async (req: Request, res: Response) => {
+    try {
+      const renderId = String(req.params.render_id);
+      const file = path.join(ASSETS_DIR, `${renderId}.mp3`);
+
+      // If local file exists, stream it
+      if (fs.existsSync(file)) {
+        res.setHeader("Content-Type", "audio/mpeg");
+        res.setHeader("Accept-Ranges", "bytes");
+        return fs.createReadStream(file).pipe(res);
+      }
+
+      // Otherwise, try R2 if enabled
+      if (r2Enabled()) {
+        const r2Key = `renders/${renderId}.mp3`;
+        const rangeHeader = req.headers.range;
+
+        const { stream, contentType, contentLength, contentRange, statusCode } =
+          await r2GetObjectStream(r2Key, rangeHeader);
+
+        res.setHeader("Accept-Ranges", "bytes");
+        res.setHeader("Content-Type", contentType || "audio/mpeg");
+
+        if (contentLength !== undefined) {
+          res.setHeader("Content-Length", contentLength);
+        }
+
+        if (contentRange) {
+          res.setHeader("Content-Range", contentRange);
+        }
+
+        res.status(statusCode);
+        return stream.pipe(res);
+      }
+
+      // Not found
+      return res.status(404).send("Not Found");
+    } catch (err) {
+      console.error("Error in GET /api/assets/:render_id", err);
+      return res.status(500).send("Internal Server Error");
+    }
   });
 
   // Mount routers on the main app
