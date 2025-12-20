@@ -6,7 +6,7 @@ import * as path from "path";
 import * as fs from "fs";
 import * as os from "os";
 import crypto from "crypto";
-import { spawn } from "child_process";
+import { spawn, execFileSync } from "child_process";
 import db, { dbGet, dbAll, dbRun, USING_POSTGRES, listByUserAsync, getByIdAsync, saveAsync, deleteByIdAsync, updateNotesAsync } from "./lib/db";
 import { generateReaderMp3, ttsProvider } from "./lib/tts";
 import { isSttEnabled, transcribeChunk } from "./lib/stt";
@@ -253,11 +253,51 @@ function parseScenesFromText(text: string): Scene[] {
   return [scene];
 }
 
-// ---------- Silent MP3 stub ----------
-function writeSilentMp3(renderId: string): string {
-  const safe = renderId.replace(/[^a-zA-Z0-9_-]/g, "_");
+// ---------- Silent MP3 generation ----------
+// 0.5s mono silence @ 44.1kHz, generated via ffmpeg and base64-encoded.
+const SILENT_MP3_BASE64 =
+  "//uQxAAAAAAAAAAAAAAAAAAAAAAAWGluZwAAAA8AAAACAAADhAC7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7//////////////////////////////////////////////////////////////////8AAAAATGF2YzU4LjEzAAAAAAAAAAAAAAAAJAQKAAAAAAAAA4SJ8+5xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD/+xDEAAPAAAGkAAAAIAAANIAAAARMQBVAfAQAb+////vaGJAGC4Pf///6QRdDv/yAHjKf/////+oEMCCf///9QA8ZT//////1AhgQT////qAHjKf//////UAOGUv////9QI4ES/////0AOGUv////+gBw4l/////9ADhlL//////UAOHEv////+oBw4l//////0AOGM//////+gBwxn//////9ADhjP//////oAcMZ///////QA4Yz//////9ADhjP//////oAcMZ///////QA4Y////////UAOGMv//////+gBwxl///////0AOGM///////+gBwxn///////9ADhjP//////oAcMZ////////UAOGUv//////+gBw4l///////0AOGU////////UAOJEv//////+gBxFL//////0AcRS///////oAcRxf//////9AHEQX//////oAcRBf//////UAcRS///////0AcRRf//////oAcRhf//////UAcRy///////0AcRxf//////oAcRxf//////UAcSBf//////0AcSBf//////oA4kC///////UAcSxf//////0AcSxf//////oA4lC////////UAcShf//////+gDiYL///////0AcTBf//////oA4mC////////UAcTRf//////+gDiUL///////0AcShf//////oA4mC////////UAcTBf//////+gDiUL///////0AcShf//////oA4mC////////UAcTBf//////+gDiYL///////0AcShf//////oA4lC////////UAcSxf//////+gDiUL///////0AcShf//////oA4lC////////UAcSxf//////+gDiQL///////0AcSBf//////oA4kC////////UAcRxf//////+gDiQL///////0AcSBf//////oA4kC////////UAcRhf//////+gDiOL///////0AcRxf//////oAcRhf//////9ADiOL//////oAcRxf//////UAcRhf//////0AcRBf//////oAcRBf//////9AHEQX//////oAcRRf//////UAcRBf//////0AHEQX//////oAcRRf//////9ADiKL//////oAcRRf//////UAcRRf//////0AHRSWAAAAP/7EMQA8AAAaQAAAAgAAA0gAAABEv////9AFxFL//////UAXEMv//////9AHEQv//////oAuJAv//////QBxLL//////0AXEsv//////oA4kC///////UBcRS///////9AFxFF//////oA4kC///////UBcRS////////AHEgX//////+gDiQL///////0AXEgX//////oA4kC////////UAcSBf//////+gDiQL///////0AcSxf//////oA4mC////////UAcTBf//////+gDiYL///////0AcTRf//////oA4mC////////UAcTRf//////+gDicL///////0AcThf//////oA4nC////////UAcThf//////+gDikL///////0AcThf//////oA4oC////////UAcTxf//////+gDikL///////0AcThf//////oA4pC////////UAcUBf//////+gDikL///////0AcURf//////oA4pC////////UAcURf//////+gDioL///////0AcURf//////oA4qC////////UAcUhf//////+gDioL///////0AcURf//////oA4rC////////UAcUxf//////+gDiwL///////0AcUxf//////oA4sC////////UAcVBf//////+gDiwL///////0AcVRf//////oA4sC////////UAcVhf//////+gDi0L///////0AcVxf//////oA4tC////////UAcVxf//////+gDi4L///////0AcWBf//////oA4uC////////UAcWBf//////+gDi8L///////0AcWRf//////oA4vC////////UAcWRf//////+gDjAL///////0AcWhf//////oA4wC////////UAcWxf//////+gDjEL///////0AcWxf//////oA4xC////////UAcXBf//////+g==";
+
+function writeSilentMp3(id: string): string {
+  const safe = id.replace(/[^\w.-]+/g, "_");
   const file = path.join(ASSETS_DIR, `${safe}.mp3`);
-  if (!fs.existsSync(file)) fs.writeFileSync(file, Buffer.from([]));
+  fs.mkdirSync(ASSETS_DIR, { recursive: true });
+
+  // If a previous file exists and is non-trivial, keep it.
+  try {
+    if (fs.existsSync(file) && fs.statSync(file).size > 512) return file;
+  } catch {}
+
+  // Prefer generating a real MP3 with ffmpeg (Render already uses ffmpeg for mixdown).
+  try {
+    execFileSync(
+      "ffmpeg",
+      [
+        "-y",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        "anullsrc=r=44100:cl=mono",
+        "-t",
+        "0.5",
+        "-q:a",
+        "9",
+        "-acodec",
+        "libmp3lame",
+        file,
+      ],
+      { stdio: "ignore" }
+    );
+    if (fs.existsSync(file) && fs.statSync(file).size > 512) return file;
+  } catch (err) {
+    console.warn("[debug/render] ffmpeg silent mp3 generation failed; falling back to embedded silence:", err);
+  }
+
+  // Fallback: embedded 0.5s silent MP3 (valid container, non-zero bytes).
+  fs.writeFileSync(file, Buffer.from(SILENT_MP3_BASE64, "base64"));
   return file;
 }
 
@@ -896,7 +936,11 @@ export function initHttpRoutes(app: Express) {
       return res.status(401).json({ error: "unauthorized" });
     }
 
-    const { script_id, scene_id, role } = req.body || {};
+    const body = req.body || {};
+    const script_id = body.script_id;
+    const scene_id = body.scene_id || body.script_id; // default single-scene behavior
+    const roleRaw = body.role ?? body.my_role; // accept legacy client payload
+    const role = String(roleRaw || "").toUpperCase();
     if (!script_id || !scene_id || !role) {
       return res.status(400).json({ error: "script_id, scene_id, role required" });
     }
@@ -1391,6 +1435,15 @@ export function initHttpRoutes(app: Express) {
       } else {
         console.log("[mixdown] Using local reader file: %s, readerId=%s, takeId=%s", readerFile, readerId, id);
       }
+
+      // IMPORTANT: old builds uploaded 0-byte "silent mp3s". Those break ffmpeg.
+      try {
+        const st = fs.statSync(actualReaderFile);
+        if (st.size < 512) {
+          console.warn("[mixdown] Reader audio is empty/suspiciously small; substituting valid silence. file=%s size=%d", actualReaderFile, st.size);
+          actualReaderFile = writeSilentMp3(readerId);
+        }
+      } catch {}
 
       // Determine output path - always use temp dir to avoid path.dirname(r2://)
       const tmpDir = path.join(os.tmpdir(), "offbook-mix");
