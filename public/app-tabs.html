@@ -11604,6 +11604,15 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
       };
 
+      // Restore render_id from localStorage for Room export
+      if (!R.render_id) {
+        try {
+          R.render_id = localStorage.getItem("offbook:last_render_id") || "";
+        } catch (e) {
+          console.warn("[offbook] Failed to restore render_id:", e);
+        }
+      }
+
       if(R.btnRender && !R.btnRender.dataset.defaultLabel){
 
         R.btnRender.dataset.defaultLabel = R.btnRender.textContent || "Render";
@@ -12194,6 +12203,13 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
           R.render_id = j.render_id;
 
+          // Persist render_id for Room export
+          try {
+            localStorage.setItem("offbook:last_render_id", R.render_id);
+          } catch (e) {
+            console.warn("[offbook] Failed to persist render_id:", e);
+          }
+
           const poll = async ()=>{
 
             const s = await fetch(`/debug/render_status?render_id=${encodeURIComponent(R.render_id)}`, withSecretHeaders({ headers:{...JSON_HDRS} }));
@@ -12459,6 +12475,12 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
 
       async function startRecording(){
+
+        // Guard: Ensure render_id exists for Room export
+        if (!R.render_id && !localStorage.getItem("offbook:last_render_id")) {
+          setStatusRec("Room needs a reader render. Go to Rehearse and tap Render before recording.");
+          return;
+        }
 
         await hardResumeOnGesture();
 
@@ -13138,7 +13160,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
           notes:"",
 
-          readerRenderId: typeof renderId === "string" ? renderId : (typeof R?.render_id === "string" ? R.render_id : ""),
+          readerRenderId: typeof renderId === "string" ? renderId : (typeof R?.render_id === "string" ? R.render_id : (localStorage.getItem("offbook:last_render_id") || "")),
 
           userKey
 
