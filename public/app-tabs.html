@@ -14392,7 +14392,22 @@ const savedStrip = document.getElementById("savedScriptsStrip");
               }));
 
               if (!resp.ok) {
-                throw new Error(`Room download failed (${resp.status})`);
+                let errorDetail = "";
+                try {
+                  const errorData = await resp.json();
+                  errorDetail = errorData.error || "";
+                } catch (e) {
+                  // Not JSON, try text
+                  try {
+                    errorDetail = await resp.text();
+                  } catch (e2) {
+                    // Ignore
+                  }
+                }
+                const errorMsg = errorDetail
+                  ? `Room download failed (${resp.status}): ${errorDetail}`
+                  : `Room download failed (${resp.status})`;
+                throw new Error(errorMsg);
               }
 
               const blob = await resp.blob();

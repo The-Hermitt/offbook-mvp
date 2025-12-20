@@ -1252,20 +1252,23 @@ export function initHttpRoutes(app: Express) {
     let tempReaderFile: string | null = null;
     let tempOutputFile: string | null = null;
 
+    const id = String(req.params.id || "");
+    const user = (req as any).user || res.locals.user;
+
     try {
       if (!mixdownEnabled) {
-        return res.status(404).send("Not Found");
+        return res.status(404).json({ error: "mixdown_disabled" });
       }
 
-      const user = (req as any).user || res.locals.user;
       if (!user || !user.id) {
         return res.status(401).json({ error: "Unauthorized" });
       }
 
-      const id = String(req.params.id || "");
       if (!id) {
         return res.status(400).json({ error: "id_required" });
       }
+
+      console.log("[mixdown] Processing request for takeId=%s, userId=%s", id, user.id);
 
       const row = await getByIdAsync(id, String(user.id));
       if (!row) {
@@ -1277,9 +1280,11 @@ export function initHttpRoutes(app: Express) {
       const takeName = (row as any).name || "take";
 
       if (!filePath) {
+        console.log("[mixdown] Missing file_path for takeId=%s", id);
         return res.status(404).json({ error: "file_missing" });
       }
       if (!readerId) {
+        console.log("[mixdown] Missing reader_render_id for takeId=%s", id);
         return res.status(404).json({ error: "reader_missing" });
       }
 
@@ -1294,13 +1299,15 @@ export function initHttpRoutes(app: Express) {
       const isR2Take = filePath.startsWith("r2://");
       let actualTakeFile = filePath;
 
+      console.log("[mixdown] Take path type: %s, takeId=%s, userId=%s", isR2Take ? "r2" : "local", id, user.id);
+
       // Check if mixed file already exists in R2 (unless force=1)
       const outKey = `mixed/${user.id}/${id}.mp4`;
       if (!force && r2Enabled()) {
         try {
           const mixHead = await r2Head(outKey);
           if (mixHead.exists) {
-            console.log("[gallery/mixed_file] Found existing mix in R2: key=%s", outKey);
+            console.log("[mixdown] Found existing cached mix in R2: key=%s, takeId=%s, userId=%s", outKey, id, user.id);
             // Stream from R2
             const { stream, contentType, contentLength } = await r2GetObjectStream(outKey);
             res.setHeader("Content-Type", contentType || "video/mp4");
@@ -1314,7 +1321,7 @@ export function initHttpRoutes(app: Express) {
             return stream.pipe(res);
           }
         } catch (err) {
-          console.warn("[gallery/mixed_file] R2 mix check failed:", err);
+          console.warn("[mixdown] R2 cache check failed for takeId=%s: %s", id, err);
         }
       }
 
@@ -1323,11 +1330,11 @@ export function initHttpRoutes(app: Express) {
         const r2Key = filePath.substring(5); // Remove "r2://" prefix
 
         // Download take from R2 to temp
-        const tmpDir = path.join(os.tmpdir(), "offbook-room");
+        const tmpDir = path.join(os.tmpdir(), "offbook-mix");
         fs.mkdirSync(tmpDir, { recursive: true });
         tempTakeFile = path.join(tmpDir, `${id}.mp4`);
 
-        console.log("[gallery/mixed_file] Downloading take from R2 to temp: key=%s", r2Key);
+        console.log("[mixdown] Downloading R2 take to temp: key=%s, takeId=%s, userId=%s", r2Key, id, user.id);
         const { stream: takeStream } = await r2GetObjectStream(r2Key);
         await new Promise<void>((resolve, reject) => {
           const writeStream = fs.createWriteStream(tempTakeFile!);
@@ -1337,9 +1344,12 @@ export function initHttpRoutes(app: Express) {
         });
 
         actualTakeFile = tempTakeFile;
+        console.log("[mixdown] R2 take downloaded successfully, takeId=%s", id);
       } else {
         // Local take
+        console.log("[mixdown] Using local take file: %s, takeId=%s", filePath, id);
         if (!fs.existsSync(filePath)) {
+          console.log("[mixdown] Local take file not found: %s, takeId=%s", filePath, id);
           return res.status(404).json({ error: "file_missing" });
         }
       }
@@ -1349,31 +1359,41 @@ export function initHttpRoutes(app: Express) {
       let actualReaderFile = readerFile;
 
       if (!fs.existsSync(readerFile)) {
+        console.log("[mixdown] Local reader not found, attempting R2: readerId=%s, takeId=%s", readerId, id);
         // Try to download from R2
         if (r2Enabled()) {
           const r2Key = `renders/${readerId}.mp3`;
-          console.log("[gallery/mixed_file] Downloading reader from R2 to temp: key=%s", r2Key);
+          console.log("[mixdown] Downloading reader from R2 to temp: key=%s, readerId=%s, takeId=%s", r2Key, readerId, id);
 
-          const tmpDir = path.join(os.tmpdir(), "offbook-room");
+          const tmpDir = path.join(os.tmpdir(), "offbook-mix");
           fs.mkdirSync(tmpDir, { recursive: true });
           tempReaderFile = path.join(tmpDir, `${readerId}.mp3`);
 
-          const { stream: readerStream } = await r2GetObjectStream(r2Key);
-          await new Promise<void>((resolve, reject) => {
-            const writeStream = fs.createWriteStream(tempReaderFile!);
-            readerStream.pipe(writeStream);
-            writeStream.on("finish", () => resolve());
-            writeStream.on("error", reject);
-          });
+          try {
+            const { stream: readerStream } = await r2GetObjectStream(r2Key);
+            await new Promise<void>((resolve, reject) => {
+              const writeStream = fs.createWriteStream(tempReaderFile!);
+              readerStream.pipe(writeStream);
+              writeStream.on("finish", () => resolve());
+              writeStream.on("error", reject);
+            });
 
-          actualReaderFile = tempReaderFile;
+            actualReaderFile = tempReaderFile;
+            console.log("[mixdown] Reader downloaded successfully from R2, readerId=%s, takeId=%s", readerId, id);
+          } catch (err) {
+            console.log("[mixdown] Reader not found in R2: key=%s, readerId=%s, takeId=%s, error=%s", r2Key, readerId, id, err);
+            return res.status(404).json({ error: "reader_audio_missing" });
+          }
         } else {
+          console.log("[mixdown] R2 not enabled and local reader missing: readerId=%s, takeId=%s", readerId, id);
           return res.status(404).json({ error: "reader_audio_missing" });
         }
+      } else {
+        console.log("[mixdown] Using local reader file: %s, readerId=%s, takeId=%s", readerFile, readerId, id);
       }
 
       // Determine output path - always use temp dir to avoid path.dirname(r2://)
-      const tmpDir = path.join(os.tmpdir(), "offbook-room");
+      const tmpDir = path.join(os.tmpdir(), "offbook-mix");
       fs.mkdirSync(tmpDir, { recursive: true });
       const outPath = path.join(tmpDir, `${id}.mixed.mp4`);
       tempOutputFile = outPath;
@@ -1400,11 +1420,12 @@ export function initHttpRoutes(app: Express) {
         "+faststart",
       ];
 
-      console.log("[gallery/mixed_file] Running ffmpeg for take=%s", id);
+      console.log("[mixdown] Running ffmpeg to create mixed file, takeId=%s, userId=%s", id, user.id);
       try {
         await runFfmpeg([...baseArgs, "-c:v", "copy", outPath]);
+        console.log("[mixdown] FFmpeg completed successfully (copy mode), takeId=%s", id);
       } catch (err) {
-        console.warn("[gallery/mixed_file] mixed copy failed, retrying with transcode", err);
+        console.warn("[mixdown] FFmpeg copy mode failed, retrying with transcode, takeId=%s: %s", id, err);
         await runFfmpeg([
           ...baseArgs,
           "-c:v",
@@ -1415,12 +1436,14 @@ export function initHttpRoutes(app: Express) {
           "22",
           outPath,
         ]);
+        console.log("[mixdown] FFmpeg completed successfully (transcode mode), takeId=%s", id);
       }
 
       // Upload to R2 if enabled
       if (r2Enabled()) {
-        console.log("[gallery/mixed_file] Uploading mixed file to R2: key=%s", outKey);
+        console.log("[mixdown] Uploading mixed file to R2: key=%s, takeId=%s, userId=%s", outKey, id, user.id);
         await r2PutFile(outKey, outPath, "video/mp4");
+        console.log("[mixdown] Upload to R2 completed successfully, takeId=%s", id);
       }
 
       // Send file
@@ -1430,6 +1453,8 @@ export function initHttpRoutes(app: Express) {
         res.setHeader("Content-Disposition", `attachment; filename="${safeName}-room.mp4"`);
       }
 
+      console.log("[mixdown] Sending mixed file to client, takeId=%s, userId=%s", id, user.id);
+
       // Stream file and cleanup after
       res.sendFile(outPath, (err) => {
         // Cleanup temp files after sending (best effort)
@@ -1437,29 +1462,31 @@ export function initHttpRoutes(app: Express) {
           try {
             fs.unlinkSync(tempTakeFile);
           } catch (e) {
-            console.warn("[gallery/mixed_file] Failed to cleanup temp take file:", e);
+            console.warn("[mixdown] Failed to cleanup temp take file:", e);
           }
         }
         if (tempReaderFile) {
           try {
             fs.unlinkSync(tempReaderFile);
           } catch (e) {
-            console.warn("[gallery/mixed_file] Failed to cleanup temp reader file:", e);
+            console.warn("[mixdown] Failed to cleanup temp reader file:", e);
           }
         }
         if (tempOutputFile) {
           try {
             fs.unlinkSync(tempOutputFile);
           } catch (e) {
-            console.warn("[gallery/mixed_file] Failed to cleanup temp output file:", e);
+            console.warn("[mixdown] Failed to cleanup temp output file:", e);
           }
         }
         if (err) {
-          console.error("[gallery/mixed_file] Error sending file:", err);
+          console.error("[mixdown] Error sending file, takeId=%s: %s", id, err);
+        } else {
+          console.log("[mixdown] File sent successfully and temp files cleaned up, takeId=%s", id);
         }
       });
     } catch (err) {
-      console.error("Error in GET /api/gallery/:id/mixed_file", err);
+      console.error("[mixdown] Error processing mixed file request, takeId=%s, userId=%s: %s", id, user?.id, err);
       // Cleanup temp files on error (best effort)
       if (tempTakeFile) {
         try {
