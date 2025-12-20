@@ -14577,6 +14577,12 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
           try{ preloadReaderBuffers(); }catch{}
 
+          // NEW: Room requires a server reader render_id. If we don't have one yet,
+          // generate it now so recording + Room export work.
+          if(!R.render_id){
+            await prepareReader();
+          }
+
           return;
 
         }
