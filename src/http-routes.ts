@@ -4,19 +4,14 @@ import express from "express";
 import multer from "multer";
 import * as path from "path";
 import * as fs from "fs";
-import { promises as fsPromises } from "fs";
 import crypto from "crypto";
 import { spawn } from "child_process";
-import os from "os";
-import { createRequire } from "module";
-import db, { GalleryStore, dbGet, dbAll, dbRun, USING_POSTGRES, galleryListByUser, galleryGetById, gallerySave, galleryDeleteById, galleryUpdateNotes } from "./lib/db";
+import db, { GalleryStore, dbGet, dbAll, dbRun, USING_POSTGRES } from "./lib/db";
 import { generateReaderMp3, ttsProvider } from "./lib/tts";
 import { isSttEnabled, transcribeChunk } from "./lib/stt";
 import { makeAuditMiddleware } from "./lib/audit";
 import { makeRateLimiters } from "./middleware/rateLimit";
 import { getPasskeySession, noteRenderComplete, ensureSid } from "./routes/auth";
-import { r2Enabled, r2PutObject, r2GetSignedUrl, r2DeleteObject, r2HeadObject } from "./lib/r2";
-import ffmpegPath from "ffmpeg-static";
 
 // ---------- Types ----------
 type SceneLine = { speaker: string; text: string };
@@ -53,7 +48,6 @@ const renders = new Map<string, {
   err?: string;
   accounted?: boolean;
 }>();
-const clientLogs: any[] = [];
 
 type ScriptRow = {
   id: string;
@@ -392,56 +386,16 @@ export function initHttpRoutes(app: Express) {
     process.env.MIXDOWN_ENABLED !== "0" &&
     process.env.MIXDOWN_ENABLED.toLowerCase() !== "false";
 
-  // Resolve ffmpeg binary path
-  let FFMPEG_BIN = "ffmpeg";
-  try {
-    if (process.env.FFMPEG_PATH) {
-      FFMPEG_BIN = process.env.FFMPEG_PATH;
-    } else {
-      const require = createRequire(import.meta.url);
-      const ffmpegStatic = require("ffmpeg-static");
-      if (ffmpegStatic) FFMPEG_BIN = ffmpegStatic;
-    }
-  } catch {
-    // Fall back to "ffmpeg"
-  }
-
-  class FfmpegError extends Error {
-    bin: string;
-    args: string[];
-    code: number | null;
-    stderrTail: string;
-    constructor(opts: { bin: string; args: string[]; code: number | null; stderrTail: string }) {
-      super(`ffmpeg exited with code ${opts.code}`);
-      this.name = "FfmpegError";
-      this.bin = opts.bin;
-      this.args = opts.args;
-      this.code = opts.code;
-      this.stderrTail = opts.stderrTail;
-    }
-  }
-
   function runFfmpeg(args: string[]): Promise<void> {
     return new Promise((resolve, reject) => {
-      const proc = spawn(FFMPEG_BIN, args);
+      const proc = spawn("ffmpeg", args);
       let stderr = "";
-      proc.stderr?.on("data", (d) => {
-        stderr += d.toString();
-        // Keep last 65536 chars max
-        if (stderr.length > 65536) {
-          stderr = stderr.slice(-65536);
-        }
-      });
+      proc.stderr?.on("data", (d) => (stderr += d.toString()));
       proc.on("error", (err) => reject(err));
       proc.on("close", (code) => {
         if (code === 0) return resolve();
-        const stderrTail = stderr.slice(-16384);
-        return reject(new FfmpegError({
-          bin: FFMPEG_BIN,
-          args,
-          code,
-          stderrTail,
-        }));
+        const err = new Error(`ffmpeg exited with code ${code}: ${stderr}`);
+        return reject(err);
       });
     });
   }
@@ -456,37 +410,9 @@ export function initHttpRoutes(app: Express) {
   });
 
   // GET /debug/whoami - shows current user session info
-  debug.get("/whoami", requireUser, (req: Request, res: Response) => {
-    const user = (req as any).user || res.locals.user;
-    res.json({ ok: true, userId: String(user.id || "") });
-  });
-
-  debug.get("/gallery_row", requireUser, async (req: Request, res: Response) => {
-    const user = (req as any).user || res.locals.user;
-    const id = String(req.query.id || "");
-    if (!id) {
-      return res.status(400).json({ error: "id_required" });
-    }
-
-    try {
-      const row = await galleryGetById(id, String(user.id));
-      if (!row) {
-        return res.json({ found: false, id, userId: String(user.id) });
-      }
-
-      const rowData = row as any;
-      return res.json({
-        found: true,
-        id,
-        userId: String(user.id),
-        file_path: rowData.file_path,
-        reader_render_id: rowData.reader_render_id,
-        name: rowData.name,
-      });
-    } catch (err) {
-      console.error("[debug/gallery_row] error", err);
-      return res.status(500).json({ error: "internal_error" });
-    }
+  debug.get("/whoami", (req: Request, res: Response) => {
+    const { passkeyLoggedIn, userId } = getPasskeySession(req as any);
+    res.json({ passkeyLoggedIn, userId });
   });
 
   // GET /debug/my_scripts - list scripts owned by current user
@@ -568,95 +494,6 @@ export function initHttpRoutes(app: Express) {
     }
     const curatedVoices = ["alloy", "echo", "fable", "onyx", "nova", "shimmer"];
     res.json({ ok: true, voices: curatedVoices });
-  });
-
-  // GET /debug/r2_head - check if an R2 object exists
-  debug.get("/r2_head", audit("/debug/r2_head"), async (req: Request, res: Response) => {
-    const key = String(req.query.key || "").trim();
-
-    // Validate key parameter
-    if (!key) {
-      return res.status(400).json({ ok: false, error: "missing_key" });
-    }
-
-    // Reject dangerous keys
-    if (key.includes("..") || key.startsWith("/")) {
-      return res.status(400).json({ ok: false, error: "bad_key" });
-    }
-
-    // Check if R2 is enabled
-    if (!r2Enabled()) {
-      return res.status(200).json({ ok: false, error: "r2_disabled" });
-    }
-
-    try {
-      const headResult = await r2HeadObject(key);
-      console.log("[debug/r2_head] key=%s exists=%s", key, headResult.exists);
-      return res.json({ ok: true, key, ...headResult });
-    } catch (err) {
-      console.error("[debug/r2_head] error for key=%s:", key, err);
-      return res.status(500).json({ ok: false, error: "head_failed" });
-    }
-  });
-
-  // POST /debug/client_log - client error beacon
-  debug.post("/client_log", audit("/debug/client_log"), express.json(), (req: Request, res: Response) => {
-    const body = req.body || {};
-    const level = body.level || "info";
-    const message = body.message || "";
-    const where = body.where || "";
-
-    const entry = {
-      ts: Date.now(),
-      ip: req.ip,
-      ua: req.get("user-agent"),
-      body,
-    };
-
-    clientLogs.push(entry);
-
-    // Keep only last 50 entries
-    if (clientLogs.length > 50) {
-      clientLogs.splice(0, clientLogs.length - 50);
-    }
-
-    console.log("[client_log] %s %s %s", level, where, message);
-    return res.json({ ok: true });
-  });
-
-  // GET /debug/client_logs - view client logs
-  debug.get("/client_logs", audit("/debug/client_logs"), (req: Request, res: Response) => {
-    return res.json({
-      ok: true,
-      count: clientLogs.length,
-      logs: clientLogs,
-    });
-  });
-
-  // GET /debug/ffmpeg - check if ffmpeg is available
-  debug.get("/ffmpeg", audit("/debug/ffmpeg"), async (req: Request, res: Response) => {
-    try {
-      const proc = spawn(FFMPEG_BIN, ["-version"]);
-
-      let stdout = "";
-      let stderr = "";
-
-      proc.stdout?.on("data", (d) => (stdout += d.toString()));
-      proc.stderr?.on("data", (d) => (stderr += d.toString()));
-
-      await new Promise<void>((resolve, reject) => {
-        proc.on("error", (err) => reject(err));
-        proc.on("close", (code) => {
-          if (code === 0) resolve();
-          else reject(new Error(`ffmpeg -version exited with code ${code}`));
-        });
-      });
-
-      const version = stdout.split("\n")[0] || stderr.split("\n")[0] || "unknown";
-      res.json({ ok: true, bin: FFMPEG_BIN, version });
-    } catch (err: any) {
-      res.json({ ok: false, error: err?.message || String(err) });
-    }
   });
 
   // POST /debug/upload_script_text
@@ -887,13 +724,6 @@ export function initHttpRoutes(app: Express) {
       const id = crypto.randomUUID();
       const dest = path.join(ASSETS_DIR, `${id}.mp3`);
       fs.copyFileSync(outPath, dest);
-
-      if (r2Enabled()) {
-        const buffer = fs.readFileSync(dest);
-        await r2PutObject({ key: `renders/${id}.mp3`, body: buffer, contentType: "audio/mpeg" });
-        console.log("[tts_line] uploaded to R2: renders/%s.mp3", id);
-      }
-
       const base = baseUrlFrom(req);
       return res.json({ ok: true, url: `${base}/api/assets/${id}` });
     } catch (err: any) {
@@ -1039,18 +869,6 @@ export function initHttpRoutes(app: Express) {
     const renderId = crypto.randomUUID();
     renders.set(renderId, { status: "working", accounted: false });
     const file = writeSilentMp3(renderId);
-
-    // Upload reader MP3 to R2 immediately so Room mixdown can find it later
-    if (r2Enabled()) {
-      try {
-        const buffer = fs.readFileSync(file);
-        await r2PutObject({ key: `renders/${renderId}.mp3`, body: buffer, contentType: "audio/mpeg" });
-        console.log("[render] uploaded reader mp3 to R2: renders/%s.mp3 bytes=%d", renderId, buffer.length);
-      } catch (err) {
-        console.warn("[render] failed to upload reader mp3 to R2 rid=%s", renderId, err);
-      }
-    }
-
     const job = { status: "complete" as const, file, accounted: false };
     try {
       console.log(
@@ -1099,13 +917,17 @@ export function initHttpRoutes(app: Express) {
   app.use("/debug", debugLimiter, debug);
 
   // --- Gallery API (per-user, authenticated; metadata only) ------------------
-  api.get("/gallery", async (req: Request, res: Response) => {
+  api.get("/gallery", (req: Request, res: Response) => {
     const userId = getUserIdOr401(req, res);
     if (!userId) return;
 
     try {
-      const rows = await galleryListByUser(userId);
-      console.log("[gallery] list user=%s count=%d db=%s", userId, rows.length, USING_POSTGRES ? "pg" : "sqlite");
+      const rows = GalleryStore.listByUser(userId);
+      console.log(
+        "[gallery] list for user=%s, count=%d",
+        userId,
+        Array.isArray(rows) ? rows.length : 0
+      );
       res.json({
         ok: true,
         items: (rows || []).map((r: any) => ({
@@ -1124,13 +946,13 @@ export function initHttpRoutes(app: Express) {
     }
   });
 
-  api.get("/gallery/:id", async (req: Request, res: Response) => {
+  api.get("/gallery/:id", (req: Request, res: Response) => {
     const userId = getUserIdOr401(req, res);
     if (!userId) return;
 
     try {
       const id = String(req.params.id || "");
-      const row = await galleryGetById(id, userId);
+      const row = GalleryStore.getById(id, userId);
 
       if (!row) {
         return res.status(404).json({ error: "not_found" });
@@ -1157,7 +979,7 @@ export function initHttpRoutes(app: Express) {
     "/gallery/upload",
     requireUser,
     galleryUpload.single("file"),
-    async (req: Request, res: Response) => {
+    (req: Request, res: Response) => {
       try {
         const user = (req as any).user || res.locals.user;
         if (!user || !user.id) {
@@ -1191,35 +1013,19 @@ export function initHttpRoutes(app: Express) {
         const sizeNum = Number.isFinite(sizeNumRaw) ? sizeNumRaw : file.size;
         const mime = mime_type || file.mimetype || "video/webm";
 
+        const baseDir = path.join(
+          process.cwd(),
+          "uploads",
+          "gallery",
+          String(user.id)
+        );
+        fs.mkdirSync(baseDir, { recursive: true });
+
         const ext = path.extname(file.originalname || "") || ".webm";
-        let file_path: string;
+        const finalName = `${takeId}${ext}`;
+        const finalPath = path.join(baseDir, finalName);
 
-        if (r2Enabled()) {
-          // Upload to R2
-          const stream = fs.createReadStream(file.path);
-          const key = `takes/${user.id}/${takeId}${ext}`;
-          await r2PutObject({ key, body: stream, contentType: mime, contentLength: file.size });
-
-          // Delete temp file
-          await fsPromises.unlink(file.path).catch(() => {});
-
-          file_path = `r2:${key}`;
-        } else {
-          // Local disk storage
-          const baseDir = path.join(
-            process.cwd(),
-            "uploads",
-            "gallery",
-            String(user.id)
-          );
-          fs.mkdirSync(baseDir, { recursive: true });
-
-          const finalName = `${takeId}${ext}`;
-          const finalPath = path.join(baseDir, finalName);
-          fs.renameSync(file.path, finalPath);
-
-          file_path = finalPath;
-        }
+        fs.renameSync(file.path, finalPath);
 
         const notesVal =
           typeof notes === "string"
@@ -1238,16 +1044,7 @@ export function initHttpRoutes(app: Express) {
             ? render_id.trim()
             : null;
 
-        console.log(
-          "[gallery] upload incoming: user=%s id=%s size=%s mime=%s reader_render_id=%s",
-          user.id,
-          takeId,
-          sizeNum,
-          mime,
-          readerRenderId ? "yes" : "no"
-        );
-
-        await gallerySave({
+        GalleryStore.save({
           id: String(takeId),
           user_id: String(user.id),
           script_id: script_id || null,
@@ -1259,7 +1056,7 @@ export function initHttpRoutes(app: Express) {
           note: noteVal,
           notes: notesVal,
           reader_render_id: readerRenderId,
-          file_path: file_path,
+          file_path: finalPath,
         });
 
         console.log(
@@ -1268,7 +1065,7 @@ export function initHttpRoutes(app: Express) {
           String(takeId),
           sizeNum,
           mime,
-          file_path
+          finalPath
         );
 
         res.json({
@@ -1288,7 +1085,7 @@ export function initHttpRoutes(app: Express) {
     "/gallery/delete",
     requireUser,
     express.json(),
-    async (req: Request, res: Response) => {
+    (req: Request, res: Response) => {
       try {
         const user = (req as any).user || res.locals.user;
         if (!user || !user.id) {
@@ -1300,32 +1097,21 @@ export function initHttpRoutes(app: Express) {
           return res.status(400).json({ error: "take_id_required" });
         }
 
-        const row = await galleryGetById(takeId, String(user.id));
+        const row = GalleryStore.getById(takeId, String(user.id));
         if (!row) {
           return res.status(404).json({ error: "not_found" });
         }
 
         const filePath = (row as any).file_path as string;
         try {
-          if (filePath) {
-            if (filePath.startsWith("r2:")) {
-              // Delete from R2
-              const key = filePath.slice(3);
-              await r2DeleteObject(key);
-
-              // Also delete the cached room mix
-              const mixedKey = `takes/${user.id}/${takeId}.mixed.mp4`;
-              await r2DeleteObject(mixedKey).catch(() => {});
-            } else if (fs.existsSync(filePath)) {
-              // Delete from local disk
-              fs.unlinkSync(filePath);
-            }
+          if (filePath && fs.existsSync(filePath)) {
+            fs.unlinkSync(filePath);
           }
         } catch (e) {
-          console.warn("[gallery] delete failed for", takeId, e);
+          console.warn("[gallery] unlink failed for", takeId, e);
         }
 
-        await galleryDeleteById(takeId, String(user.id));
+        GalleryStore.deleteById(takeId, String(user.id));
         return res.json({ ok: true });
       } catch (err) {
         console.error("Error in POST /api/gallery/delete", err);
@@ -1338,7 +1124,7 @@ export function initHttpRoutes(app: Express) {
     "/gallery/notes",
     requireUser,
     express.json(),
-    async (req: Request, res: Response) => {
+    (req: Request, res: Response) => {
       try {
         const user = (req as any).user || res.locals.user;
         if (!user || !user.id) {
@@ -1352,12 +1138,12 @@ export function initHttpRoutes(app: Express) {
           return res.status(400).json({ error: "take_id_required" });
         }
 
-        const row = await galleryGetById(takeId, String(user.id));
+        const row = GalleryStore.getById(takeId, String(user.id));
         if (!row) {
           return res.status(404).json({ error: "not_found" });
         }
 
-        await galleryUpdateNotes(takeId, String(user.id), notes);
+        GalleryStore.updateNotes(takeId, String(user.id), notes);
         return res.json({ ok: true });
       } catch (err) {
         console.error("Error in POST /api/gallery/notes", err);
@@ -1367,10 +1153,8 @@ export function initHttpRoutes(app: Express) {
   );
 
   api.get("/gallery/:id/mixed_file", requireUser, async (req: Request, res: Response) => {
-    let stage = "start";
     try {
       if (!mixdownEnabled) {
-        console.warn("[gallery/mixed] 404 mixdown_disabled");
         return res.status(404).send("Not Found");
       }
 
@@ -1384,182 +1168,23 @@ export function initHttpRoutes(app: Express) {
         return res.status(400).json({ error: "id_required" });
       }
 
-      const row = await galleryGetById(id, String(user.id));
+      const row = GalleryStore.getById(id, String(user.id));
       if (!row) {
-        console.warn("[gallery/mixed] 404 not_found id=%s user=%s", id, user.id);
         return res.status(404).json({ error: "not_found" });
       }
 
       const filePath = (row as any).file_path as string;
       const readerId = (row as any).reader_render_id as string | undefined;
-      if (!filePath) {
-        console.warn("[gallery/mixed] 404 file_missing id=%s user=%s", id, user.id);
+      if (!filePath || !fs.existsSync(filePath)) {
         return res.status(404).json({ error: "file_missing" });
       }
       if (!readerId) {
-        console.warn("[gallery/mixed] 404 reader_missing id=%s user=%s", id, user.id);
         return res.status(404).json({ error: "reader_missing" });
       }
-
-      const wantsDownload =
-        (typeof req.query?.download === "string" && req.query.download === "1") ||
-        (typeof req.query?.dl === "string" && req.query.dl === "1");
-
-      // R2 storage path
-      if (filePath.startsWith("r2:")) {
-        const takeKey = filePath.slice(3);
-        const mixedKey = `mixed/${user.id}/${id}.mp4`;
-
-        console.log("[gallery/mixed] R2 mode: takeKey=%s mixedKey=%s", takeKey, mixedKey);
-
-        // Check if mixed version already exists in R2
-        let mixedExists = false;
-        try {
-          const testUrl = await r2GetSignedUrl({ key: mixedKey, expiresSeconds: 60 });
-          const testResp = await fetch(testUrl, { method: "HEAD" });
-          mixedExists = testResp.ok;
-        } catch {
-          mixedExists = false;
-        }
-
-        if (!mixedExists) {
-          console.log("[gallery/mixed] Mixed not cached, generating: id=%s", id);
-
-          // Ensure temp dir exists (use OS temp for Render-safety)
-          const tmpBase = path.join(os.tmpdir(), "offbook");
-          await fsPromises.mkdir(tmpBase, { recursive: true });
-
-          // Download take from R2 to temp file
-          stage = "download_take";
-          console.log("[gallery/mixed] Downloading take from R2: key=%s", takeKey);
-          const takeUrl = await r2GetSignedUrl({ key: takeKey, expiresSeconds: 600 });
-          const takeResp = await fetch(takeUrl);
-          if (!takeResp.ok) {
-            console.warn("[gallery/mixed] 404 take_download_failed id=%s user=%s takeKey=%s", id, user.id, takeKey);
-            return res.status(404).json({ error: "take_download_failed" });
-          }
-          const takeBuffer = Buffer.from(await takeResp.arrayBuffer());
-          const tempTakePath = path.join(tmpBase, `take-${id}-${Date.now()}.webm`);
-          await fsPromises.writeFile(tempTakePath, takeBuffer);
-          console.log("[gallery/mixed] Downloaded take: size=%d path=%s", takeBuffer.length, tempTakePath);
-
-          // Get reader audio (local or R2)
-          stage = "download_reader";
-          let readerPath: string;
-          const localReaderFile = path.join(ASSETS_DIR, `${readerId}.mp3`);
-          if (fs.existsSync(localReaderFile)) {
-            console.log("[gallery/mixed] Using local reader: path=%s", localReaderFile);
-            readerPath = localReaderFile;
-          } else if (r2Enabled()) {
-            console.log("[gallery/mixed] Downloading reader from R2: key=renders/%s.mp3", readerId);
-            const readerKey = `renders/${readerId}.mp3`;
-            const readerUrl = await r2GetSignedUrl({ key: readerKey, expiresSeconds: 600 });
-            const readerResp = await fetch(readerUrl);
-            if (!readerResp.ok) {
-              console.warn("[gallery/mixed] 404 reader_audio_missing (R2) id=%s user=%s readerId=%s", id, user.id, readerId);
-              await fsPromises.unlink(tempTakePath).catch(() => {});
-              return res.status(404).json({ error: "reader_audio_missing" });
-            }
-            const readerBuffer = Buffer.from(await readerResp.arrayBuffer());
-            const tempReaderPath = path.join(tmpBase, `reader-${readerId}-${Date.now()}.mp3`);
-            await fsPromises.writeFile(tempReaderPath, readerBuffer);
-            console.log("[gallery/mixed] Downloaded reader: size=%d path=%s", readerBuffer.length, tempReaderPath);
-            readerPath = tempReaderPath;
-          } else {
-            console.warn("[gallery/mixed] 404 reader_audio_missing (local) id=%s user=%s readerId=%s", id, user.id, readerId);
-            await fsPromises.unlink(tempTakePath).catch(() => {});
-            return res.status(404).json({ error: "reader_audio_missing" });
-          }
-
-          // Generate mixed mp4 to temp output
-          const tempOutPath = path.join(tmpBase, `mixed-${id}-${Date.now()}.mp4`);
-          console.log("[gallery/mixed] Starting ffmpeg: outPath=%s", tempOutPath);
-
-          const filter =
-            "[1:a]aecho=0.35:0.25:14|22:0.10|0.06,highpass=f=180,lowpass=f=6000,volume=0.85[room];" +
-            "[0:a][room]amix=inputs=2:duration=first:dropout_transition=4[aout]";
-          const baseArgs = [
-            "-y",
-            "-i",
-            tempTakePath,
-            "-i",
-            readerPath,
-            "-filter_complex",
-            filter,
-            "-map",
-            "0:v",
-            "-map",
-            "[aout]",
-            "-c:a",
-            "aac",
-            "-movflags",
-            "+faststart",
-          ];
-
-          try {
-            stage = "ffmpeg_copy";
-            await runFfmpeg([...baseArgs, "-c:v", "copy", tempOutPath]);
-          } catch (err) {
-            console.warn("[gallery] mixed copy failed, retrying with transcode", err);
-            stage = "ffmpeg_transcode";
-            await runFfmpeg([
-              ...baseArgs,
-              "-c:v",
-              "libx264",
-              "-preset",
-              "veryfast",
-              "-crf",
-              "22",
-              tempOutPath,
-            ]);
-          }
-
-          // Upload mixed mp4 to R2
-          stage = "upload_mixed";
-          const mixedBuffer = await fsPromises.readFile(tempOutPath);
-          console.log("[gallery/mixed] Uploading mixed to R2: key=%s size=%d", mixedKey, mixedBuffer.length);
-          await r2PutObject({ key: mixedKey, body: mixedBuffer, contentType: "video/mp4" });
-
-          // Clean up temp files
-          await fsPromises.unlink(tempTakePath).catch(() => {});
-          await fsPromises.unlink(tempOutPath).catch(() => {});
-          if (readerPath !== localReaderFile) {
-            await fsPromises.unlink(readerPath).catch(() => {});
-          }
-        }
-
-        // Redirect to signed URL for the mixed asset
-        const safeName = `${(row as any)?.name || id}-ROOM.mp4`;
-        let signedUrl: string;
-        if (wantsDownload) {
-          signedUrl = await r2GetSignedUrl({
-            key: mixedKey,
-            downloadName: safeName,
-            contentType: "video/mp4",
-          });
-        } else {
-          signedUrl = await r2GetSignedUrl({
-            key: mixedKey,
-            contentType: "video/mp4",
-          });
-        }
-        console.log("[gallery/mixed] Serving R2 mixed: key=%s download=%s", mixedKey, wantsDownload);
-        return res.redirect(302, signedUrl);
-      }
-
-      // Local disk storage path
-      if (!fs.existsSync(filePath)) {
-        console.warn("[gallery/mixed] 404 file_missing (local disk) id=%s user=%s filePath=%s", id, user.id, filePath);
-        return res.status(404).json({ error: "file_missing" });
-      }
-
       const readerFile = path.join(ASSETS_DIR, `${readerId}.mp3`);
       if (!fs.existsSync(readerFile)) {
-        console.warn("[gallery/mixed] 404 reader_audio_missing (local disk) id=%s user=%s readerId=%s", id, user.id, readerId);
         return res.status(404).json({ error: "reader_audio_missing" });
       }
-
-      console.log("[gallery/mixed] Local mode: takePath=%s", filePath);
 
       const takeStat = fs.statSync(filePath);
       const readerStat = fs.statSync(readerFile);
@@ -1571,9 +1196,8 @@ export function initHttpRoutes(app: Express) {
           Math.max(takeStat.mtimeMs, readerStat.mtimeMs);
 
       if (needsRebuild) {
-        console.log("[gallery/mixed] Rebuilding local mixed: id=%s", id);
         const filter =
-          "[1:a]aecho=0.35:0.25:14|22:0.10|0.06,highpass=f=180,lowpass=f=6000,volume=0.85[room];" +
+          "[1:a]aecho=0.6:0.5:30|45:0.25,highpass=f=160,lowpass=f=7200,volume=0.55[room];" +
           "[0:a][room]amix=inputs=2:duration=first:dropout_transition=4[aout]";
         const baseArgs = [
           "-y",
@@ -1610,47 +1234,15 @@ export function initHttpRoutes(app: Express) {
         }
       }
 
-      console.log("[gallery/mixed] Serving local mixed: path=%s", outPath);
       res.type("video/mp4");
       return res.sendFile(outPath);
-    } catch (err: any) {
+    } catch (err) {
       console.error("Error in GET /api/gallery/:id/mixed_file", err);
-
-      const e: any = err;
-      const isFfmpeg = e?.name === "FfmpegError";
-
-      const response: any = {
-        error: "internal_error",
-        stage,
-        message: (e?.message || String(e)).slice(0, 4000),
-      };
-
-      // Include ffmpeg debug info if available
-      if (isFfmpeg) {
-        const stderrTail = (e.stderrTail || "").slice(-16000);
-
-        response.ffmpeg = {
-          code: e.code ?? null,
-          bin: e.bin,
-          args: e.args,
-          stderr_tail: stderrTail,
-        };
-
-        console.error("[gallery/mixed] ffmpeg_failed", {
-          stage,
-          code: e.code,
-          bin: e.bin,
-          args_len: e.args?.length || 0,
-          stderr_tail_len: stderrTail.length,
-          stderr_tail: stderrTail,
-        });
-      }
-
-      return res.status(500).json(response);
+      return res.status(500).json({ error: "internal_error" });
     }
   });
 
-  api.get("/gallery/:id/file", requireUser, async (req: Request, res: Response) => {
+  api.get("/gallery/:id/file", requireUser, (req: Request, res: Response) => {
     try {
       const user = (req as any).user || res.locals.user;
       if (!user || !user.id) {
@@ -1658,17 +1250,15 @@ export function initHttpRoutes(app: Express) {
       }
 
       const id = req.params.id;
-      const row = await galleryGetById(String(id), String(user.id));
+      const row = GalleryStore.getById(String(id), String(user.id));
       if (!row) {
         return res.status(404).json({ error: "not_found" });
       }
 
       const filePath = (row as any).file_path as string;
-      if (!filePath) {
+      if (!filePath || !fs.existsSync(filePath)) {
         return res.status(404).json({ error: "file_missing" });
       }
-
-      console.log("[gallery] serve id=%s storage=%s", id, filePath?.startsWith("r2:") ? "r2" : "local");
 
       const wantsDownload =
         (typeof req.query?.download === "string" && req.query.download === "1") ||
@@ -1677,44 +1267,17 @@ export function initHttpRoutes(app: Express) {
       const rawName =
         (row as any)?.name ||
         (row as any)?.label ||
-        "take";
+        path.basename(filePath);
       const safeName =
         (rawName &&
           String(rawName)
             .replace(/[\\\/]/g, "_")
             .replace(/[^\w.-]+/g, "_")
             .slice(0, 80)) ||
-        "take.webm";
-
-      const mime = (row as any).mime_type as string | undefined;
-
-      // R2 storage
-      if (filePath.startsWith("r2:")) {
-        const key = filePath.slice(3);
-        let signedUrl: string;
-
-        if (wantsDownload) {
-          signedUrl = await r2GetSignedUrl({
-            key,
-            downloadName: safeName,
-            contentType: mime,
-          });
-        } else {
-          signedUrl = await r2GetSignedUrl({
-            key,
-            contentType: mime,
-          });
-        }
-
-        return res.redirect(302, signedUrl);
-      }
-
-      // Local disk storage
-      if (!fs.existsSync(filePath)) {
-        return res.status(404).json({ error: "file_missing" });
-      }
+        path.basename(filePath);
 
       // Force the correct MIME type for Safari, even if the extension is odd.
+      const mime = (row as any).mime_type as string | undefined;
       if (mime && typeof mime === "string") {
         res.type(mime);
       }
@@ -1730,48 +1293,11 @@ export function initHttpRoutes(app: Express) {
     }
   });
 
-  api.get("/assets/:render_id", async (req: Request, res: Response) => {
-    const id = String(req.params.render_id);
-    const localPath = path.join(ASSETS_DIR, `${id}.mp3`);
-    const r2Key = `renders/${id}.mp3`;
-
-    if (fs.existsSync(localPath)) {
-      res.setHeader("Content-Type", "audio/mpeg");
-      res.setHeader("Accept-Ranges", "bytes");
-
-      if (r2Enabled()) {
-        // Check if already in R2
-        let r2Exists = false;
-        try {
-          const signedUrl = await r2GetSignedUrl({ key: r2Key, expiresSeconds: 60 });
-          const headResp = await fetch(signedUrl, { method: "HEAD" });
-          r2Exists = headResp.ok;
-        } catch {}
-
-        if (!r2Exists) {
-          // Upload to R2 for future use
-          const buffer = fs.readFileSync(localPath);
-          await r2PutObject({ key: r2Key, body: buffer, contentType: "audio/mpeg" });
-          console.log("[assets] uploaded reader to R2: id=%s key=%s", id, r2Key);
-        }
-      }
-
-      return fs.createReadStream(localPath).pipe(res);
-    }
-
-    // No local file
-    if (r2Enabled()) {
-      try {
-        const signedUrl = await r2GetSignedUrl({ key: r2Key, expiresSeconds: 900 });
-        const headResp = await fetch(signedUrl, { method: "HEAD" });
-        if (headResp.ok) {
-          res.setHeader("Content-Type", "audio/mpeg");
-          return res.redirect(302, signedUrl);
-        }
-      } catch {}
-    }
-
-    return res.status(404).send("Not Found");
+  api.get("/assets/:render_id", (req: Request, res: Response) => {
+    const file = path.join(ASSETS_DIR, `${String(req.params.render_id)}.mp3`);
+    if (!fs.existsSync(file)) return res.status(404).send("Not Found");
+    res.setHeader("Content-Type", "audio/mpeg");
+    fs.createReadStream(file).pipe(res);
   });
 
   // Mount routers on the main app

@@ -3191,77 +3191,19 @@ JANE: Ready?"></textarea>
 
   <!-- App -->
 
-  <script>
-    // Classic error handler (runs before module scripts)
-    (function() {
-      const showError = function(msg, stack) {
-        const eb = document.getElementById("errbar");
-        if (eb) {
-          eb.textContent = msg + (stack ? "\n" + stack : "");
-          eb.classList.add("show");
-          eb.style.display = "block";
-        }
-      };
-
-      window.addEventListener("error", function(e) {
-        const msg = String(e.message || e.error || "error");
-        const stack = e.error && e.error.stack ? String(e.error.stack) : "";
-        showError("Error: " + msg, stack);
-      });
-
-      window.addEventListener("unhandledrejection", function(e) {
-        const msg = String(e.reason || "rejection");
-        const stack = e.reason && e.reason.stack ? String(e.reason.stack) : "";
-        showError("Unhandled rejection: " + msg, stack);
-      });
-
-      window.onerror = function(msg, url, line, col, error) {
-        const errMsg = msg + (url ? " at " + url + ":" + line : "");
-        const stack = error && error.stack ? String(error.stack) : "";
-        showError("Error: " + errMsg, stack);
-        return false;
-      };
-    })();
-  </script>
-
     <script type="module">
 
-    const __obSecret = new URLSearchParams(location.search).get("secret") || "";
-    function __postClientLog(payload) { fetch(`/debug/client_log?secret=${encodeURIComponent(__obSecret)}`, {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(payload)}).catch(()=>{}); }
-    window.addEventListener("error", (e)=> __postClientLog({level:"error", where:"window.error", message:String(e.message||e.error||"error"), stack: e.error && e.error.stack ? String(e.error.stack) : ""}));
-    window.addEventListener("unhandledrejection", (e)=> __postClientLog({level:"error", where:"unhandledrejection", message:String(e.reason||"rejection"), stack: e.reason && e.reason.stack ? String(e.reason.stack) : ""}));
+    import { expectedMinMsFor, AFTER_ADV_COOLDOWN_MS, isSpeaking, endsWithDashy, readyForAdvance, progressRatio } from "./js/speech-timing.js";
 
-    // Fallback stubs for speech-timing module
-    let expectedMinMsFor = (text) => 1000;
-    let AFTER_ADV_COOLDOWN_MS = 600;
-    let isSpeaking = () => false;
-    let endsWithDashy = (text) => false;
-    let readyForAdvance = () => ({ ready: true, reason: "stub" });
-    let progressRatio = () => 0;
-
-    // Try to load speech-timing module dynamically
-    try {
-      const module = await import("./js/speech-timing.js");
-      expectedMinMsFor = module.expectedMinMsFor || expectedMinMsFor;
-      AFTER_ADV_COOLDOWN_MS = module.AFTER_ADV_COOLDOWN_MS || AFTER_ADV_COOLDOWN_MS;
-      isSpeaking = module.isSpeaking || isSpeaking;
-      endsWithDashy = module.endsWithDashy || endsWithDashy;
-      readyForAdvance = module.readyForAdvance || readyForAdvance;
-      progressRatio = module.progressRatio || progressRatio;
-    } catch (err) {
-      console.error("[boot] Failed to load speech-timing.js, using stubs:", err);
-      __postClientLog({ level: "error", where: "import speech-timing.js", message: String(err), stack: err && err.stack ? String(err.stack) : "" });
-    }
-
-    // Maximum time we'll sit on a single "my" line once we've heard speech
+    // Maximum time we’ll sit on a single “my” line once we’ve heard speech
 
     // before we force an advance. Shared by Rehearse and Record so they
 
-    // behave the same. Tuned to stop "ghosting" without feeling rushed.
+    // behave the same. Tuned to stop “ghosting” without feeling rushed.
 
     const MAX_MY_LINE_MS = 9000; // ~9s safety net
 
-    const boot = async () => {
+    const boot = () => {
 
       const qs = new URLSearchParams(location.search);
 
@@ -3353,17 +3295,6 @@ JANE: Ready?"></textarea>
 
       return next;
 
-    }
-
-    // Append secret to API URLs for direct navigation (downloads, Room exports)
-    function withSecretUrl(url) {
-      const secret = new URLSearchParams(location.search).get("secret");
-      if (!secret) return url;
-      const u = new URL(url, location.origin);
-      if (!u.searchParams.has("secret")) {
-        u.searchParams.set("secret", secret);
-      }
-      return u.pathname + u.search;
     }
 
     // --- Dev flag: enable server STT plumbing when ?stt2=1 is present ---
@@ -3684,14 +3615,7 @@ JANE: Ready?"></textarea>
 
       const auth = (typeof S !== "undefined" && S) ? S.auth : null;
 
-      if (!auth) {
-        // Fallback to last known user to prevent empty gallery during auth init
-        try {
-          return localStorage.getItem("ob_lastKnownUserKey") || null;
-        } catch {
-          return null;
-        }
-      }
+      if (!auth) return null;
 
 
 
@@ -3731,16 +3655,9 @@ JANE: Ready?"></textarea>
 
         null;
 
-      const userKey = id ? `user:${id}` : null;
 
-      // Store last known user key for fallback during auth init
-      if (userKey) {
-        try {
-          localStorage.setItem("ob_lastKnownUserKey", userKey);
-        } catch {}
-      }
 
-      return userKey;
+      return id ? `user:${id}` : null;
 
     }
 
@@ -6185,7 +6102,6 @@ const savedStrip = document.getElementById("savedScriptsStrip");
           }
 
         });
-      }
 
       document.addEventListener("click",(evt)=>{
 
@@ -6218,6 +6134,8 @@ const savedStrip = document.getElementById("savedScriptsStrip");
       if(saveEditsBtn){
 
         saveEditsBtn.addEventListener("click",()=>{ saveImportEdits(); });
+
+      }
 
       }
 
@@ -11744,6 +11662,30 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
 
 
+      function restoreReaderDirectMonitor(){
+
+        if(R.readerCtx && R.readerGain){
+
+          try{ R.readerGain.disconnect(); }catch{}
+
+          try{ R.readerGain.__obProbeConnected = false; }catch{}
+
+          try{ tapReaderNode(R.readerGain); R.readerGain.connect(R.readerCtx.destination); R.readerDirectConnected = true; }
+
+          catch{}
+
+        }
+
+        R.readerBridge = null;
+
+        R.readerBridgeSource = null;
+
+        R.readerRecordGain = null;
+
+      }
+
+
+
       function setRailStates(){
 
         R.btnCamera.setAttribute("aria-pressed", R.cameraOn ? "true":"false");
@@ -12078,18 +12020,9 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
         }
 
-        const scene = (S.scenes && S.scenes[S.currentSceneIndex || 0]) || S.scenes?.[0];
-        const scene_id = scene?.id || scene?.scene_id || S.scene_id || "";
-        const role = (S.role || "").trim().toUpperCase();
-
-        if (!S.script_id || !scene_id || !role) {
-          alert("Missing script/scene/role. Go to Assign and pick your role/scene first.");
-          return;
-        }
-
         try{
 
-          const r = await fetch("/debug/render", withSecretHeaders({ method:"POST", headers:{...JSON_HDRS}, body:JSON.stringify({ script_id:S.script_id, scene_id, role, my_role:role, pace:"normal", pace_ms:0 }) }));
+          const r = await fetch("/debug/render", withSecretHeaders({ method:"POST", headers:{...JSON_HDRS}, body:JSON.stringify({ script_id:S.script_id, my_role:(S.role||"").toUpperCase(), pace_ms:0 }) }));
 
           if(handleUnauthorized(r)){ clearInterval(dotsTimer); setStatusRec("Locked."); R.btnRender.disabled=false; return; }
 
@@ -12098,8 +12031,6 @@ const savedStrip = document.getElementById("savedScriptsStrip");
           if(!r.ok){ clearInterval(dotsTimer); setStatusRec("Render error "+r.status+": "+JSON.stringify(j)); R.btnRender.disabled=false; return; }
 
           R.render_id = j.render_id;
-          try { localStorage.setItem("ob_last_render_id", R.render_id || ""); } catch {}
-          window.__OB_LAST_RENDER_ID = R.render_id || "";
 
           const poll = async ()=>{
 
@@ -12118,8 +12049,6 @@ const savedStrip = document.getElementById("savedScriptsStrip");
               rememberReaderUrl(R.download_url);
 
               R.audio.load();
-
-              R.lastCompletedRenderId = R.render_id;
 
               clearInterval(dotsTimer);
 
@@ -12368,27 +12297,6 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
 
       async function startRecording(){
-
-        // Room export needs a server reader render id.
-        // If it's missing, auto-run prepareReader() once so the take uploads with reader_render_id.
-        let lastRid = (() => { try { return localStorage.getItem("ob_last_render_id") || ""; } catch { return ""; } })();
-        let ridNow = (typeof R?.render_id === "string" && R.render_id) || lastRid;
-
-        if (!ridNow) {
-          try {
-            setStatusRec("Preparing reader track for Room…");
-            await prepareReader();
-          } catch (e) {
-            console.warn("[offbook] prepareReader failed", e);
-          }
-          lastRid = (() => { try { return localStorage.getItem("ob_last_render_id") || ""; } catch { return ""; } })();
-          ridNow = (typeof R?.render_id === "string" && R.render_id) || lastRid;
-        }
-
-        if (!ridNow) {
-          alert("Tap Render (Record tab) to prepare the reader track for Room export.");
-          return;
-        }
 
         await hardResumeOnGesture();
 
@@ -12774,22 +12682,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
         try{
 
-          const lastRid = (() => {
-            try { return localStorage.getItem("ob_last_render_id") || ""; }
-            catch { return ""; }
-          })();
-
-          const derivedRenderId =
-            (typeof R?.render_id === "string" && R.render_id) ||
-            (typeof R?.lastCompletedRenderId === "string" && R.lastCompletedRenderId) ||
-            (typeof window.__OB_LAST_RENDER_ID === "string" && window.__OB_LAST_RENDER_ID) ||
-            lastRid ||
-            extractRenderIdFromUrl(R?.download_url) ||
-            extractRenderIdFromUrl((R?.audio && R.audio.src) ? R.audio.src : "") ||
-            extractRenderIdFromUrl(window.__OB_LAST_READER_URL) ||
-            "";
-
-          savedTake = await saveTakeToDB({ blob, isVid, aspect, renderId: derivedRenderId });
+          savedTake = await saveTakeToDB({ blob, isVid, aspect, renderId: R.render_id });
 
           setStatusRec("Saved to Gallery.");
 
@@ -12991,27 +12884,6 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
 
 
-      function extractRenderIdFromUrl(url){
-        try{
-          if(!url || typeof url !== "string") return "";
-          const u = new URL(url, window.location.origin);
-          const p = u.pathname || "";
-          // common: /api/assets/<render_id>
-          const m = p.match(/\/api\/assets\/([^\/]+)/);
-          if(m && m[1]) return m[1];
-          // fallback: allow query param if ever used
-          const q = u.searchParams.get("render_id") || u.searchParams.get("id");
-          return q ? String(q) : "";
-        }catch{
-          // very loose fallback for non-URL strings
-          const s = String(url || "");
-          const m = s.match(/\/api\/assets\/([^\/\?]+)/);
-          return (m && m[1]) ? m[1] : "";
-        }
-      }
-
-
-
       async function pruneTakes(){
 
         const MAX_ITEMS = 10;
@@ -13040,23 +12912,15 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
           const created = t.created || 0;
 
-          // Only prune local-only items (not synced to server) by age
-          if(now - created > MAX_AGE_MS && !t.serverId && !t.fromServer){
-            await GalleryDB.del(t.id);
-            continue;
-          }
+          if(now - created > MAX_AGE_MS){ await GalleryDB.del(t.id); continue; }
 
           recent.push(t);
 
         }
 
-        // Only prune local-only items by count (keep server-synced items)
         if(recent.length > MAX_ITEMS){
 
-          const localOnly = recent.filter(t => !t.serverId && !t.fromServer);
-          const toDelete = localOnly.slice(MAX_ITEMS);
-
-          for(const t of toDelete){ await GalleryDB.del(t.id); }
+          for(const t of recent.slice(MAX_ITEMS)){ await GalleryDB.del(t.id); }
 
         }
 
@@ -13112,11 +12976,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
           notes:"",
 
-          renderId: renderId || (R.lastCompletedRenderId || R.render_id || null),
-
-          render_id: (typeof R !== "undefined" && R && R.render_id) ? String(R.render_id) : "",
-
-          readerRenderId: typeof renderId === "string" ? renderId : (typeof R?.render_id === "string" ? R.render_id : (window.__OB_LAST_RENDER_ID || (()=>{ try { return localStorage.getItem("ob_last_render_id") || ""; } catch { return ""; } })())),
+          readerRenderId: typeof renderId === "string" ? renderId : (typeof R?.render_id === "string" ? R.render_id : ""),
 
           userKey
 
@@ -13135,8 +12995,6 @@ const savedStrip = document.getElementById("savedScriptsStrip");
       /* ---- Gallery rendering with filters + actions ---- */
 
       async function loadTakes() {
-
-        let remoteFetchError = null;
 
         try {
 
@@ -13248,7 +13106,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
           try {
 
-            const resp = await fetch("/api/gallery", withSecretHeaders({ credentials: "include" }));
+            const resp = await fetch("/api/gallery", { credentials: "include" });
 
             if (resp.ok) {
 
@@ -13284,15 +13142,6 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
                 }));
 
-                // Persist remote items to IndexedDB for offline access
-                for (const item of remoteItems) {
-                  try {
-                    await GalleryDB.put(item);
-                  } catch (e) {
-                    console.warn("Failed to cache remote item", item.id, e);
-                  }
-                }
-
               }
 
             }
@@ -13300,8 +13149,6 @@ const savedStrip = document.getElementById("savedScriptsStrip");
           } catch (err) {
 
             console.warn("Failed to load server gallery items", err);
-
-            remoteFetchError = err;
 
           }
 
@@ -13349,22 +13196,6 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
           renderGallery();
 
-          // Show remote sync error if fetch failed but we have local/cached items
-          if (remoteFetchError && merged.length > 0) {
-            const wrap = $("#takes");
-            if (wrap) {
-              const errDiv = document.createElement("div");
-              errDiv.className = "hint";
-              errDiv.style.background = "rgba(255,165,0,0.1)";
-              errDiv.style.border = "1px solid rgba(255,165,0,0.3)";
-              errDiv.style.padding = "8px";
-              errDiv.style.marginBottom = "12px";
-              errDiv.style.borderRadius = "4px";
-              errDiv.textContent = "⚠️ Remote sync failed. Showing cached takes.";
-              wrap.insertBefore(errDiv, wrap.firstChild);
-            }
-          }
-
         } catch (err) {
 
           console.warn("[offbook] gallery load error", err);
@@ -13373,7 +13204,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
           if (wrap) {
 
-            wrap.innerHTML = `<p class="hint" style="background:rgba(255,0,0,0.1);border:1px solid rgba(255,0,0,0.3);padding:8px;">Gallery error: ${String(err.message || err).slice(0, 100)}</p>`;
+            wrap.innerHTML = `<p class="hint">Gallery storage unavailable on this device.</p>`;
 
           }
 
@@ -13381,62 +13212,19 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
       }
 
-      // iOS detection for upload fallback
-      const IS_IOS = /iP(hone|ad|od)/.test(navigator.userAgent);
 
-      // XHR-based upload helper for iOS (avoids DataCloneError with Blobs in fetch)
-      function uploadViaXHR(formData) {
-        return new Promise((resolve, reject) => {
-          const xhr = new XMLHttpRequest();
-          xhr.open("POST", "/api/gallery/upload");
-
-          // Apply headers from withSecretHeaders
-          const headers = withSecretHeaders({ headers: {} }).headers || {};
-          for (const [key, value] of Object.entries(headers)) {
-            if (value) xhr.setRequestHeader(key, String(value));
-          }
-
-          xhr.withCredentials = true;
-
-          xhr.onload = () => {
-            if (xhr.status >= 200 && xhr.status < 300) {
-              try {
-                const data = JSON.parse(xhr.responseText);
-                resolve(data);
-              } catch (e) {
-                reject(new Error("Failed to parse server response"));
-              }
-            } else {
-              const errText = (xhr.responseText || "").slice(0, 200);
-              reject(new Error(`Upload failed (${xhr.status}).\n\n${errText}`));
-            }
-          };
-
-          xhr.onerror = () => reject(new Error("Network error during upload"));
-
-          xhr.send(formData);
-        });
-      }
 
       async function uploadTakeToServer(take) {
 
-        // Guard against double uploads
-        if (take._uploadPromise) return await take._uploadPromise;
+        try {
 
-        const uploadPromise = (async () => {
-          try {
+          const userKey = getSignedInUserKey();
 
-            const userKey = getSignedInUserKey();
-
-            if (!userKey) return; // not signed in, skip
+          if (!userKey) return; // not signed in, skip
 
 
 
-            if (!take || !take.blob) return;
-
-            // Mark as uploading
-            take.uploading = true;
-            await GalleryDB.put(take);
+          if (!take || !take.blob) return;
 
 
 
@@ -13508,13 +13296,23 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
 
 
-          // attach reader render id so Room export can mix
-          const rid =
-            (take && (take.renderId || take.readerRenderId)) ||
-            (typeof R !== "undefined" && (R.lastCompletedRenderId || R.render_id)) ||
-            "";
+          const renderIdForServer =
 
-          if (rid) form.append("render_id", String(rid));
+            (typeof take.readerRenderId === "string" && take.readerRenderId) ||
+
+            (typeof take.renderId === "string" && take.renderId) ||
+
+            (typeof take.render_id === "string" && take.render_id) ||
+
+            (typeof R?.render_id === "string" && R.render_id) ||
+
+            null;
+
+          if (renderIdForServer) {
+
+            form.append("render_id", renderIdForServer);
+
+          }
 
 
 
@@ -13534,69 +13332,63 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
           );
 
-          let data;
 
-          // Use XHR directly on iOS to avoid DataCloneError with Blobs in fetch
-          if (IS_IOS) {
-            data = await uploadViaXHR(form);
-          } else {
-            const resp = await fetch("/api/gallery/upload", withSecretHeaders({
 
-              method: "POST",
+          const resp = await fetch("/api/gallery/upload", {
 
-              body: form,
+            method: "POST",
 
-              credentials: "include"
+            body: form,
 
-            }));
+            credentials: "include"
 
-            if (!resp.ok) {
+          });
 
-              const txt = await resp.text().catch(() => "");
 
-              throw new Error(`Upload failed (${resp.status}).\n\n${txt.slice(0, 200)}`);
 
-            }
+          if (!resp.ok) {
 
-            data = await resp.json().catch(() => null);
+            const txt = await resp.text().catch(() => "");
+
+            console.warn("uploadTakeToServer failed", resp.status, txt);
+
+            // Surface this on device since there is no console
+
+            alert(
+
+              "Gallery upload failed (" +
+
+                resp.status +
+
+                ").\n\n" +
+
+                (txt || "").slice(0, 200)
+
+            );
+
+            return;
+
           }
+
+
+
+          const data = await resp.json().catch(() => null);
 
           if (data && data.id) {
 
             take.serverId = data.id;
-            take.uploadStatus = `Uploaded: ${String(data.id).slice(0,8)}`;
-
-            // Keep local take.id stable (IndexedDB key). Persist serverId for Room/download.
-            try { await GalleryDB.put(take); } catch (e) {
-              console.warn("[offbook] failed to persist serverId", e);
-            }
 
             console.log("[offbook] gallery upload ok, server id:", data.id);
-            setStatusRec(take.uploadStatus);
+
           }
 
         } catch (err) {
 
           console.warn("uploadTakeToServer error", err);
 
-          take.uploadStatus = "Upload failed (tap Retry)";
-          try { await GalleryDB.put(take); } catch (e) {
-            console.warn("[offbook] failed to persist uploadStatus", e);
-          }
+          alert("Gallery upload error. Please try again and mention this to Rodrigo.");
 
-          alert("Gallery upload error: " + (err?.message || String(err)).slice(0,200));
-
-        } finally {
-          // Clear uploading flag
-          take.uploading = false;
-          try { await GalleryDB.put(take); } catch (e) {
-            console.warn("[offbook] failed to clear uploading flag", e);
-          }
         }
-      })();
-
-      take._uploadPromise = uploadPromise;
-      return uploadPromise;
 
       }
 
@@ -13608,7 +13400,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
         try{
 
-          const resp = await fetch("/api/gallery/notes", withSecretHeaders({
+          const resp = await fetch("/api/gallery/notes", {
 
             method: "POST",
 
@@ -13618,7 +13410,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
             credentials: "include"
 
-          }));
+          });
 
           if(!resp.ok){
 
@@ -13642,7 +13434,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
         try{
 
-          const resp = await fetch("/api/gallery/delete", withSecretHeaders({
+          const resp = await fetch("/api/gallery/delete", {
 
             method: "POST",
 
@@ -13652,7 +13444,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
             credentials: "include"
 
-          }));
+          });
 
           if(!resp.ok){
 
@@ -13808,7 +13600,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
             const id = encodeURIComponent(t.serverId || t.id);
 
-            src = withSecretUrl(`/api/gallery/${id}/file`);
+            src = `/api/gallery/${id}/file`;
 
           }
 
@@ -13822,12 +13614,6 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
           const noteSafe = escapeHtml(t.notes ?? t.note ?? "");
 
-          const isUploaded = !!t.serverId;
-          const isUploading = t.uploading;
-          const roomBtnLabel = isUploading ? "Uploading…" : "Room";
-          const roomBtnDisabled = isUploading ? "disabled" : "";
-          const uploadMeta = (!isUploaded && !isUploading) ? " • uploading" : "";
-
           return `
 
             <div class="take-card" data-id="${escapeHtml(t.id)}">
@@ -13840,7 +13626,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
                   <div style="font-weight:700">${shortName}</div>
 
-                  <div class="take-meta">${meta}${uploadMeta}</div>
+                  <div class="take-meta">${meta}</div>
 
                 </div>
 
@@ -13850,7 +13636,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
                   <button type="button" class="btn sm" data-act="dl">Download</button>
 
-                  <button type="button" class="btn sm secondary" data-act="room" ${roomBtnDisabled}>${roomBtnLabel}</button>
+                  <button type="button" class="btn sm secondary" data-act="room">Room</button>
 
                   <button type="button" class="btn sm secondary" data-act="del">Delete</button>
 
@@ -14324,9 +14110,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
             if(video.paused){
 
-              video.currentTime = 0;
-              const p = video.play();
-              if(p && typeof p.catch === "function") p.catch(()=>{});
+              try{ video.currentTime = 0; video.play(); }catch{}
 
               if(btnPlay) btnPlay.textContent = "Pause";
 
@@ -14367,17 +14151,19 @@ const savedStrip = document.getElementById("savedScriptsStrip");
                 blob = take.blob;
               } else {
                 if (!id) throw new Error("No file available for this take.");
-
-                // Avoid iOS Safari blob/clone issues: open the server download directly.
-                const url = withSecretUrl(`/api/gallery/${encodeURIComponent(id)}/file?download=1`);
-                const a = document.createElement("a");
-                a.href = url;
-                a.rel = "noopener";
-                a.target = "_blank";
-                document.body.appendChild(a);
-                a.click();
-                a.remove();
-                return;
+          
+                const url = `/api/gallery/${encodeURIComponent(id)}/file`;
+                const resp = await fetch(url, withSecretHeaders({
+                  method: "GET",
+                  credentials: "include",
+                  cache: "no-store"
+                }));
+          
+                if (!resp.ok) {
+                  throw new Error(`Download failed (${resp.status})`);
+                }
+          
+                blob = await resp.blob();
               }
           
               const mime = blob.type || "video/mp4";
@@ -14419,38 +14205,9 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
 
           btnRoom?.addEventListener("click", async ()=>{
-            if (!btnRoom) return;
-            const prevLabel = btnRoom.textContent;
-            btnRoom.textContent = "Mixing…";
-            btnRoom.disabled = true;
 
-            try {
-              const id = take.serverId || take.id;
+            showToastOnce("Room mix is coming back soon — use Download for now.");
 
-              // If this take still only exists locally (fresh recording), block Room until upload completes.
-              if (take.blob instanceof Blob && !take.serverId && !(take.uploadStatus && take.uploadStatus.startsWith("Uploaded:"))) {
-                throw new Error("Room is available after upload finishes. Wait for 'Uploaded: ...' then try again.");
-              }
-
-              if (!id) throw new Error("No file available for this take.");
-
-              const url = withSecretUrl(`/api/gallery/${encodeURIComponent(id)}/mixed_file?download=1`);
-              const a = document.createElement("a");
-              a.href = url;
-              a.rel = "noopener";
-              a.target = "_blank";
-              document.body.appendChild(a);
-              a.click();
-              a.remove();
-              return;
-
-            } catch (err) {
-              console.warn("[offbook] room export failed", err);
-              alert("Room export failed: " + (err?.message || String(err)));
-            } finally {
-              btnRoom.disabled = false;
-              btnRoom.textContent = prevLabel;
-            }
           });
 
 
@@ -15078,27 +14835,15 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
     // Safe boot: never leave page inert
 
-    const handleBootError = (err) => {
-      __postClientLog({ level:"fatal", where:"boot()", message:String(err), stack: err && err.stack ? String(err.stack) : "" });
-      const div = document.createElement("div");
-      div.style.position="fixed"; div.style.left="12px"; div.style.right="12px"; div.style.bottom="84px";
-      div.style.zIndex="99999"; div.style.padding="12px"; div.style.borderRadius="12px";
-      div.style.background="rgba(160,0,0,0.92)"; div.style.color="white"; div.style.fontSize="14px";
-      div.textContent = "OffBook UI crashed during boot(). Open /debug/client_logs?secret=1976 to see details.";
-      document.body.appendChild(div);
-    };
-
     try {
 
       if (document.readyState === "loading") {
 
-        document.addEventListener("DOMContentLoaded", () => {
-          boot().catch(handleBootError);
-        }, { once:true });
+        document.addEventListener("DOMContentLoaded", boot, { once:true });
 
       } else {
 
-        boot().catch(handleBootError);
+        boot();
 
       }
 
