@@ -14396,61 +14396,10 @@ const savedStrip = document.getElementById("savedScriptsStrip");
                 return;
               }
 
-              // Fallback: if no serverId, try to find it from server
+              // If no serverId, upload to get one
               if (!take.serverId) {
-                console.log("[offbook] No serverId for take, attempting to find match from server");
-                try {
-                  const galleryResp = await fetch("/api/gallery", withSecretHeaders({
-                    method: "GET",
-                    credentials: "include",
-                    cache: "no-store"
-                  }));
-
-                  if (galleryResp.ok) {
-                    const galleryData = await galleryResp.json();
-                    const items = galleryData.items || [];
-
-                    // Try to match by name and created_at (+/- 3s) or name and size
-                    const match = items.find(item => {
-                      const nameMatch = (item.name === take.name) || (item.name === take.label);
-                      if (!nameMatch) return false;
-
-                      // Try created_at match (+/- 3s)
-                      if (take.created_at && item.created_at) {
-                        const timeDiff = Math.abs(take.created_at - item.created_at);
-                        if (timeDiff <= 3000) return true;
-                      }
-
-                      // Try size match
-                      if (take.size && item.size) {
-                        if (take.size === item.size) return true;
-                      }
-
-                      return false;
-                    });
-
-                    if (match) {
-                      console.log("[offbook] Found server match for take:", match.id);
-                      take.serverId = match.id;
-                      id = match.id;
-                      // Persist serverId
-                      try {
-                        await GalleryDB.put(take);
-                      } catch (e) {
-                        console.warn("[offbook] Failed to persist matched serverId:", e);
-                      }
-                    } else {
-                      console.warn("[offbook] No server match found for take");
-                      throw new Error("Room can't find server take ID yet — please tap Download once to sync, then try Room.");
-                    }
-                  }
-                } catch (err) {
-                  if (err.message && err.message.includes("Room can't find")) {
-                    throw err;
-                  }
-                  console.warn("[offbook] Failed to fetch gallery for serverId lookup:", err);
-                  throw new Error("Room can't find server take ID yet — please tap Download once to sync, then try Room.");
-                }
+                await uploadTakeToServer(take);
+                id = take.serverId || take.id;
               }
 
               if (!id) throw new Error("No file available for this take.");
@@ -14475,6 +14424,12 @@ const savedStrip = document.getElementById("savedScriptsStrip");
                     // Ignore
                   }
                 }
+
+                // Special message for 404 not_found
+                if (resp.status === 404 && errorDetail === "not_found") {
+                  throw new Error("Room export isn't ready yet (upload still processing). Wait 10 seconds and try again.");
+                }
+
                 const errorMsg = errorDetail
                   ? `Room download failed (${resp.status}): ${errorDetail}`
                   : `Room download failed (${resp.status})`;
