@@ -13437,47 +13437,86 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
           );
 
+          let resp;
+          let data;
 
+          try {
+            resp = await fetch("/api/gallery/upload", withSecretHeaders({
 
-          const resp = await fetch("/api/gallery/upload", withSecretHeaders({
+              method: "POST",
 
-            method: "POST",
+              body: form,
 
-            body: form,
+              credentials: "include"
 
-            credentials: "include"
+            }));
 
-          }));
+            if (!resp.ok) {
 
+              const txt = await resp.text().catch(() => "");
 
+              console.warn("uploadTakeToServer failed", resp.status, txt);
 
-          if (!resp.ok) {
+              // Surface this on device since there is no console
 
-            const txt = await resp.text().catch(() => "");
+              alert(
 
-            console.warn("uploadTakeToServer failed", resp.status, txt);
+                "Gallery upload failed (" +
 
-            // Surface this on device since there is no console
+                  resp.status +
 
-            alert(
+                  ").\n\n" +
 
-              "Gallery upload failed (" +
+                  (txt || "").slice(0, 200)
 
-                resp.status +
+              );
 
-                ").\n\n" +
+              return;
 
-                (txt || "").slice(0, 200)
+            }
 
-            );
+            data = await resp.json().catch(() => null);
 
-            return;
+          } catch (fetchErr) {
+            // iOS-safe fallback: retry with XMLHttpRequest on DataCloneError
+            const isCloneError = fetchErr?.name === "DataCloneError" ||
+                                 (fetchErr?.message && String(fetchErr.message).toLowerCase().includes("clone"));
 
+            if (!isCloneError) throw fetchErr;
+
+            console.warn("[offbook] fetch failed with clone error, retrying with XMLHttpRequest", fetchErr);
+
+            data = await new Promise((resolve, reject) => {
+              const xhr = new XMLHttpRequest();
+              xhr.open("POST", "/api/gallery/upload");
+
+              // Apply headers from withSecretHeaders
+              const headers = withSecretHeaders({ headers: {} }).headers || {};
+              for (const [key, value] of Object.entries(headers)) {
+                if (value) xhr.setRequestHeader(key, String(value));
+              }
+
+              xhr.withCredentials = true;
+
+              xhr.onload = () => {
+                if (xhr.status >= 200 && xhr.status < 300) {
+                  try {
+                    resolve(JSON.parse(xhr.responseText));
+                  } catch (e) {
+                    resolve(null);
+                  }
+                } else {
+                  const errText = (xhr.responseText || "").slice(0, 200);
+                  alert("Gallery upload failed (" + xhr.status + ").\n\n" + errText);
+                  reject(new Error("XHR upload failed: " + xhr.status));
+                }
+              };
+
+              xhr.onerror = () => reject(new Error("XHR network error"));
+
+              xhr.send(form);
+            });
           }
-
-
-
-          const data = await resp.json().catch(() => null);
 
           if (data && data.id) {
 
@@ -14234,7 +14273,9 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
             if(video.paused){
 
-              try{ video.currentTime = 0; video.play(); }catch{}
+              video.currentTime = 0;
+              const p = video.play();
+              if(p && typeof p.catch === "function") p.catch(()=>{});
 
               if(btnPlay) btnPlay.textContent = "Pause";
 
