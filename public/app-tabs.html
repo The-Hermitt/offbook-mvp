@@ -14390,6 +14390,12 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
               let id = take.serverId || take.id;
 
+              // Guard against legacy TK-style IDs
+              if (id && /^TK\d+/.test(id)) {
+                alert("This is an old take saved with a legacy ID. Please record a new take to use Room.");
+                return;
+              }
+
               // Fallback: if no serverId, try to find it from server
               if (!take.serverId) {
                 console.log("[offbook] No serverId for take, attempting to find match from server");
