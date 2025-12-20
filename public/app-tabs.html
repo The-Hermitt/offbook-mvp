@@ -3355,6 +3355,17 @@ JANE: Ready?"></textarea>
 
     }
 
+    // Append secret to API URLs for direct navigation (downloads, Room exports)
+    function withSecretUrl(url) {
+      const secret = new URLSearchParams(location.search).get("secret");
+      if (!secret) return url;
+      const u = new URL(url, location.origin);
+      if (!u.searchParams.has("secret")) {
+        u.searchParams.set("secret", secret);
+      }
+      return u.pathname + u.search;
+    }
+
     // --- Dev flag: enable server STT plumbing when ?stt2=1 is present ---
 
     const STT2_ENABLED = new URLSearchParams(window.location.search).has("stt2");
@@ -13746,7 +13757,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
             const id = encodeURIComponent(t.serverId || t.id);
 
-            src = `/api/gallery/${id}/file`;
+            src = withSecretUrl(`/api/gallery/${id}/file`);
 
           }
 
@@ -14307,7 +14318,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
                 if (!id) throw new Error("No file available for this take.");
 
                 // Avoid iOS Safari blob/clone issues: open the server download directly.
-                const url = `/api/gallery/${encodeURIComponent(id)}/file?download=1`;
+                const url = withSecretUrl(`/api/gallery/${encodeURIComponent(id)}/file?download=1`);
                 const a = document.createElement("a");
                 a.href = url;
                 a.rel = "noopener";
@@ -14372,7 +14383,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
               if (!id) throw new Error("No file available for this take.");
 
-              const url = `/api/gallery/${encodeURIComponent(id)}/mixed_file?download=1`;
+              const url = withSecretUrl(`/api/gallery/${encodeURIComponent(id)}/mixed_file?download=1`);
               const a = document.createElement("a");
               a.href = url;
               a.rel = "noopener";
