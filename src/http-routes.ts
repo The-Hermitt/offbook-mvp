@@ -1453,7 +1453,7 @@ export function initHttpRoutes(app: Express) {
 
       // Run ffmpeg to create mixed file
       const filter =
-        "[1:a]aecho=0.6:0.5:30|45:0.25,highpass=f=160,lowpass=f=7200,volume=0.55[room];" +
+        "[1:a]aecho=0.6:0.5:30|45:0.25|0.25,highpass=f=160,lowpass=f=7200,volume=0.55[room];" +
         "[0:a][room]amix=inputs=2:duration=first:dropout_transition=4[aout]";
       const baseArgs = [
         "-y",
