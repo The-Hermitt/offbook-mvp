@@ -14473,7 +14473,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
               if (!id) throw new Error("No file available for this take.");
 
-              const url = `/api/gallery/${encodeURIComponent(id)}/mixed_file?dl=1`;
+              const url = `/api/gallery/${encodeURIComponent(id)}/mixed_file?dl=1&mode=room&force=1`;
               const resp = await fetch(url, withSecretHeaders({
                 method: "GET",
                 credentials: "include",

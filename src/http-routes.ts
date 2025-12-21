@@ -1339,6 +1339,10 @@ export function initHttpRoutes(app: Express) {
 
       const force = String(req.query?.force || "") === "1";
 
+      const mode = req.query.mode === "dry" ? "dry" : "room";
+      // bump this when you change ffmpeg logic so old cache never lies to you again
+      const MIX_VER = "v2";
+
       // Determine if take is from R2
       const isR2Take = filePath.startsWith("r2://");
       let actualTakeFile = filePath;
@@ -1346,7 +1350,7 @@ export function initHttpRoutes(app: Express) {
       console.log("[mixdown] Take path type: %s, takeId=%s, userId=%s", isR2Take ? "r2" : "local", id, user.id);
 
       // Check if mixed file already exists in R2 (unless force=1)
-      const outKey = `mixed/${user.id}/${id}.mp4`;
+      const outKey = `mixed/${user.id}/${id}-${mode}-${MIX_VER}.mp4`;
       if (!force && r2Enabled()) {
         try {
           const mixHead = await r2Head(outKey);
@@ -1358,9 +1362,12 @@ export function initHttpRoutes(app: Express) {
             if (contentLength !== undefined) {
               res.setHeader("Content-Length", contentLength);
             }
+            res.setHeader("X-Offbook-Mix-Mode", mode);
+            res.setHeader("X-Offbook-Mix-Key", outKey);
+            res.setHeader("X-Offbook-Mix-Ver", MIX_VER);
             if (wantsDownload) {
               const safeName = takeName.replace(/[^\w.-]+/g, "_").slice(0, 80) || "take";
-              res.setHeader("Content-Disposition", `attachment; filename="${safeName}-room.mp4"`);
+              res.setHeader("Content-Disposition", `attachment; filename="${safeName}-${mode}.mp4"`);
             }
             return stream.pipe(res);
           }
@@ -1453,8 +1460,18 @@ export function initHttpRoutes(app: Express) {
 
       // Run ffmpeg to create mixed file
       const filter =
-        "[1:a]aecho=0.6:0.5:30|45:0.25|0.25,highpass=f=160,lowpass=f=7200,volume=0.55[room];" +
-        "[0:a][room]amix=inputs=2:duration=first:dropout_transition=4[aout]";
+        mode === "dry"
+          ? (
+              // Dry: reader is clean + present
+              "[1:a]highpass=f=140,lowpass=f=8000,volume=0.80[rd];" +
+              "[0:a][rd]amix=inputs=2:duration=first:dropout_transition=3[aout]"
+            )
+          : (
+              // Room: stronger short-delay reverb-ish effect (audible difference)
+              "[1:a]aecho=0.85:0.88:60|120|180:0.22|0.16|0.11," +
+              "highpass=f=140,lowpass=f=8000,volume=0.95[room];" +
+              "[0:a][room]amix=inputs=2:duration=first:dropout_transition=3[aout]"
+            );
       const baseArgs = [
         "-y",
         "-i",
@@ -1501,9 +1518,12 @@ export function initHttpRoutes(app: Express) {
 
       // Send file
       res.type("video/mp4");
+      res.setHeader("X-Offbook-Mix-Mode", mode);
+      res.setHeader("X-Offbook-Mix-Key", outKey);
+      res.setHeader("X-Offbook-Mix-Ver", MIX_VER);
       if (wantsDownload) {
         const safeName = takeName.replace(/[^\w.-]+/g, "_").slice(0, 80) || "take";
-        res.setHeader("Content-Disposition", `attachment; filename="${safeName}-room.mp4"`);
+        res.setHeader("Content-Disposition", `attachment; filename="${safeName}-${mode}.mp4"`);
       }
 
       console.log("[mixdown] Sending mixed file to client, takeId=%s, userId=%s", id, user.id);
