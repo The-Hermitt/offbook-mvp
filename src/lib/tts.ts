@@ -59,9 +59,10 @@ export async function generateReaderMp3(
   lines: Line[],
   voiceMap: VoiceMap,
   role: string,
-  pace: Pace = "normal"
+  pace: Pace = "normal",
+  fixedId?: string
 ): Promise<string> {
-  const id = crypto.randomUUID();
+  const id = fixedId || crypto.randomUUID();
   const outDir = path.join(process.cwd(), "assets", "renders");
   fs.mkdirSync(outDir, { recursive: true });
   const outPath = path.join(outDir, `${id}.mp3`);

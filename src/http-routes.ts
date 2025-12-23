@@ -994,7 +994,7 @@ export function initHttpRoutes(app: Express) {
     }
   });
 
-  // POST /debug/render (stub -> silent mp3)
+  // POST /debug/render (real TTS)
   debug.post("/render", renderLimiter, audit("/debug/render"), async (req: Request, res: Response) => {
     const { userId } = getPasskeySession(req as any);
     if (!userId) {
@@ -1006,6 +1006,7 @@ export function initHttpRoutes(app: Express) {
     const scene_id = body.scene_id || body.script_id; // default single-scene behavior
     const roleRaw = body.role ?? body.my_role; // accept legacy client payload
     const role = String(roleRaw || "").toUpperCase();
+    const pace = body.pace || "normal";
     if (!script_id || !scene_id || !role) {
       return res.status(400).json({ error: "script_id, scene_id, role required" });
     }
@@ -1017,7 +1018,32 @@ export function initHttpRoutes(app: Express) {
 
     const renderId = crypto.randomUUID();
     renders.set(renderId, { status: "working", accounted: false });
-    const file = writeSilentMp3(renderId);
+
+    // Find the scene
+    const scene = script.scenes.find(s => s.id === scene_id) || script.scenes[0];
+    if (!scene) {
+      renders.set(renderId, { status: "error", accounted: false });
+      return res.status(404).json({ error: "scene not found" });
+    }
+
+    // Build lines for TTS
+    const lines = scene.lines.map(l => ({ character: l.speaker, text: l.text }));
+
+    // Build voiceMap and ensure UNKNOWN fallback
+    const voiceMap = script.voiceMap || {};
+    if (!voiceMap.UNKNOWN) {
+      voiceMap.UNKNOWN = "alloy";
+    }
+
+    // Generate reader MP3
+    let file: string;
+    try {
+      file = await generateReaderMp3(lines, voiceMap, role, pace, renderId);
+    } catch (ttsErr) {
+      console.error("[debug/render] TTS generation failed:", ttsErr);
+      renders.set(renderId, { status: "error", accounted: false });
+      return res.status(500).json({ error: "tts_failed" });
+    }
 
     // Upload to R2 if enabled
     if (r2Enabled()) {
