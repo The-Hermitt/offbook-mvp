@@ -1430,6 +1430,7 @@ export function initHttpRoutes(app: Express) {
         console.log("[mixdown] Missing reader_render_id for takeId=%s", id);
         return res.status(404).json({ error: "reader_missing" });
       }
+<<<<<<< HEAD
 
       // Check if download is requested
       const wantsDownload =
@@ -1477,6 +1478,192 @@ export function initHttpRoutes(app: Express) {
             readerId,
             message: String(err?.message || err)
           });
+=======
+
+      // Bump this when changing ffmpeg logic to bust cache
+      const MIX_VER = "v6";
+      const mode = String(req.query.mode || "room");
+
+      // Try to find stems (mic + reader) for this take
+      const stemsDir = path.join(process.cwd(), "uploads", "gallery", String(user.id), "stems");
+      fs.mkdirSync(stemsDir, { recursive: true });
+
+      let micStem: string | null = null;
+      let readerStem: string | null = null;
+
+      // Look for local stems first
+      try {
+        const stemFiles = fs.readdirSync(stemsDir);
+        micStem = stemFiles.find(f => f.startsWith(`${id}-mic.`)) || null;
+        readerStem = stemFiles.find(f => f.startsWith(`${id}-reader.`)) || null;
+        if (micStem) micStem = path.join(stemsDir, micStem);
+        if (readerStem) readerStem = path.join(stemsDir, readerStem);
+      } catch {}
+
+      // If not found locally, try R2
+      if ((!micStem || !readerStem) && r2Enabled()) {
+        const stemExts = [".m4a", ".webm", ".mp3", ".wav", ".ogg", ".mp4"];
+        for (const ext of stemExts) {
+          const micKey = `stems/${user.id}/${id}-mic${ext}`;
+          const readerKey = `stems/${user.id}/${id}-reader${ext}`;
+
+          try {
+            const micHead = await r2Head(micKey);
+            const readerHead = await r2Head(readerKey);
+
+            if (micHead.exists && readerHead.exists) {
+              // Download both stems to temp
+              const tmpDir = path.join(require("os").tmpdir(), "offbook-mix");
+              fs.mkdirSync(tmpDir, { recursive: true });
+
+              const micTemp = path.join(tmpDir, `${id}-mic-${Date.now()}${ext}`);
+              const readerTemp = path.join(tmpDir, `${id}-reader-${Date.now()}${ext}`);
+
+              const micResult = await r2GetObjectStream(micKey);
+              const micWrite = fs.createWriteStream(micTemp);
+              await new Promise<void>((resolve, reject) => {
+                micResult.stream.pipe(micWrite);
+                micWrite.on("finish", () => resolve());
+                micWrite.on("error", reject);
+              });
+
+              const readerResult = await r2GetObjectStream(readerKey);
+              const readerWrite = fs.createWriteStream(readerTemp);
+              await new Promise<void>((resolve, reject) => {
+                readerResult.stream.pipe(readerWrite);
+                readerWrite.on("finish", () => resolve());
+                readerWrite.on("error", reject);
+              });
+
+              micStem = micTemp;
+              readerStem = readerTemp;
+              console.log("[mixed_file] Downloaded stems from R2: mic=%s, reader=%s", micKey, readerKey);
+              break;
+            }
+          } catch {}
+        }
+      }
+
+      // Determine output path with versioning
+      const outPath = path.join(path.dirname(filePath), `${id}-${mode}-${MIX_VER}.mixed.mp4`);
+      const outExists = fs.existsSync(outPath);
+
+      // Use stems if both exist
+      const useStems = !!(micStem && readerStem && fs.existsSync(micStem) && fs.existsSync(readerStem));
+
+      if (useStems) {
+        console.log("[mixed_file] Using stems for take %s: mic=%s, reader=%s", id, micStem, readerStem);
+
+        // Check if rebuild needed
+        const micStat = fs.statSync(micStem!);
+        const readerStat = fs.statSync(readerStem!);
+        const takeStat = fs.statSync(filePath);
+        const needsRebuild =
+          !outExists ||
+          fs.statSync(outPath).mtimeMs <
+            Math.max(takeStat.mtimeMs, micStat.mtimeMs, readerStat.mtimeMs);
+
+        if (needsRebuild) {
+          // 3-input FFmpeg: take video + mic stem + reader stem
+          const filter =
+            mode === "dry"
+              ? "[2:a]highpass=f=180,lowpass=f=6000,volume=0.85[rd];" +
+                "[1:a][rd]amix=inputs=2:weights=1 1.35:normalize=0:duration=first:dropout_transition=3,alimiter=limit=0.95[aout]"
+              : "[2:a]aecho=0.35:0.25:14|22:0.10|0.06,highpass=f=180,lowpass=f=6000,volume=0.85[room];" +
+                "[1:a][room]amix=inputs=2:weights=1 1.35:normalize=0:duration=first:dropout_transition=3,alimiter=limit=0.95[aout]";
+
+          const baseArgs = [
+            "-y",
+            "-i",
+            filePath,      // input 0: take video
+            "-i",
+            micStem,       // input 1: mic stem
+            "-i",
+            readerStem,    // input 2: reader stem
+            "-filter_complex",
+            filter,
+            "-map",
+            "0:v",         // map video from take
+            "-map",
+            "[aout]",      // map mixed audio
+            "-c:a",
+            "aac",
+            "-movflags",
+            "+faststart",
+          ];
+
+          try {
+            await runFfmpeg([...baseArgs, "-c:v", "copy", outPath]);
+            console.log("[mixed_file] Stems-based mix complete (copy mode): %s", outPath);
+          } catch (err) {
+            console.warn("[mixed_file] Stems copy failed, retrying with transcode", err);
+            await runFfmpeg([
+              ...baseArgs,
+              "-c:v",
+              "libx264",
+              "-preset",
+              "veryfast",
+              "-crf",
+              "22",
+              outPath,
+            ]);
+            console.log("[mixed_file] Stems-based mix complete (transcode mode): %s", outPath);
+          }
+        }
+      } else {
+        // Fallback: use old 2-input path (take + reader MP3)
+        console.log("[mixed_file] No stems found, using legacy 2-input mix for take %s", id);
+
+        const readerFile = path.join(ASSETS_DIR, `${readerId}.mp3`);
+        if (!fs.existsSync(readerFile)) {
+          return res.status(404).json({ error: "reader_audio_missing" });
+        }
+
+        const takeStat = fs.statSync(filePath);
+        const readerStat = fs.statSync(readerFile);
+        const needsRebuild =
+          !outExists ||
+          fs.statSync(outPath).mtimeMs <
+            Math.max(takeStat.mtimeMs, readerStat.mtimeMs);
+
+        if (needsRebuild) {
+          const filter =
+            "[1:a]aecho=0.35:0.25:14|22:0.10|0.06,highpass=f=180,lowpass=f=6000,volume=0.85[room];" +
+            "[0:a][room]amix=inputs=2:duration=first:dropout_transition=4[aout]";
+          const baseArgs = [
+            "-y",
+            "-i",
+            filePath,
+            "-i",
+            readerFile,
+            "-filter_complex",
+            filter,
+            "-map",
+            "0:v",
+            "-map",
+            "[aout]",
+            "-c:a",
+            "aac",
+            "-movflags",
+            "+faststart",
+          ];
+
+          try {
+            await runFfmpeg([...baseArgs, "-c:v", "copy", outPath]);
+          } catch (err) {
+            console.warn("[gallery] mixed copy failed, retrying with transcode", err);
+            await runFfmpeg([
+              ...baseArgs,
+              "-c:v",
+              "libx264",
+              "-preset",
+              "veryfast",
+              "-crf",
+              "22",
+              outPath,
+            ]);
+          }
+>>>>>>> f354cc1 (PATCH: <Room: Improvements with seperataion>)
         }
       }
 
