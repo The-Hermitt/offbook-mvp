@@ -1412,6 +1412,9 @@ export function initHttpRoutes(app: Express) {
 
       const force = String(req.query?.force || "") === "1";
 
+      const solo = String(req.query?.solo || "");
+      const soloReader = solo === "reader";
+
       const mode = req.query.mode === "dry" ? "dry" : "room";
       // bump this when you change ffmpeg logic so old cache never lies to you again
       const MIX_VER = "v3";
@@ -1600,18 +1603,22 @@ export function initHttpRoutes(app: Express) {
       tempOutputFile = outPath;
 
       // Run ffmpeg to create mixed file
-      const filter =
-        mode === "dry"
-          ? (
-              // Dry: reader is clean + present
-              "[1:a]highpass=f=140,lowpass=f=8000,volume=1.25[rd];" +
-              "[0:a][rd]amix=inputs=2:weights=1 1.35:normalize=0:duration=first:dropout_transition=3,alimiter=limit=0.95[aout]"
-            )
-          : (
-              // Room: stronger short-delay reverb-ish effect (audible difference)
-              "[1:a]aecho=0.85:0.88:90|180|270:0.30|0.22|0.16,highpass=f=140,lowpass=f=8000,volume=1.35[room];" +
-              "[0:a][room]amix=inputs=2:weights=1 1.35:normalize=0:duration=first:dropout_transition=3,alimiter=limit=0.95[aout]"
-            );
+      let filter: string;
+      if (soloReader && mode === "room") {
+        // Solo reader with room effect
+        filter = "[1:a]aecho=0.85:0.88:90|180|270:0.30|0.22|0.16,highpass=f=140,lowpass=f=8000,volume=2.0,alimiter=limit=0.95[aout]";
+      } else if (soloReader && mode === "dry") {
+        // Solo reader dry
+        filter = "[1:a]highpass=f=140,lowpass=f=8000,volume=2.0,alimiter=limit=0.95[aout]";
+      } else if (mode === "dry") {
+        // Dry: reader is clean + present
+        filter = "[1:a]highpass=f=140,lowpass=f=8000,volume=1.25[rd];" +
+          "[0:a][rd]amix=inputs=2:weights=1 1.35:normalize=0:duration=first:dropout_transition=3,alimiter=limit=0.95[aout]";
+      } else {
+        // Room: stronger short-delay reverb-ish effect (audible difference)
+        filter = "[1:a]aecho=0.85:0.88:90|180|270:0.30|0.22|0.16,highpass=f=140,lowpass=f=8000,volume=1.35[room];" +
+          "[0:a][room]amix=inputs=2:weights=1 1.35:normalize=0:duration=first:dropout_transition=3,alimiter=limit=0.95[aout]";
+      }
       const baseArgs = [
         "-y",
         "-i",
@@ -1634,11 +1641,18 @@ export function initHttpRoutes(app: Express) {
 
       // Track ffmpeg start (copy mode)
       const copyArgs = [...baseArgs, "-c:v", "copy", outPath];
+      let readerBytes: number | undefined;
+      try {
+        readerBytes = fs.statSync(actualReaderFile).size;
+      } catch {}
       lastMixdownEvent = {
         ...lastMixdownEvent,
         stage: "ffmpeg_start",
         mode: "copy",
-        args: copyArgs
+        args: copyArgs,
+        solo: soloReader ? "reader" : "mix",
+        readerFile: actualReaderFile,
+        readerBytes
       };
 
       try {
