@@ -1419,6 +1419,16 @@ export function initHttpRoutes(app: Express) {
       // bump this when you change ffmpeg logic so old cache never lies to you again
       const MIX_VER = "v3";
 
+      // Helper to prevent hangs on R2 operations
+      const withTimeout = async <T>(p: Promise<T>, ms: number, label: string): Promise<T> => {
+        let t: any;
+        const timeout = new Promise<T>((_, rej) => {
+          t = setTimeout(() => rej(new Error(label + "_timeout")), ms);
+        });
+        try { return await Promise.race([p, timeout]); }
+        finally { clearTimeout(t); }
+      };
+
       // Determine if take is from R2
       const isR2Take = filePath.startsWith("r2://");
       let actualTakeFile = filePath;
@@ -1428,13 +1438,20 @@ export function initHttpRoutes(app: Express) {
       // Check if mixed file already exists in R2 (unless force=1)
       const outKey = `mixed/${user.id}/${id}-${mode}-${MIX_VER}.mp4`;
       if (!force && r2Enabled()) {
+        // Track cache check start
+        lastMixdownEvent = {
+          ...lastMixdownEvent,
+          stage: "cache_check_start",
+          outKey
+        };
+
         try {
-          const mixHead = await r2Head(outKey);
+          const mixHead = await withTimeout(r2Head(outKey), 5000, "r2_head");
           if (mixHead.exists) {
             console.log("[mixdown] Found existing cached mix in R2: key=%s, takeId=%s, userId=%s", outKey, id, user.id);
 
-            // Stream from R2
-            const { stream, contentType, contentLength } = await r2GetObjectStream(outKey);
+            // Stream from R2 with timeout
+            const { stream, contentType, contentLength } = await withTimeout(r2GetObjectStream(outKey), 8000, "r2_get_cached");
 
             // Track cache hit
             lastMixdownEvent = {
@@ -1458,8 +1475,17 @@ export function initHttpRoutes(app: Express) {
             }
             return stream.pipe(res);
           }
-        } catch (err) {
-          console.warn("[mixdown] R2 cache check failed for takeId=%s: %s", id, err);
+        } catch (err: any) {
+          // Track cache check/stream failure
+          const isCacheStreamError = String(err?.message || "").includes("r2_get_cached");
+          lastMixdownEvent = {
+            ...lastMixdownEvent,
+            stage: isCacheStreamError ? "cache_stream_failed" : "cache_check_failed",
+            message: String(err?.message || err)
+          };
+          console.warn("[mixdown] R2 cache %s failed for takeId=%s: %s",
+            isCacheStreamError ? "stream" : "check", id, err);
+          // Continue to rebuild instead of hanging
         }
       }
 
