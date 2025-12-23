@@ -428,6 +428,9 @@ export function initHttpRoutes(app: Express) {
     process.env.MIXDOWN_ENABLED !== "0" &&
     process.env.MIXDOWN_ENABLED.toLowerCase() !== "false";
 
+  // Room diagnosability: capture last mixdown error
+  let lastMixdownError: any = null;
+
   function runFfmpeg(args: string[]): Promise<void> {
     return new Promise((resolve, reject) => {
       const proc = spawn("ffmpeg", args);
@@ -437,6 +440,12 @@ export function initHttpRoutes(app: Express) {
       proc.on("close", (code) => {
         if (code === 0) return resolve();
         const err = new Error(`ffmpeg exited with code ${code}: ${stderr}`);
+        // Attach structured ffmpeg diagnostics (trim stderr to 4000 chars)
+        (err as any).ffmpeg = {
+          code,
+          stderr: stderr.slice(-4000),
+          args
+        };
         return reject(err);
       });
     });
@@ -562,6 +571,11 @@ export function initHttpRoutes(app: Express) {
       console.error("[debug/r2_head] error:", err);
       return res.status(500).json({ ok: false, error: "r2_head_failed" });
     }
+  });
+
+  // GET /debug/last_mixdown - Room diagnosability
+  debug.get("/last_mixdown", audit("/debug/last_mixdown"), (req: Request, res: Response) => {
+    return res.json({ ok: true, lastMixdownError });
   });
 
   // POST /debug/upload_script_text
@@ -1494,19 +1508,52 @@ export function initHttpRoutes(app: Express) {
       try {
         await runFfmpeg([...baseArgs, "-c:v", "copy", outPath]);
         console.log("[mixdown] FFmpeg completed successfully (copy mode), takeId=%s", id);
-      } catch (err) {
-        console.warn("[mixdown] FFmpeg copy mode failed, retrying with transcode, takeId=%s: %s", id, err);
-        await runFfmpeg([
-          ...baseArgs,
-          "-c:v",
-          "libx264",
-          "-preset",
-          "veryfast",
-          "-crf",
-          "22",
-          outPath,
-        ]);
-        console.log("[mixdown] FFmpeg completed successfully (transcode mode), takeId=%s", id);
+      } catch (copyErr) {
+        console.warn("[mixdown] FFmpeg copy mode failed, retrying with transcode, takeId=%s: %s", id, copyErr);
+        // Capture copy failure diagnostics
+        lastMixdownError = {
+          at: new Date().toISOString(),
+          stage: "ffmpeg_copy",
+          takeId: id,
+          userId: user.id,
+          mode,
+          outKey,
+          takePath: actualTakeFile,
+          readerPath: actualReaderFile,
+          ffmpeg: (copyErr as any).ffmpeg || null,
+          message: String((copyErr as any)?.message || copyErr)
+        };
+        console.error("[mixdown] Copy failure captured:", lastMixdownError);
+
+        try {
+          await runFfmpeg([
+            ...baseArgs,
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "22",
+            outPath,
+          ]);
+          console.log("[mixdown] FFmpeg completed successfully (transcode mode), takeId=%s", id);
+        } catch (transcodeErr) {
+          // Capture transcode failure diagnostics
+          lastMixdownError = {
+            at: new Date().toISOString(),
+            stage: "ffmpeg_transcode",
+            takeId: id,
+            userId: user.id,
+            mode,
+            outKey,
+            takePath: actualTakeFile,
+            readerPath: actualReaderFile,
+            ffmpeg: (transcodeErr as any).ffmpeg || null,
+            message: String((transcodeErr as any)?.message || transcodeErr)
+          };
+          console.error("[mixdown] Transcode failure captured:", lastMixdownError);
+          throw new Error("ffmpeg_transcode_failed");
+        }
       }
 
       // Upload to R2 if enabled
@@ -1560,6 +1607,10 @@ export function initHttpRoutes(app: Express) {
       });
     } catch (err) {
       console.error("[mixdown] Error processing mixed file request, takeId=%s, userId=%s: %s", id, user?.id, err);
+
+      // Determine error stage from the error message or lastMixdownError
+      const stage = lastMixdownError?.stage || "unknown";
+
       // Cleanup temp files on error (best effort)
       if (tempTakeFile) {
         try {
@@ -1582,7 +1633,12 @@ export function initHttpRoutes(app: Express) {
           console.warn("[gallery/mixed_file] Failed to cleanup temp output file:", e);
         }
       }
-      return res.status(500).json({ error: "internal_error" });
+
+      return res.status(500).json({
+        error: "internal_error",
+        stage,
+        hint: "Check /debug/last_mixdown"
+      });
     }
   });
 
