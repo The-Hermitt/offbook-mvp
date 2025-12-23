@@ -428,8 +428,9 @@ export function initHttpRoutes(app: Express) {
     process.env.MIXDOWN_ENABLED !== "0" &&
     process.env.MIXDOWN_ENABLED.toLowerCase() !== "false";
 
-  // Room diagnosability: capture last mixdown error
+  // Room diagnosability: capture last mixdown error and event
   let lastMixdownError: any = null;
+  let lastMixdownEvent: any = null;
 
   function runFfmpeg(args: string[]): Promise<void> {
     return new Promise((resolve, reject) => {
@@ -575,7 +576,7 @@ export function initHttpRoutes(app: Express) {
 
   // GET /debug/last_mixdown - Room diagnosability
   debug.get("/last_mixdown", audit("/debug/last_mixdown"), (req: Request, res: Response) => {
-    return res.json({ ok: true, lastMixdownError });
+    return res.json({ ok: true, lastMixdownEvent, lastMixdownError });
   });
 
   // POST /debug/upload_script_text
@@ -1313,6 +1314,14 @@ export function initHttpRoutes(app: Express) {
     const id = String(req.params.id || "");
     const user = (req as any).user || res.locals.user;
 
+    // Track mixdown event from the start
+    lastMixdownEvent = {
+      at: new Date().toISOString(),
+      stage: "requested",
+      takeId: id,
+      url: req.originalUrl
+    };
+
     try {
       if (!mixdownEnabled) {
         return res.status(404).json({ error: "mixdown_disabled" });
@@ -1370,8 +1379,18 @@ export function initHttpRoutes(app: Express) {
           const mixHead = await r2Head(outKey);
           if (mixHead.exists) {
             console.log("[mixdown] Found existing cached mix in R2: key=%s, takeId=%s, userId=%s", outKey, id, user.id);
+
             // Stream from R2
             const { stream, contentType, contentLength } = await r2GetObjectStream(outKey);
+
+            // Track cache hit
+            lastMixdownEvent = {
+              ...lastMixdownEvent,
+              stage: "cache_hit",
+              mode,
+              outKey,
+              size: contentLength
+            };
             res.setHeader("Content-Type", contentType || "video/mp4");
             if (contentLength !== undefined) {
               res.setHeader("Content-Length", contentLength);
@@ -1379,6 +1398,7 @@ export function initHttpRoutes(app: Express) {
             res.setHeader("X-Offbook-Mix-Mode", mode);
             res.setHeader("X-Offbook-Mix-Key", outKey);
             res.setHeader("X-Offbook-Mix-Ver", MIX_VER);
+            res.setHeader("X-OffBook-Room-Stage", lastMixdownEvent?.stage || "unknown");
             if (wantsDownload) {
               const safeName = takeName.replace(/[^\w.-]+/g, "_").slice(0, 80) || "take";
               res.setHeader("Content-Disposition", `attachment; filename="${safeName}-${mode}.mp4"`);
@@ -1505,9 +1525,27 @@ export function initHttpRoutes(app: Express) {
       ];
 
       console.log("[mixdown] Running ffmpeg to create mixed file, takeId=%s, userId=%s", id, user.id);
+
+      // Track ffmpeg start (copy mode)
+      const copyArgs = [...baseArgs, "-c:v", "copy", outPath];
+      lastMixdownEvent = {
+        ...lastMixdownEvent,
+        stage: "ffmpeg_start",
+        mode: "copy",
+        args: copyArgs
+      };
+
       try {
-        await runFfmpeg([...baseArgs, "-c:v", "copy", outPath]);
+        await runFfmpeg(copyArgs);
         console.log("[mixdown] FFmpeg completed successfully (copy mode), takeId=%s", id);
+
+        // Track ffmpeg success
+        lastMixdownEvent = {
+          ...lastMixdownEvent,
+          stage: "ffmpeg_ok",
+          out: outPath,
+          size: fs.statSync(outPath).size
+        };
       } catch (copyErr) {
         console.warn("[mixdown] FFmpeg copy mode failed, retrying with transcode, takeId=%s: %s", id, copyErr);
         // Capture copy failure diagnostics
@@ -1525,18 +1563,35 @@ export function initHttpRoutes(app: Express) {
         };
         console.error("[mixdown] Copy failure captured:", lastMixdownError);
 
+        // Track ffmpeg start (transcode mode)
+        const transcodeArgs = [
+          ...baseArgs,
+          "-c:v",
+          "libx264",
+          "-preset",
+          "veryfast",
+          "-crf",
+          "22",
+          outPath,
+        ];
+        lastMixdownEvent = {
+          ...lastMixdownEvent,
+          stage: "ffmpeg_start",
+          mode: "transcode",
+          args: transcodeArgs
+        };
+
         try {
-          await runFfmpeg([
-            ...baseArgs,
-            "-c:v",
-            "libx264",
-            "-preset",
-            "veryfast",
-            "-crf",
-            "22",
-            outPath,
-          ]);
+          await runFfmpeg(transcodeArgs);
           console.log("[mixdown] FFmpeg completed successfully (transcode mode), takeId=%s", id);
+
+          // Track ffmpeg success (transcode)
+          lastMixdownEvent = {
+            ...lastMixdownEvent,
+            stage: "ffmpeg_ok",
+            out: outPath,
+            size: fs.statSync(outPath).size
+          };
         } catch (transcodeErr) {
           // Capture transcode failure diagnostics
           lastMixdownError = {
@@ -1568,6 +1623,7 @@ export function initHttpRoutes(app: Express) {
       res.setHeader("X-Offbook-Mix-Mode", mode);
       res.setHeader("X-Offbook-Mix-Key", outKey);
       res.setHeader("X-Offbook-Mix-Ver", MIX_VER);
+      res.setHeader("X-OffBook-Room-Stage", lastMixdownEvent?.stage || "unknown");
       if (wantsDownload) {
         const safeName = takeName.replace(/[^\w.-]+/g, "_").slice(0, 80) || "take";
         res.setHeader("Content-Disposition", `attachment; filename="${safeName}-${mode}.mp4"`);
@@ -1607,6 +1663,12 @@ export function initHttpRoutes(app: Express) {
       });
     } catch (err) {
       console.error("[mixdown] Error processing mixed file request, takeId=%s, userId=%s: %s", id, user?.id, err);
+
+      // Track error event
+      lastMixdownEvent = {
+        ...lastMixdownEvent,
+        stage: "error"
+      };
 
       // Determine error stage from the error message or lastMixdownError
       const stage = lastMixdownError?.stage || "unknown";
