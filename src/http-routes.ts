@@ -457,7 +457,7 @@ export function initHttpRoutes(app: Express) {
     stream: any,
     destPath: string,
     label: string,
-    timeoutMs: number = 45000
+    timeoutMs: number = 120000
   ): Promise<void> {
     return new Promise((resolve, reject) => {
       const writeStream = fs.createWriteStream(destPath);
@@ -1414,7 +1414,7 @@ export function initHttpRoutes(app: Express) {
 
       const mode = req.query.mode === "dry" ? "dry" : "room";
       // bump this when you change ffmpeg logic so old cache never lies to you again
-      const MIX_VER = "v2";
+      const MIX_VER = "v3";
 
       // Determine if take is from R2
       const isR2Take = filePath.startsWith("r2://");
@@ -1480,7 +1480,7 @@ export function initHttpRoutes(app: Express) {
 
         try {
           const { stream: takeStream } = await r2GetObjectStream(r2Key);
-          await pipeStreamToFile(takeStream, tempTakeFile, "download_take");
+          await pipeStreamToFile(takeStream, tempTakeFile, "download_take", 120000);
 
           // Track download success
           lastMixdownEvent = {
@@ -1544,7 +1544,7 @@ export function initHttpRoutes(app: Express) {
 
           try {
             const { stream: readerStream } = await r2GetObjectStream(r2Key);
-            await pipeStreamToFile(readerStream, tempReaderFile, "download_reader");
+            await pipeStreamToFile(readerStream, tempReaderFile, "download_reader", 120000);
 
             // Track download success
             lastMixdownEvent = {
