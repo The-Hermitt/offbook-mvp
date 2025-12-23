@@ -452,6 +452,56 @@ export function initHttpRoutes(app: Express) {
     });
   }
 
+  // Helper for robust R2 stream-to-file with timeout and error handling
+  async function pipeStreamToFile(
+    stream: any,
+    destPath: string,
+    label: string,
+    timeoutMs: number = 45000
+  ): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const writeStream = fs.createWriteStream(destPath);
+      let timer: NodeJS.Timeout | null = null;
+      let resolved = false;
+
+      const cleanup = () => {
+        if (timer) clearTimeout(timer);
+        resolved = true;
+      };
+
+      const handleError = (err: Error, source: string) => {
+        if (resolved) return;
+        cleanup();
+        try { stream.destroy(); } catch {}
+        try { writeStream.close(); } catch {}
+        reject(new Error(`${label}_${source}_error: ${err.message}`));
+      };
+
+      // Set timeout
+      timer = setTimeout(() => {
+        if (resolved) return;
+        cleanup();
+        try { stream.destroy(); } catch {}
+        try { writeStream.close(); } catch {}
+        reject(new Error(`${label}_timeout`));
+      }, timeoutMs);
+
+      // Handle errors
+      stream.on("error", (err: Error) => handleError(err, "stream"));
+      writeStream.on("error", (err: Error) => handleError(err, "write"));
+
+      // Handle success
+      writeStream.on("finish", () => {
+        if (resolved) return;
+        cleanup();
+        resolve();
+      });
+
+      // Pipe the stream
+      stream.pipe(writeStream);
+    });
+  }
+
   const debug = express.Router();
   const api = express.Router();
 
@@ -1420,16 +1470,47 @@ export function initHttpRoutes(app: Express) {
         tempTakeFile = path.join(tmpDir, `${id}.mp4`);
 
         console.log("[mixdown] Downloading R2 take to temp: key=%s, takeId=%s, userId=%s", r2Key, id, user.id);
-        const { stream: takeStream } = await r2GetObjectStream(r2Key);
-        await new Promise<void>((resolve, reject) => {
-          const writeStream = fs.createWriteStream(tempTakeFile!);
-          takeStream.pipe(writeStream);
-          writeStream.on("finish", () => resolve());
-          writeStream.on("error", reject);
-        });
 
-        actualTakeFile = tempTakeFile;
-        console.log("[mixdown] R2 take downloaded successfully, takeId=%s", id);
+        // Track download start
+        lastMixdownEvent = {
+          ...lastMixdownEvent,
+          stage: "download_take_start",
+          r2Key
+        };
+
+        try {
+          const { stream: takeStream } = await r2GetObjectStream(r2Key);
+          await pipeStreamToFile(takeStream, tempTakeFile, "download_take");
+
+          // Track download success
+          lastMixdownEvent = {
+            ...lastMixdownEvent,
+            stage: "download_take_ok",
+            size: fs.statSync(tempTakeFile).size
+          };
+
+          actualTakeFile = tempTakeFile;
+          console.log("[mixdown] R2 take downloaded successfully, takeId=%s", id);
+        } catch (downloadErr: any) {
+          // Capture download failure
+          lastMixdownError = {
+            at: new Date().toISOString(),
+            stage: "download_take",
+            takeId: id,
+            userId: user.id,
+            mode,
+            outKey,
+            r2Key,
+            message: String(downloadErr?.message || downloadErr)
+          };
+          console.error("[mixdown] Take download failed:", lastMixdownError);
+          lastMixdownEvent = { ...lastMixdownEvent, stage: "error" };
+          return res.status(504).json({
+            error: "timeout",
+            stage: "download_take",
+            hint: "Check /debug/last_mixdown"
+          });
+        }
       } else {
         // Local take
         console.log("[mixdown] Using local take file: %s, takeId=%s", filePath, id);
@@ -1454,20 +1535,46 @@ export function initHttpRoutes(app: Express) {
           fs.mkdirSync(tmpDir, { recursive: true });
           tempReaderFile = path.join(tmpDir, `${readerId}.mp3`);
 
+          // Track download start
+          lastMixdownEvent = {
+            ...lastMixdownEvent,
+            stage: "download_reader_start",
+            r2Key
+          };
+
           try {
             const { stream: readerStream } = await r2GetObjectStream(r2Key);
-            await new Promise<void>((resolve, reject) => {
-              const writeStream = fs.createWriteStream(tempReaderFile!);
-              readerStream.pipe(writeStream);
-              writeStream.on("finish", () => resolve());
-              writeStream.on("error", reject);
-            });
+            await pipeStreamToFile(readerStream, tempReaderFile, "download_reader");
+
+            // Track download success
+            lastMixdownEvent = {
+              ...lastMixdownEvent,
+              stage: "download_reader_ok",
+              size: fs.statSync(tempReaderFile).size
+            };
 
             actualReaderFile = tempReaderFile;
             console.log("[mixdown] Reader downloaded successfully from R2, readerId=%s, takeId=%s", readerId, id);
-          } catch (err) {
-            console.log("[mixdown] Reader not found in R2: key=%s, readerId=%s, takeId=%s, error=%s", r2Key, readerId, id, err);
-            return res.status(404).json({ error: "reader_audio_missing" });
+          } catch (downloadErr: any) {
+            // Capture download failure
+            lastMixdownError = {
+              at: new Date().toISOString(),
+              stage: "download_reader",
+              takeId: id,
+              userId: user.id,
+              mode,
+              outKey,
+              r2Key,
+              readerId,
+              message: String(downloadErr?.message || downloadErr)
+            };
+            console.error("[mixdown] Reader download failed:", lastMixdownError);
+            lastMixdownEvent = { ...lastMixdownEvent, stage: "error" };
+            return res.status(504).json({
+              error: "timeout",
+              stage: "download_reader",
+              hint: "Check /debug/last_mixdown"
+            });
           }
         } else {
           console.log("[mixdown] R2 not enabled and local reader missing: readerId=%s, takeId=%s", readerId, id);
