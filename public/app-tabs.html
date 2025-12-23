@@ -14640,7 +14640,15 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
           await renderRehearseVoices(); // fills RR.map
 
-          if(RR.map.size){ setStatusRec("Reader ready."); try{ preloadReaderBuffers(); }catch{}; return; }
+          if(RR.map.size){
+            setStatusRec("Reader ready.");
+            try{ preloadReaderBuffers(); }catch{}
+            if(!R.render_id){
+              setStatusRec("Rendering reader track…");
+              await prepareReader();
+            }
+            return;
+          }
 
         }catch(e){ /* fall through to server render */ }
 
