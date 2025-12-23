@@ -129,6 +129,7 @@ export async function r2Head(
   exists: boolean;
   contentLength?: number;
   contentType?: string;
+  etag?: string;
 }> {
   const client = getS3Client();
 
@@ -144,6 +145,7 @@ export async function r2Head(
       exists: true,
       contentLength: response.ContentLength,
       contentType: response.ContentType,
+      etag: response.ETag,
     };
   } catch (err: any) {
     // If the object doesn't exist, HeadObject throws a 404 error

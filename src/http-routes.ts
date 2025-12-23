@@ -603,7 +603,7 @@ export function initHttpRoutes(app: Express) {
     try {
       const key = String(req.query.key || "");
       if (!key) {
-        return res.status(400).json({ ok: false, error: "key_required" });
+        return res.status(400).json({ ok: false, error: "missing_key" });
       }
 
       if (!r2Enabled()) {
@@ -615,8 +615,8 @@ export function initHttpRoutes(app: Express) {
         ok: true,
         key,
         exists: result.exists,
-        contentLength: result.contentLength,
-        contentType: result.contentType,
+        size: result.contentLength,
+        etag: result.etag,
       });
     } catch (err) {
       console.error("[debug/r2_head] error:", err);
@@ -1419,6 +1419,41 @@ export function initHttpRoutes(app: Express) {
       // bump this when you change ffmpeg logic so old cache never lies to you again
       const MIX_VER = "v3";
 
+      // STRICT CHECK: Verify reader audio exists in R2 before any fallback (Room hardening step 1)
+      if (mode === "room" && r2Enabled()) {
+        const readerKey = `renders/${readerId}.mp3`;
+        try {
+          const readerHead = await r2Head(readerKey);
+          if (!readerHead.exists) {
+            console.error("[mixdown] Reader audio missing in R2: key=%s, readerId=%s, takeId=%s", readerKey, readerId, id);
+            return res.status(404).json({
+              error: "reader_audio_missing",
+              readerKey,
+              readerId
+            });
+          }
+          const readerSize = readerHead.contentLength || 0;
+          if (readerSize < 20000) {
+            console.error("[mixdown] Reader audio too small: key=%s, size=%d, readerId=%s, takeId=%s", readerKey, readerSize, readerId, id);
+            return res.status(404).json({
+              error: "reader_audio_too_small",
+              readerKey,
+              size: readerSize,
+              readerId
+            });
+          }
+          console.log("[mixdown] Reader audio verified: key=%s, size=%d, readerId=%s, takeId=%s", readerKey, readerSize, readerId, id);
+        } catch (err: any) {
+          console.error("[mixdown] Reader verification failed: key=%s, readerId=%s, takeId=%s, error=%s", readerKey, readerId, id, err);
+          return res.status(500).json({
+            error: "reader_verification_failed",
+            readerKey,
+            readerId,
+            message: String(err?.message || err)
+          });
+        }
+      }
+
       // Helper to prevent hangs on R2 operations
       const withTimeout = async <T>(p: Promise<T>, ms: number, label: string): Promise<T> => {
         let t: any;
@@ -1522,6 +1557,7 @@ export function initHttpRoutes(app: Express) {
           console.log("[mixdown] R2 take downloaded successfully, takeId=%s", id);
         } catch (downloadErr: any) {
           // Capture download failure
+          const readerKey = `renders/${readerId}.mp3`;
           lastMixdownError = {
             at: new Date().toISOString(),
             stage: "download_take",
@@ -1530,6 +1566,7 @@ export function initHttpRoutes(app: Express) {
             mode,
             outKey,
             r2Key,
+            readerKey,
             message: String(downloadErr?.message || downloadErr)
           };
           console.error("[mixdown] Take download failed:", lastMixdownError);
@@ -1614,9 +1651,18 @@ export function initHttpRoutes(app: Express) {
       }
 
       // IMPORTANT: old builds uploaded 0-byte "silent mp3s". Those break ffmpeg.
+      // For room mode, we do NOT fall back to silent MP3 - we fail instead (Room hardening step 1)
       try {
         const st = fs.statSync(actualReaderFile);
         if (st.size < 512) {
+          if (mode === "room") {
+            console.error("[mixdown] Reader audio too small for room mode, failing instead of fallback: file=%s size=%d, readerId=%s, takeId=%s", actualReaderFile, st.size, readerId, id);
+            return res.status(404).json({
+              error: "reader_audio_too_small",
+              size: st.size,
+              readerId
+            });
+          }
           console.warn("[mixdown] Reader audio is empty/suspiciously small; substituting valid silence. file=%s size=%d", actualReaderFile, st.size);
           actualReaderFile = writeSilentMp3(readerId);
         }
@@ -1667,6 +1713,7 @@ export function initHttpRoutes(app: Express) {
 
       // Track ffmpeg start (copy mode)
       const copyArgs = [...baseArgs, "-c:v", "copy", outPath];
+      const readerKey = `renders/${readerId}.mp3`;
       let readerBytes: number | undefined;
       try {
         readerBytes = fs.statSync(actualReaderFile).size;
@@ -1678,6 +1725,7 @@ export function initHttpRoutes(app: Express) {
         args: copyArgs,
         solo: soloReader ? "reader" : "mix",
         readerFile: actualReaderFile,
+        readerKey,
         readerBytes
       };
 
@@ -1704,6 +1752,8 @@ export function initHttpRoutes(app: Express) {
           outKey,
           takePath: actualTakeFile,
           readerPath: actualReaderFile,
+          readerKey,
+          readerBytes,
           ffmpeg: (copyErr as any).ffmpeg || null,
           message: String((copyErr as any)?.message || copyErr)
         };
@@ -1749,6 +1799,8 @@ export function initHttpRoutes(app: Express) {
             outKey,
             takePath: actualTakeFile,
             readerPath: actualReaderFile,
+            readerKey,
+            readerBytes,
             ffmpeg: (transcodeErr as any).ffmpeg || null,
             message: String((transcodeErr as any)?.message || transcodeErr)
           };
