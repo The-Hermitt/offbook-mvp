@@ -1443,7 +1443,7 @@ export function initHttpRoutes(app: Express) {
 
       const mode = req.query.mode === "dry" ? "dry" : "room";
       // bump this when you change ffmpeg logic so old cache never lies to you again
-      const MIX_VER = "v3";
+      const MIX_VER = "v4";
 
       // STRICT CHECK: Verify reader audio exists in R2 before any fallback (Room hardening step 1)
       if (mode === "room" && r2Enabled()) {
@@ -1713,8 +1713,8 @@ export function initHttpRoutes(app: Express) {
         filter = "[1:a]highpass=f=140,lowpass=f=8000,volume=1.25[rd];" +
           "[0:a][rd]amix=inputs=2:weights=1 1.35:normalize=0:duration=first:dropout_transition=3,alimiter=limit=0.95[aout]";
       } else {
-        // Room: stronger short-delay reverb-ish effect (audible difference)
-        filter = "[1:a]aecho=0.85:0.88:90|180|270:0.30|0.22|0.16,highpass=f=140,lowpass=f=8000,volume=1.35[room];" +
+        // Room: subtle near-room effect with shorter delays and lighter decay
+        filter = "[1:a]aecho=0.90:0.70:35|70|105:0.10|0.07|0.05,highpass=f=140,lowpass=f=7800,volume=1.25[room];" +
           "[0:a][room]amix=inputs=2:weights=1 1.35:normalize=0:duration=first:dropout_transition=3,alimiter=limit=0.95[aout]";
       }
       const baseArgs = [
