@@ -1497,14 +1497,13 @@ export function initHttpRoutes(app: Express) {
         mode === "dry"
           ? (
               // Dry: reader is clean + present
-              "[1:a]highpass=f=140,lowpass=f=8000,volume=0.80[rd];" +
-              "[0:a][rd]amix=inputs=2:duration=first:dropout_transition=3[aout]"
+              "[1:a]highpass=f=140,lowpass=f=8000,volume=1.25[rd];" +
+              "[0:a][rd]amix=inputs=2:weights=1 1.35:normalize=0:duration=first:dropout_transition=3,alimiter=limit=0.95[aout]"
             )
           : (
               // Room: stronger short-delay reverb-ish effect (audible difference)
-              "[1:a]aecho=0.85:0.88:60|120|180:0.22|0.16|0.11," +
-              "highpass=f=140,lowpass=f=8000,volume=0.95[room];" +
-              "[0:a][room]amix=inputs=2:duration=first:dropout_transition=3[aout]"
+              "[1:a]aecho=0.85:0.88:90|180|270:0.30|0.22|0.16,highpass=f=140,lowpass=f=8000,volume=1.35[room];" +
+              "[0:a][room]amix=inputs=2:weights=1 1.35:normalize=0:duration=first:dropout_transition=3,alimiter=limit=0.95[aout]"
             );
       const baseArgs = [
         "-y",
