@@ -1467,7 +1467,7 @@ export function initHttpRoutes(app: Express) {
         // Download take from R2 to temp
         const tmpDir = path.join(os.tmpdir(), "offbook-mix");
         fs.mkdirSync(tmpDir, { recursive: true });
-        tempTakeFile = path.join(tmpDir, `${id}.mp4`);
+        tempTakeFile = path.join(tmpDir, `${id}-${Date.now()}-${Math.random().toString(16).slice(2)}.mp4`);
 
         console.log("[mixdown] Downloading R2 take to temp: key=%s, takeId=%s, userId=%s", r2Key, id, user.id);
 
@@ -1533,7 +1533,7 @@ export function initHttpRoutes(app: Express) {
 
           const tmpDir = path.join(os.tmpdir(), "offbook-mix");
           fs.mkdirSync(tmpDir, { recursive: true });
-          tempReaderFile = path.join(tmpDir, `${readerId}.mp3`);
+          tempReaderFile = path.join(tmpDir, `${readerId}-${Date.now()}-${Math.random().toString(16).slice(2)}.mp3`);
 
           // Track download start
           lastMixdownEvent = {
@@ -1596,7 +1596,7 @@ export function initHttpRoutes(app: Express) {
       // Determine output path - always use temp dir to avoid path.dirname(r2://)
       const tmpDir = path.join(os.tmpdir(), "offbook-mix");
       fs.mkdirSync(tmpDir, { recursive: true });
-      const outPath = path.join(tmpDir, `${id}.mixed.mp4`);
+      const outPath = path.join(tmpDir, `${id}-${mode}-${Date.now()}-${Math.random().toString(16).slice(2)}.mixed.mp4`);
       tempOutputFile = outPath;
 
       // Run ffmpeg to create mixed file

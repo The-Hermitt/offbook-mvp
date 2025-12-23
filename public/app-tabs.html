@@ -14473,7 +14473,13 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
               if (!id) throw new Error("No file available for this take.");
 
-              const url = `/api/gallery/${encodeURIComponent(id)}/mixed_file?dl=1&mode=room&force=1`;
+              // Default: allow cache hits (much faster, avoids timeouts)
+              // If you ever need to force rebuild, add ?mixforce=1 to the app URL.
+              const sp = new URLSearchParams();
+              sp.set("dl","1");
+              sp.set("mode","room");
+              if (new URLSearchParams(location.search).get("mixforce") === "1") sp.set("force","1");
+              const url = `/api/gallery/${encodeURIComponent(id)}/mixed_file?${sp.toString()}`;
               const resp = await fetch(url, withSecretHeaders({
                 method: "GET",
                 credentials: "include",
@@ -14510,18 +14516,15 @@ const savedStrip = document.getElementById("savedScriptsStrip");
               const filenameBase = cleanName(take.label || take.name || "offbook-take");
               const filename = `${filenameBase}-room.mp4`;
 
-              try{
-                const file = new File([blob], filename, { type: mime });
-                const canShareFiles =
-                  !!navigator.share &&
-                  (!navigator.canShare || navigator.canShare({ files: [file] }));
-
-                if (canShareFiles) {
+              if (navigator.share) {
+                try {
+                  // Force mp4 mime; iOS can be picky if blob.type is missing/weird
+                  const file = new File([blob], filename, { type: "video/mp4" });
                   await navigator.share({ files: [file], title: filename });
                   return;
+                } catch (shareErr) {
+                  console.warn("[offbook] share failed, falling back", shareErr);
                 }
-              } catch (shareErr) {
-                console.warn("[offbook] share failed, falling back", shareErr);
               }
 
               const objUrl = URL.createObjectURL(blob);
