@@ -25,6 +25,9 @@ const stripe =
     : null;
 const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || "";
 
+// Track http-routes mount status for debugging
+let ROUTES_MOUNT_STATUS = { mounted: false, error: null as string | null };
+
 function stripDataUrlPrefix(data: string): { base64: string; mimeFromHeader?: string } {
   const trimmed = data.trim();
   if (!trimmed.startsWith("data:")) {
@@ -868,6 +871,11 @@ app.get("/debug/whoami", requireSecret, (req: Request, res: Response) => {
   }
 });
 
+// HTTP routes mount status (for debugging on devices without console access)
+app.get("/debug/mount_status", requireSecret, (_req: Request, res: Response) => {
+  res.json(ROUTES_MOUNT_STATUS);
+});
+
 // 2.9) Debug my_scripts as admin - read-only script query for specific user
 app.get("/debug/my_scripts_as_admin", requireSecret, requireAdmin(), async (req: Request, res: Response) => {
   try {
@@ -1537,11 +1545,21 @@ async function tryMountProjectHttpRoutes() {
       const fn = ((mod as any).registerHttpRoutes || (mod as any).default) as (app: express.Express) => void;
       fn(app);
       console.log("[http-routes] mounted real handlers");
+      ROUTES_MOUNT_STATUS = { mounted: true, error: null };
       return true;
     }
-    if (mod) console.warn("[http-routes] present but no handler export detected");
+    if (mod) {
+      const msg = "http-routes present but no handler export detected";
+      console.warn("[http-routes]", msg);
+      ROUTES_MOUNT_STATUS = { mounted: false, error: msg };
+    } else {
+      const msg = "http-routes module not found";
+      ROUTES_MOUNT_STATUS = { mounted: false, error: msg };
+    }
   } catch (e) {
+    const errorMsg = String(e);
     console.warn("[http-routes] failed to import, using fallback:", e);
+    ROUTES_MOUNT_STATUS = { mounted: false, error: errorMsg };
   }
   return false;
 }

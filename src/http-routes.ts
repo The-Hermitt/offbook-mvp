@@ -1430,55 +1430,6 @@ export function initHttpRoutes(app: Express) {
         console.log("[mixdown] Missing reader_render_id for takeId=%s", id);
         return res.status(404).json({ error: "reader_missing" });
       }
-<<<<<<< HEAD
-
-      // Check if download is requested
-      const wantsDownload =
-        (typeof req.query?.download === "string" && req.query.download === "1") ||
-        (typeof req.query?.dl === "string" && req.query.dl === "1");
-
-      const force = String(req.query?.force || "") === "1";
-
-      const solo = String(req.query?.solo || "");
-      const soloReader = solo === "reader";
-
-      const mode = req.query.mode === "dry" ? "dry" : "room";
-      // bump this when you change ffmpeg logic so old cache never lies to you again
-      const MIX_VER = "v5";
-
-      // STRICT CHECK: Verify reader audio exists in R2 before any fallback (Room hardening step 1)
-      if (mode === "room" && r2Enabled()) {
-        const readerKey = `renders/${readerId}.mp3`;
-        try {
-          const readerHead = await r2Head(readerKey);
-          if (!readerHead.exists) {
-            console.error("[mixdown] Reader audio missing in R2: key=%s, readerId=%s, takeId=%s", readerKey, readerId, id);
-            return res.status(404).json({
-              error: "reader_audio_missing",
-              readerKey,
-              readerId
-            });
-          }
-          const readerSize = readerHead.contentLength || 0;
-          if (readerSize < 20000) {
-            console.error("[mixdown] Reader audio too small: key=%s, size=%d, readerId=%s, takeId=%s", readerKey, readerSize, readerId, id);
-            return res.status(404).json({
-              error: "reader_audio_too_small",
-              readerKey,
-              size: readerSize,
-              readerId
-            });
-          }
-          console.log("[mixdown] Reader audio verified: key=%s, size=%d, readerId=%s, takeId=%s", readerKey, readerSize, readerId, id);
-        } catch (err: any) {
-          console.error("[mixdown] Reader verification failed: key=%s, readerId=%s, takeId=%s, error=%s", readerKey, readerId, id, err);
-          return res.status(500).json({
-            error: "reader_verification_failed",
-            readerKey,
-            readerId,
-            message: String(err?.message || err)
-          });
-=======
 
       // Bump this when changing ffmpeg logic to bust cache
       const MIX_VER = "v6";
@@ -1663,7 +1614,6 @@ export function initHttpRoutes(app: Express) {
               outPath,
             ]);
           }
->>>>>>> f354cc1 (PATCH: <Room: Improvements with seperataion>)
         }
       }
 

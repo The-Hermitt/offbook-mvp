@@ -13,7 +13,8 @@
       "Bash(node --check:*)",
       "Bash(cat:*)",
       "Bash(python3:*)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(node -c:*)"
     ]
   }
 }
