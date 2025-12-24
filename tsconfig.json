@@ -8,7 +8,7 @@
     "esModuleInterop": true,
     "resolveJsonModule": true,
     "outDir": "dist",
-    "noEmit": true
+    "noEmit": false
   },
   "include": [
     "src/**/*.ts",
