@@ -3363,51 +3363,77 @@ JANE: Ready?"></textarea>
       ROOM_READY_FILE = { file, filename };
     }
 
-    function openInNewTab(url) {
-      const a = document.createElement("a");
-      a.href = url;
-      a.target = "_blank";
-      a.rel = "noopener";
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-    }
+    // Room Ready Modal helpers
+    let roomModalEl = null;
+    let roomModalResolve = null;
 
-    async function savePrefetchedRoomFile(url) {
-      if (!ROOM_READY_FILE) throw new Error("No Room file ready");
-      const { file, filename } = ROOM_READY_FILE;
+    function showRoomModal() {
+      if (!roomModalEl) {
+        roomModalEl = document.createElement("div");
+        roomModalEl.style.cssText = `
+          position: fixed;
+          top: 0;
+          left: 0;
+          right: 0;
+          bottom: 0;
+          background: rgba(0,0,0,0.7);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 10000;
+        `;
 
-      // Multi-level fallback chain for iOS compatibility
-      if (navigator.share) {
-        try {
-          const canShareFiles = (!navigator.canShare) || navigator.canShare({ files: [file] });
+        const panel = document.createElement("div");
+        panel.style.cssText = `
+          background: white;
+          border-radius: 8px;
+          padding: 20px;
+          max-width: 300px;
+          text-align: center;
+        `;
 
-          if (canShareFiles) {
-            await navigator.share({ files: [file], title: filename });
-            ROOM_READY_FILE = null;
-            return;
-          }
-        } catch (shareErr) {
-          console.warn("[offbook] share(files) failed", shareErr);
+        const msg = document.createElement("p");
+        msg.textContent = "Room ready!";
+        msg.style.cssText = "margin: 0 0 16px 0; font-size: 16px; font-weight: 500;";
 
-          // iOS fallback: share the URL (lets user "Save to Files" from the share sheet)
-          try {
-            await navigator.share({ url, title: filename });
-            ROOM_READY_FILE = null;
-            return;
-          } catch (shareUrlErr) {
-            console.warn("[offbook] share(url) failed", shareUrlErr);
-            // final fallback: open download in a new tab (keeps app open)
-            openInNewTab(url);
-            ROOM_READY_FILE = null;
-            return;
-          }
-        }
+        const btnContainer = document.createElement("div");
+        btnContainer.style.cssText = "display: flex; gap: 10px; justify-content: center;";
+
+        const btnCancel = document.createElement("button");
+        btnCancel.textContent = "Cancel";
+        btnCancel.style.cssText = "padding: 10px 20px; border: 1px solid #ccc; background: white; border-radius: 4px; cursor: pointer;";
+        btnCancel.onclick = () => {
+          hideRoomModal();
+          if (roomModalResolve) roomModalResolve(false);
+        };
+
+        const btnSave = document.createElement("button");
+        btnSave.textContent = "Save/Share";
+        btnSave.style.cssText = "padding: 10px 20px; border: none; background: #007bff; color: white; border-radius: 4px; cursor: pointer;";
+        btnSave.onclick = () => {
+          hideRoomModal();
+          if (roomModalResolve) roomModalResolve(true);
+        };
+
+        btnContainer.appendChild(btnCancel);
+        btnContainer.appendChild(btnSave);
+        panel.appendChild(msg);
+        panel.appendChild(btnContainer);
+        roomModalEl.appendChild(panel);
       }
 
-      // If no navigator.share at all, open in new tab as fallback
-      openInNewTab(url);
-      ROOM_READY_FILE = null;
+      document.body.appendChild(roomModalEl);
+
+      return new Promise((resolve) => {
+        roomModalResolve = resolve;
+      });
+    }
+
+    function hideRoomModal() {
+      if (roomModalEl && roomModalEl.parentNode) {
+        roomModalEl.parentNode.removeChild(roomModalEl);
+      }
+      roomModalResolve = null;
     }
 
     // --- Dev flag: enable server STT plumbing when ?stt2=1 is present ---
@@ -14707,11 +14733,41 @@ const savedStrip = document.getElementById("savedScriptsStrip");
               btn.disabled = false;
               btn.textContent = prevLabel;
 
-              // Show "Room ready" and wait for user tap to save
-              // This ensures iOS treats the share as a direct user gesture
-              if (confirm("Room ready! Tap OK to save/share.")) {
+              // Show Room Ready modal and wait for user action
+              const userWantsSave = await showRoomModal();
+
+              if (userWantsSave && ROOM_READY_FILE) {
                 try {
-                  await savePrefetchedRoomFile(url);
+                  const { file, filename } = ROOM_READY_FILE;
+
+                  // Use the same canShare logic as the Download button
+                  try {
+                    const canShareFiles =
+                      !!navigator.share &&
+                      (!navigator.canShare || navigator.canShare({ files: [file] }));
+
+                    if (canShareFiles) {
+                      await navigator.share({ files: [file], title: filename });
+                      ROOM_READY_FILE = null;
+                      return;
+                    }
+                  } catch (shareErr) {
+                    console.warn("[offbook] share failed, falling back to download", shareErr);
+                  }
+
+                  // Fallback: <a download>
+                  const blob = file;
+                  const objUrl = URL.createObjectURL(blob);
+                  const a = document.createElement("a");
+                  a.href = objUrl;
+                  a.download = filename;
+                  a.rel = "noopener";
+                  document.body.appendChild(a);
+                  a.click();
+                  a.remove();
+                  setTimeout(() => URL.revokeObjectURL(objUrl), 20000);
+                  ROOM_READY_FILE = null;
+
                 } catch(saveErr) {
                   console.warn("[offbook] room save failed", saveErr);
                   alert("Failed to save Room file: " + (saveErr?.message || String(saveErr)));
