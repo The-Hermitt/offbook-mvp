@@ -1573,8 +1573,29 @@ export function initHttpRoutes(app: Express) {
         // Fallback: use old 2-input path (take + reader MP3)
         console.log("[mixed_file] No stems found, using legacy 2-input mix for take %s", id);
 
-        const readerFile = path.join(ASSETS_DIR, `${readerId}.mp3`);
-        if (!fs.existsSync(readerFile)) {
+        // Check local reader file first
+        const localReader = path.join(ASSETS_DIR, `${readerId}.mp3`);
+        const localReaderExists = fs.existsSync(localReader);
+
+        // STRICT R2 CHECK: Only validate R2 if local file doesn't exist
+        // (If render just happened locally, MP3 may exist even if R2 upload pending/failed)
+        if (!localReaderExists && r2Enabled()) {
+          // Verify reader exists in R2 before attempting mixdown
+          try {
+            const r2ReaderKey = `renders/${readerId}.mp3`;
+            const r2ReaderHead = await r2Head(r2ReaderKey);
+            if (!r2ReaderHead.exists) {
+              console.error("[mixed_file] Reader audio missing in R2 and not found locally: readerId=%s", readerId);
+              return res.status(404).json({ error: "reader_audio_missing" });
+            }
+          } catch (err) {
+            console.error("[mixed_file] R2 head check failed for reader: readerId=%s, err=%s", readerId, err);
+            return res.status(404).json({ error: "reader_audio_missing" });
+          }
+        }
+
+        const readerFile = localReader;
+        if (!localReaderExists) {
           return res.status(404).json({ error: "reader_audio_missing" });
         }
 
