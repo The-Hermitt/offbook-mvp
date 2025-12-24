@@ -1299,6 +1299,96 @@ export function initHttpRoutes(app: Express) {
     }
   );
 
+  // POST /api/gallery/upload_stems - Upload mic and reader stems for a take
+  api.post(
+    "/gallery/upload_stems",
+    requireUser,
+    galleryUpload.fields([
+      { name: "mic", maxCount: 1 },
+      { name: "reader", maxCount: 1 }
+    ]),
+    async (req: Request, res: Response) => {
+      try {
+        const user = (req as any).user || res.locals.user;
+        if (!user || !user.id) {
+          return res.status(401).json({ error: "Unauthorized" });
+        }
+
+        const files = (req as any).files;
+        const takeId = String(req.body?.id || "");
+
+        if (!takeId) {
+          return res.status(400).json({ error: "id_required" });
+        }
+
+        if (!files?.mic || !files?.reader) {
+          return res.status(400).json({ error: "mic_and_reader_required" });
+        }
+
+        const micFile = files.mic[0];
+        const readerFile = files.reader[0];
+
+        if (!micFile?.path || !readerFile?.path) {
+          return res.status(400).json({ error: "stems_upload_bad_storage", hint: "Expected disk storage with file.path" });
+        }
+
+        // Determine file extensions from original names or default to .webm
+        const micExt = path.extname(micFile.originalname || "") || ".webm";
+        const readerExt = path.extname(readerFile.originalname || "") || ".webm";
+
+        // Save stems locally
+        const stemsDir = path.join(process.cwd(), "uploads", "gallery", String(user.id), "stems");
+        fs.mkdirSync(stemsDir, { recursive: true });
+
+        const micPath = path.join(stemsDir, `${takeId}-mic${micExt}`);
+        const readerPath = path.join(stemsDir, `${takeId}-reader${readerExt}`);
+
+        fs.renameSync(micFile.path, micPath);
+        fs.renameSync(readerFile.path, readerPath);
+
+        console.log("[stems] Saved locally: user=%s takeId=%s mic=%s reader=%s",
+          user.id, takeId, micPath, readerPath);
+
+        const storageInfo: any = {
+          local: {
+            mic: micPath,
+            reader: readerPath
+          }
+        };
+
+        // Upload to R2 if enabled
+        if (r2Enabled()) {
+          try {
+            const micKey = `stems/${user.id}/${takeId}-mic${micExt}`;
+            const readerKey = `stems/${user.id}/${takeId}-reader${readerExt}`;
+
+            await r2PutFile(micKey, micPath, micFile.mimetype || "audio/webm");
+            await r2PutFile(readerKey, readerPath, readerFile.mimetype || "audio/webm");
+
+            console.log("[stems] Uploaded to R2: user=%s takeId=%s micKey=%s readerKey=%s",
+              user.id, takeId, micKey, readerKey);
+
+            storageInfo.r2 = {
+              mic: micKey,
+              reader: readerKey
+            };
+          } catch (err) {
+            console.error("[stems] R2 upload failed, keeping local only:", err);
+          }
+        }
+
+        res.json({
+          ok: true,
+          takeId,
+          storage: storageInfo
+        });
+      } catch (err) {
+        console.error("Error in POST /api/gallery/upload_stems", err);
+        res.status(500).json({ error: "internal_error" });
+      }
+    }
+  );
+
   // POST /api/gallery/delete { take_id }
   api.post(
     "/gallery/delete",
@@ -1428,10 +1518,6 @@ export function initHttpRoutes(app: Express) {
         console.log("[mixdown] Missing file_path for takeId=%s", id);
         return res.status(404).json({ error: "file_missing" });
       }
-      if (!readerId) {
-        console.log("[mixdown] Missing reader_render_id for takeId=%s", id);
-        return res.status(404).json({ error: "reader_missing" });
-      }
 
       // Bump this when changing ffmpeg logic to bust cache
       const MIX_VER = "v6";
@@ -1442,8 +1528,9 @@ export function initHttpRoutes(app: Express) {
       const force = String(req.query?.force || "") === "1";
       const solo = String(req.query?.solo || "");
       const soloReader = solo === "reader";
+      const legacyRequested = String(req.query?.legacy || "") === "1";
 
-      // Try to find stems (mic + reader) for this take
+      // STEMS-FIRST APPROACH: Try to find stems (mic + reader) BEFORE checking reader_render_id
       const stemsDir = path.join(process.cwd(), "uploads", "gallery", String(user.id), "stems");
       fs.mkdirSync(stemsDir, { recursive: true });
 
@@ -1496,6 +1583,7 @@ export function initHttpRoutes(app: Express) {
 
               micStem = micTemp;
               readerStem = readerTemp;
+              tempReaderFile = readerTemp;
               console.log("[mixed_file] Downloaded stems from R2: mic=%s, reader=%s", micKey, readerKey);
               break;
             }
@@ -1503,12 +1591,46 @@ export function initHttpRoutes(app: Express) {
         }
       }
 
+      // Check if stems exist
+      const useStems = !!(micStem && readerStem && fs.existsSync(micStem) && fs.existsSync(readerStem));
+
+      // Update debug event with stem detection results
+      lastMixdownEvent = {
+        ...lastMixdownEvent,
+        stage: "stems_detected",
+        usedStems: useStems,
+        legacyRequested,
+        micStemPath: micStem || undefined,
+        readerStemPath: readerStem || undefined
+      };
+
+      // If stems missing and legacy not requested, return error
+      if (!useStems && !legacyRequested) {
+        console.log("[mixed_file] Stems missing and legacy mode not requested for take %s", id);
+        lastMixdownEvent = {
+          ...lastMixdownEvent,
+          stage: "error",
+          errorCode: "stems_missing"
+        };
+        return res.status(404).json({ error: "stems_missing" });
+      }
+
+      // Only enforce reader_render_id when legacy mode is explicitly requested
+      if (!useStems && legacyRequested) {
+        if (!readerId) {
+          console.log("[mixdown] Legacy mode requested but missing reader_render_id for takeId=%s", id);
+          lastMixdownEvent = {
+            ...lastMixdownEvent,
+            stage: "error",
+            errorCode: "reader_missing"
+          };
+          return res.status(404).json({ error: "reader_missing" });
+        }
+      }
+
       // Determine output path with versioning
       const outPath = path.join(path.dirname(filePath), `${id}-${mode}-${MIX_VER}.mixed.mp4`);
       const outExists = fs.existsSync(outPath);
-
-      // Use stems if both exist
-      const useStems = !!(micStem && readerStem && fs.existsSync(micStem) && fs.existsSync(readerStem));
 
       if (useStems) {
         console.log("[mixed_file] Using stems for take %s: mic=%s, reader=%s", id, micStem, readerStem);
@@ -1552,10 +1674,13 @@ export function initHttpRoutes(app: Express) {
           ];
 
           try {
+            lastMixdownEvent = { ...lastMixdownEvent, stage: "ffmpeg_stems_copy" };
             await runFfmpeg([...baseArgs, "-c:v", "copy", outPath]);
             console.log("[mixed_file] Stems-based mix complete (copy mode): %s", outPath);
+            lastMixdownEvent = { ...lastMixdownEvent, stage: "ffmpeg_stems_ok" };
           } catch (err) {
             console.warn("[mixed_file] Stems copy failed, retrying with transcode", err);
+            lastMixdownEvent = { ...lastMixdownEvent, stage: "ffmpeg_stems_transcode" };
             await runFfmpeg([
               ...baseArgs,
               "-c:v",
@@ -1567,14 +1692,16 @@ export function initHttpRoutes(app: Express) {
               outPath,
             ]);
             console.log("[mixed_file] Stems-based mix complete (transcode mode): %s", outPath);
+            lastMixdownEvent = { ...lastMixdownEvent, stage: "ffmpeg_stems_ok" };
           }
         }
       } else {
-        // Fallback: use old 2-input path (take + reader MP3)
-        console.log("[mixed_file] No stems found, using legacy 2-input mix for take %s", id);
+        // Fallback: use old 2-input path (take + reader MP3) - LEGACY MODE
+        console.log("[mixed_file] Using legacy 2-input mix for take %s (legacy=%s)", id, legacyRequested);
+        lastMixdownEvent = { ...lastMixdownEvent, stage: "legacy_mode" };
 
         // Check local reader file first
-        const localReader = path.join(ASSETS_DIR, `${readerId}.mp3`);
+        const localReader = path.join(ASSETS_DIR, `${readerId!}.mp3`);
         const localReaderExists = fs.existsSync(localReader);
 
         // STRICT R2 CHECK: Only validate R2 if local file doesn't exist
@@ -1582,20 +1709,35 @@ export function initHttpRoutes(app: Express) {
         if (!localReaderExists && r2Enabled()) {
           // Verify reader exists in R2 before attempting mixdown
           try {
-            const r2ReaderKey = `renders/${readerId}.mp3`;
+            const r2ReaderKey = `renders/${readerId!}.mp3`;
             const r2ReaderHead = await r2Head(r2ReaderKey);
             if (!r2ReaderHead.exists) {
               console.error("[mixed_file] Reader audio missing in R2 and not found locally: readerId=%s", readerId);
+              lastMixdownEvent = {
+                ...lastMixdownEvent,
+                stage: "error",
+                errorCode: "reader_audio_missing"
+              };
               return res.status(404).json({ error: "reader_audio_missing" });
             }
           } catch (err) {
             console.error("[mixed_file] R2 head check failed for reader: readerId=%s, err=%s", readerId, err);
+            lastMixdownEvent = {
+              ...lastMixdownEvent,
+              stage: "error",
+              errorCode: "reader_audio_missing"
+            };
             return res.status(404).json({ error: "reader_audio_missing" });
           }
         }
 
         const readerFile = localReader;
         if (!localReaderExists) {
+          lastMixdownEvent = {
+            ...lastMixdownEvent,
+            stage: "error",
+            errorCode: "reader_audio_missing"
+          };
           return res.status(404).json({ error: "reader_audio_missing" });
         }
 
@@ -1629,9 +1771,12 @@ export function initHttpRoutes(app: Express) {
           ];
 
           try {
+            lastMixdownEvent = { ...lastMixdownEvent, stage: "ffmpeg_legacy_copy" };
             await runFfmpeg([...baseArgs, "-c:v", "copy", outPath]);
+            lastMixdownEvent = { ...lastMixdownEvent, stage: "ffmpeg_legacy_ok" };
           } catch (err) {
             console.warn("[gallery] mixed copy failed, retrying with transcode", err);
+            lastMixdownEvent = { ...lastMixdownEvent, stage: "ffmpeg_legacy_transcode" };
             await runFfmpeg([
               ...baseArgs,
               "-c:v",
@@ -1642,14 +1787,17 @@ export function initHttpRoutes(app: Express) {
               "22",
               outPath,
             ]);
+            lastMixdownEvent = { ...lastMixdownEvent, stage: "ffmpeg_legacy_ok" };
           }
         }
       }
 
       // Send the mixed file
+      lastMixdownEvent = { ...lastMixdownEvent, stage: "sending_file" };
       res.type("video/mp4");
       res.setHeader("X-Offbook-Mix-Mode", mode);
       res.setHeader("X-Offbook-Mix-Ver", MIX_VER);
+      res.setHeader("X-Offbook-Used-Stems", String(useStems));
       if (wantsDownload) {
         const safeName = takeName.replace(/[^\w.-]+/g, "_").slice(0, 80) || "take";
         res.setHeader("Content-Disposition", `attachment; filename="${safeName}-${mode}.mp4"`);
@@ -1657,6 +1805,12 @@ export function initHttpRoutes(app: Express) {
       return res.sendFile(outPath);
     } catch (err) {
       console.error("[mixdown] Error processing mixed file request, takeId=%s, userId=%s: %s", id, user?.id, err);
+      lastMixdownEvent = {
+        ...lastMixdownEvent,
+        stage: "error",
+        errorCode: "internal_error",
+        errorMessage: String(err)
+      };
       return res.status(500).json({
         error: "internal_error",
         hint: "Check /debug/last_mixdown"
