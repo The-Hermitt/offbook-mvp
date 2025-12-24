@@ -14620,7 +14620,35 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
       }
 
+      // Non-blocking toast notification helper
+      function obToast(msg, ms=2500){
+        try{
+          let el = document.getElementById("ob-toast");
+          if(!el){
+            el = document.createElement("div");
+            el.id = "ob-toast";
+            el.style.cssText = "position:fixed;left:12px;right:12px;bottom:84px;z-index:99999;padding:10px 12px;border-radius:12px;background:rgba(0,0,0,.85);color:#fff;font-size:14px;display:none;";
+            document.body.appendChild(el);
+          }
+          el.textContent = msg;
+          el.style.display = "block";
+          clearTimeout(el._t);
+          el._t = setTimeout(()=>{ el.style.display="none"; }, ms);
+        }catch{}
+      }
 
+      // Mark take card as corrupted/bad
+      function markTakeBad(card, msg){
+        try{
+          if(!card) return;
+          if(card.dataset.badTake === "1") return;
+          card.dataset.badTake = "1";
+          const p = document.createElement("div");
+          p.style.cssText = "margin-top:8px;font-size:12px;opacity:.9;";
+          p.textContent = msg || "This take can't be played. You can delete it.";
+          card.appendChild(p);
+        }catch{}
+      }
 
       function bindGalleryCards(root, map){
 
@@ -14696,7 +14724,8 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
                 } catch (fallbackErr) {
                   console.error("[offbook] Playback fallback failed", fallbackErr);
-                  alert("Playback failed: " + (fallbackErr?.message || String(fallbackErr)));
+                  markTakeBad(card, "Playback failed. This take might be corrupted.");
+                  obToast("Playback failed: " + (fallbackErr?.message || String(fallbackErr)));
                 }
               }
 
@@ -14719,7 +14748,8 @@ const savedStrip = document.getElementById("savedScriptsStrip");
             if(btnPlay) btnPlay.textContent = "Play";
             const errorCode = video?.error?.code;
             const errorMessage = video?.error?.message || "Unknown error";
-            alert(`Video playback error (code ${errorCode}): ${errorMessage}`);
+            markTakeBad(card, "This take looks corrupted. Delete it.");
+            obToast("This take looks corrupted. Try deleting it.");
           });
 
 
@@ -14790,7 +14820,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
           
             } catch(err){
               console.warn("[offbook] download failed", err);
-              alert("Download failed: " + (err?.message || String(err)));
+              obToast("Download failed: " + (err?.message || String(err)));
             } finally {
               btn.disabled = false;
               btn.textContent = prevLabel;
@@ -14868,15 +14898,15 @@ const savedStrip = document.getElementById("savedScriptsStrip");
               const result = await showMixReadyModal(id);
 
               if (result.action === "expired") {
-                alert("Mix file expired. Please tap Room again.");
+                obToast("Mix file expired. Please tap Room again.");
               } else if (result.action === "error") {
-                alert("Failed to save mix: " + (result.message || "Unknown error"));
+                obToast("Failed to save mix: " + (result.message || "Unknown error"));
               }
               // On success (shared/downloaded), modal already handled everything
 
             } catch(err){
               console.warn("[offbook] room download failed", err);
-              alert("Room download failed: " + (err?.message || String(err)));
+              obToast("Room download failed: " + (err?.message || String(err)));
             } finally {
               btn.disabled = false;
               btn.textContent = prevLabel;
