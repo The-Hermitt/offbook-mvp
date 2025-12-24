@@ -14239,13 +14239,12 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
 
 
-          if (!src && (t.serverId || t.id)) {
-
-            const id = encodeURIComponent(t.serverId || t.id);
-
-            src = `/api/gallery/${id}/file`;
-
-          }
+          // Don't auto-load remote videos - prevents iOS Safari errors and freezing
+          // Videos will be loaded on-demand when user taps Play
+          // if (!src && (t.serverId || t.id)) {
+          //   const id = encodeURIComponent(t.serverId || t.id);
+          //   src = `/api/gallery/${id}/file`;
+          // }
 
 
 
@@ -14261,7 +14260,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
             <div class="take-card" data-id="${escapeHtml(t.id)}">
 
-              <video class="take-thumb" src="${escapeHtml(src)}" playsinline preload="metadata"></video>
+              <video class="take-thumb" src="${escapeHtml(src)}" playsinline preload="none"></video>
 
               <div class="take-row" style="justify-content:space-between;align-items:center;">
 
@@ -14753,16 +14752,12 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
             if(video.paused){
 
-              // Attempt to play with fallback logic
               try {
-                video.currentTime = 0;
-                await video.play();
-                if(btnPlay) btnPlay.textContent = "Pause";
-              } catch (playErr) {
-                console.warn("[offbook] Initial play failed, attempting fallback fetch", playErr);
+                // Check if video needs to be loaded from server first
+                const needsFetch = !video.src || video.src.includes("/api/gallery/");
 
-                // Fallback: fetch video file from server
-                try {
+                if (needsFetch) {
+                  // No usable blob source - fetch file first
                   const takeId = take.serverId || take.id;
                   if (!takeId) throw new Error("No takeId available for playback");
 
@@ -14770,33 +14765,31 @@ const savedStrip = document.getElementById("savedScriptsStrip");
                   const resp = await fetch(url, withSecretHeaders({
                     method: "GET",
                     credentials: "include",
+                    cache: "no-store"
                   }));
 
                   if (!resp.ok) {
-                    const errorText = await resp.text().catch(() => "");
-                    throw new Error(`Playback fetch failed (${resp.status}): ${errorText || resp.statusText}`);
+                    throw new Error(`Playback download failed (${resp.status})`);
                   }
 
                   const blob = await resp.blob();
                   const objectUrl = URL.createObjectURL(blob);
 
-                  // Replace video source and try playing again
+                  // Set video source
                   video.src = objectUrl;
+                  rec.url = objectUrl; // Store for later cleanup
+
                   video.load();
-                  video.currentTime = 0;
-                  await video.play();
-
-                  if(btnPlay) btnPlay.textContent = "Pause";
-
-                  // Cleanup object URL after video ends
-                  video.addEventListener("ended", () => {
-                    URL.revokeObjectURL(objectUrl);
-                  }, { once: true });
-
-                } catch (fallbackErr) {
-                  console.error("[offbook] Playback fallback failed", fallbackErr);
-                  alert("Playback failed: " + (fallbackErr?.message || String(fallbackErr)));
                 }
+
+                // Now play
+                video.currentTime = 0;
+                await video.play();
+                if(btnPlay) btnPlay.textContent = "Pause";
+
+              } catch (err) {
+                console.error("[offbook] Playback failed", err);
+                alert("Playback failed: " + (err?.message || String(err)));
               }
 
             }else{
@@ -14809,7 +14802,14 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
           });
 
-          video?.addEventListener("ended", ()=>{ if(btnPlay) btnPlay.textContent = "Play"; });
+          video?.addEventListener("ended", ()=>{
+            if(btnPlay) btnPlay.textContent = "Play";
+            // Cleanup object URL if it was created
+            if(rec.url) {
+              try { URL.revokeObjectURL(rec.url); } catch {}
+              rec.url = null;
+            }
+          });
 
           video?.addEventListener("pause", ()=>{ if(btnPlay && !video.error) btnPlay.textContent = "Play"; });
 
