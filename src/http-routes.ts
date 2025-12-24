@@ -1299,6 +1299,92 @@ export function initHttpRoutes(app: Express) {
     }
   );
 
+  // POST /api/gallery/upload_stems - Upload mic and reader stems for a take
+  api.post(
+    "/gallery/upload_stems",
+    requireUser,
+    upload.fields([
+      { name: "mic", maxCount: 1 },
+      { name: "reader", maxCount: 1 }
+    ]),
+    async (req: Request, res: Response) => {
+      try {
+        const user = (req as any).user || res.locals.user;
+        if (!user || !user.id) {
+          return res.status(401).json({ error: "Unauthorized" });
+        }
+
+        const files = (req as any).files;
+        const takeId = String(req.body?.id || "");
+
+        if (!takeId) {
+          return res.status(400).json({ error: "id_required" });
+        }
+
+        if (!files?.mic || !files?.reader) {
+          return res.status(400).json({ error: "mic_and_reader_required" });
+        }
+
+        const micFile = files.mic[0];
+        const readerFile = files.reader[0];
+
+        // Determine file extensions from original names or default to .webm
+        const micExt = path.extname(micFile.originalname || "") || ".webm";
+        const readerExt = path.extname(readerFile.originalname || "") || ".webm";
+
+        // Save stems locally
+        const stemsDir = path.join(process.cwd(), "uploads", "gallery", String(user.id), "stems");
+        fs.mkdirSync(stemsDir, { recursive: true });
+
+        const micPath = path.join(stemsDir, `${takeId}-mic${micExt}`);
+        const readerPath = path.join(stemsDir, `${takeId}-reader${readerExt}`);
+
+        fs.renameSync(micFile.path, micPath);
+        fs.renameSync(readerFile.path, readerPath);
+
+        console.log("[stems] Saved locally: user=%s takeId=%s mic=%s reader=%s",
+          user.id, takeId, micPath, readerPath);
+
+        const storageInfo: any = {
+          local: {
+            mic: micPath,
+            reader: readerPath
+          }
+        };
+
+        // Upload to R2 if enabled
+        if (r2Enabled()) {
+          try {
+            const micKey = `stems/${user.id}/${takeId}-mic${micExt}`;
+            const readerKey = `stems/${user.id}/${takeId}-reader${readerExt}`;
+
+            await r2PutFile(micKey, micPath, micFile.mimetype || "audio/webm");
+            await r2PutFile(readerKey, readerPath, readerFile.mimetype || "audio/webm");
+
+            console.log("[stems] Uploaded to R2: user=%s takeId=%s micKey=%s readerKey=%s",
+              user.id, takeId, micKey, readerKey);
+
+            storageInfo.r2 = {
+              mic: micKey,
+              reader: readerKey
+            };
+          } catch (err) {
+            console.error("[stems] R2 upload failed, keeping local only:", err);
+          }
+        }
+
+        res.json({
+          ok: true,
+          takeId,
+          storage: storageInfo
+        });
+      } catch (err) {
+        console.error("Error in POST /api/gallery/upload_stems", err);
+        res.status(500).json({ error: "internal_error" });
+      }
+    }
+  );
+
   // POST /api/gallery/delete { take_id }
   api.post(
     "/gallery/delete",

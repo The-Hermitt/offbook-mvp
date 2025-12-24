@@ -12012,7 +12012,9 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
           R.mixDest = R.mixCtx.createMediaStreamDestination();
 
-
+          // Create separate destinations for stems (mic-only and reader-only)
+          R.micOnlyDest = R.mixCtx.createMediaStreamDestination();
+          R.readerOnlyDest = R.mixCtx.createMediaStreamDestination();
 
           const micNode = R.mixCtx.createMediaStreamSource(rawStream);
 
@@ -12055,6 +12057,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
           R.micCompressor.connect(R.mixGainMic);
 
           R.mixGainMic.connect(R.mixDest);
+          R.mixGainMic.connect(R.micOnlyDest);  // Stem: mic-only audio
 
 
 
@@ -12141,6 +12144,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
           R.mixGainReader.connect(speakers);
 
           readerRecordGain.connect(R.mixDest);
+          readerRecordGain.connect(R.readerOnlyDest);  // Stem: reader-only audio
 
           R.readerRecordGain = readerRecordGain;
 
@@ -12183,6 +12187,10 @@ const savedStrip = document.getElementById("savedScriptsStrip");
         R.readerBridge = null;
 
         R.readerBridgeSource = null;
+
+        R.micOnlyDest = null;
+
+        R.readerOnlyDest = null;
 
         return rawStream;
 
@@ -12579,7 +12587,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
   try{ R.mixCtx?.close(); }catch{}
 
-  R.mixCtx = null; R.mixDest = null; R.mixGainReader = null; R.mixGainMic = null; R.micHPF = null; R.micCompressor = null;
+  R.mixCtx = null; R.mixDest = null; R.mixGainReader = null; R.mixGainMic = null; R.micHPF = null; R.micCompressor = null; R.micOnlyDest = null; R.readerOnlyDest = null;
 
 
 
@@ -12703,7 +12711,28 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
         catch{ R.rec = new MediaRecorder(finalStream); }
 
+        // Create stem recorders (audio-only for mic and reader)
+        R.micChunks = [];
+        R.readerChunks = [];
+        const stemMime = pickMime(false);  // Audio-only mime
 
+        if (R.micOnlyDest && R.readerOnlyDest) {
+          try {
+            R.recMic = stemMime ? new MediaRecorder(R.micOnlyDest.stream, { mimeType: stemMime }) : new MediaRecorder(R.micOnlyDest.stream);
+            R.recMic.ondataavailable = (e) => { if (e.data && e.data.size > 0) R.micChunks.push(e.data); };
+          } catch (e) {
+            console.warn("[offbook] Failed to create mic stem recorder:", e);
+            R.recMic = null;
+          }
+
+          try {
+            R.recReader = stemMime ? new MediaRecorder(R.readerOnlyDest.stream, { mimeType: stemMime }) : new MediaRecorder(R.readerOnlyDest.stream);
+            R.recReader.ondataavailable = (e) => { if (e.data && e.data.size > 0) R.readerChunks.push(e.data); };
+          } catch (e) {
+            console.warn("[offbook] Failed to create reader stem recorder:", e);
+            R.recReader = null;
+          }
+        }
 
         R.rec.ondataavailable = (e)=>{ if(e.data && e.data.size>0) R.chunks.push(e.data); };
 
@@ -12774,6 +12803,10 @@ const savedStrip = document.getElementById("savedScriptsStrip");
         R.recordStartMs = Date.now();
 
         try{ R.rec.start(); }
+
+        // Start stem recorders
+        if (R.recMic) { try { R.recMic.start(); } catch (e) { console.warn("[offbook] Failed to start mic stem recorder:", e); } }
+        if (R.recReader) { try { R.recReader.start(); } catch (e) { console.warn("[offbook] Failed to start reader stem recorder:", e); } }
 
         catch(e){
 
@@ -12887,6 +12920,10 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
         try{ R.rec?.stop(); }catch(e){ setStatus("Record error: " + e); }
 
+        // Stop stem recorders
+        if (R.recMic) { try { R.recMic.stop(); } catch (e) { console.warn("[offbook] Failed to stop mic stem recorder:", e); } }
+        if (R.recReader) { try { R.recReader.stop(); } catch (e) { console.warn("[offbook] Failed to stop reader stem recorder:", e); } }
+
         R.recording = false;
 
         R.forcePerLine = false;
@@ -12929,7 +12966,27 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
           if (savedTake) {
 
-            uploadTakeToServer(savedTake).catch(err => {
+            uploadTakeToServer(savedTake).then(async () => {
+
+              // After successful take upload, upload stems if available
+              if (R.micChunks && R.micChunks.length > 0 && R.readerChunks && R.readerChunks.length > 0) {
+                try {
+                  const micMime = (R.recMic && R.recMic.mimeType) || "audio/webm";
+                  const readerMime = (R.recReader && R.recReader.mimeType) || "audio/webm";
+
+                  const micBlob = new Blob(R.micChunks, { type: micMime });
+                  const readerBlob = new Blob(R.readerChunks, { type: readerMime });
+
+                  console.log("[offbook] Assembled stems:", { micSize: micBlob.size, readerSize: readerBlob.size });
+
+                  await uploadStemsToServer(savedTake.id, micBlob, readerBlob);
+                } catch (err) {
+                  console.error("[offbook] Stem upload failed:", err);
+                  alert("Warning: Stem upload failed. Room mixdown may not work for this take.\n\n" + String(err).slice(0, 200));
+                }
+              }
+
+            }).catch(err => {
 
               console.warn("Failed to upload take to server", err);
 
@@ -13628,6 +13685,53 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
         }
 
+      }
+
+
+
+      async function uploadStemsToServer(takeId, micBlob, readerBlob) {
+        try {
+          const userKey = getSignedInUserKey();
+          if (!userKey) return; // not signed in, skip
+
+          if (!takeId || !micBlob || !readerBlob) {
+            console.warn("[offbook] uploadStemsToServer: missing data", { takeId, micBlob, readerBlob });
+            return;
+          }
+
+          const form = new FormData();
+          form.append("id", takeId);
+
+          const micMime = micBlob.type || "audio/webm";
+          const readerMime = readerBlob.type || "audio/webm";
+
+          const micExt = micMime.includes("mp4") || micMime.includes("m4a") ? ".m4a" : ".webm";
+          const readerExt = readerMime.includes("mp4") || readerMime.includes("m4a") ? ".m4a" : ".webm";
+
+          form.append("mic", micBlob, `${takeId}-mic${micExt}`);
+          form.append("reader", readerBlob, `${takeId}-reader${readerExt}`);
+
+          console.log("[offbook] Uploading stems for takeId:", takeId);
+
+          const resp = await fetch("/api/gallery/upload_stems", {
+            method: "POST",
+            body: form,
+            credentials: "include"
+          });
+
+          if (!resp.ok) {
+            const txt = await resp.text().catch(() => "");
+            console.warn("uploadStemsToServer failed", resp.status, txt);
+            throw new Error(`HTTP ${resp.status}: ${txt.slice(0, 200)}`);
+          }
+
+          const data = await resp.json().catch(() => null);
+          console.log("[offbook] Stems upload successful:", data);
+
+        } catch (err) {
+          console.error("uploadStemsToServer error", err);
+          throw err;
+        }
       }
 
 
