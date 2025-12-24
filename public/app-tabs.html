@@ -3346,6 +3346,105 @@ JANE: Ready?"></textarea>
       setTimeout(() => URL.revokeObjectURL(blobUrl), 10_000);
     }
 
+    // Room "Mixing..." progress modal (non-blocking, safe for iOS)
+    function prettyMixStage(stage) {
+      const s = String(stage || "").toLowerCase();
+      if (!s) return "Starting…";
+      if (s.includes("requested")) return "Starting…";
+      if (s.includes("cache")) return "Checking cache…";
+      if (s.includes("stem")) return "Preparing stems…";
+      if (s.includes("ffmpeg") || s.includes("mix")) return "Applying room…";
+      if (s.includes("mux")) return "Finalizing…";
+      if (s.includes("send")) return "Sending file…";
+      if (s.includes("complete") || s.includes("ready")) return "Ready…";
+      if (s.includes("disabled")) return "Room is disabled.";
+      return "Mixing…";
+    }
+
+    function showMixingProgressModal() {
+      let closed = false;
+
+      const overlay = document.createElement("div");
+      overlay.style.cssText = `
+        position: fixed; inset: 0;
+        background: rgba(0,0,0,0.78);
+        display:flex; align-items:center; justify-content:center;
+        z-index: 10000;
+      `;
+
+      const panel = document.createElement("div");
+      panel.style.cssText = `
+        background: #12141c;
+        border: 1px solid rgba(118,130,164,0.25);
+        border-radius: 14px;
+        padding: 18px 18px 14px;
+        min-width: 300px;
+        max-width: 340px;
+        text-align: center;
+        box-shadow: 0 10px 40px rgba(0,0,0,0.55);
+      `;
+
+      const title = document.createElement("div");
+      title.textContent = "Mixing…";
+      title.style.cssText = "font-size:18px;font-weight:700;color:#fff;margin-bottom:10px;";
+
+      const row = document.createElement("div");
+      row.style.cssText = "display:flex;align-items:center;justify-content:center;gap:10px;margin:10px 0 6px;";
+
+      const spinner = document.createElement("div");
+      spinner.style.cssText = `
+        width:18px;height:18px;border-radius:999px;
+        border:2px solid rgba(255,255,255,0.2);
+        border-top-color: rgba(141,162,255,1);
+        animation: obSpin 0.9s linear infinite;
+      `;
+
+      const status = document.createElement("div");
+      status.textContent = "Starting…";
+      status.style.cssText = "font-size:14px;color:#cfd6ff;";
+
+      const hint = document.createElement("div");
+      hint.textContent = "Keep this screen open.";
+      hint.style.cssText = "font-size:12px;color:rgba(154,163,188,0.9);margin-top:8px;";
+
+      const btnRow = document.createElement("div");
+      btnRow.style.cssText = "display:flex;justify-content:center;margin-top:12px;";
+
+      const btnCancel = document.createElement("button");
+      btnCancel.textContent = "Cancel";
+      btnCancel.className = "btn sm secondary";
+      btnCancel.style.minWidth = "120px";
+
+      // ensure keyframes exist once
+      if (!document.getElementById("obSpinStyle")) {
+        const st = document.createElement("style");
+        st.id = "obSpinStyle";
+        st.textContent = `@keyframes obSpin { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }`;
+        document.head.appendChild(st);
+      }
+
+      row.appendChild(spinner);
+      row.appendChild(status);
+      btnRow.appendChild(btnCancel);
+
+      panel.appendChild(title);
+      panel.appendChild(row);
+      panel.appendChild(hint);
+      panel.appendChild(btnRow);
+      overlay.appendChild(panel);
+      document.body.appendChild(overlay);
+
+      return {
+        setStatus: (txt) => { if (!closed) status.textContent = String(txt || "Mixing…"); },
+        onCancel: (fn) => { btnCancel.onclick = () => { try { fn && fn(); } catch {} }; },
+        close: () => {
+          if (closed) return;
+          closed = true;
+          try { overlay.remove(); } catch {}
+        }
+      };
+    }
+
     // Mix Ready Modal (OffBook-styled) + Room file cache
     const roomFileCache = new Map(); // takeId -> { file, filename, timestamp }
     const ROOM_CACHE_TTL = 2 * 60 * 1000; // 2 minutes
@@ -14806,6 +14905,24 @@ const savedStrip = document.getElementById("savedScriptsStrip");
             btn.textContent = "Preparing…";
             btn.disabled = true;
 
+            const mixUI = showMixingProgressModal();
+            const aborter = new AbortController();
+            mixUI.onCancel(() => aborter.abort());
+
+            // Poll /debug/last_mixdown for stage updates while mixing (best-effort)
+            let pollTimer = setInterval(async () => {
+              try {
+                const resp = await fetch("/debug/last_mixdown", withSecretHeaders({ method: "GET", credentials: "include", cache: "no-store" }));
+                if (!resp.ok) return;
+                const j = await resp.json().catch(() => null);
+                const ev = j?.lastMixdownEvent || null;
+                if (!ev) return;
+                if (ev.takeId && String(ev.takeId) !== String((take.serverId || take.id) || "")) return;
+                const stage = ev.stage || "";
+                mixUI.setStatus(prettyMixStage(stage));
+              } catch {}
+            }, 450);
+
             try{
               const cleanName = (s) => String(s||"")
                 .replace(/[^\w\s-]/g, "")
@@ -14844,6 +14961,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
               const resp = await fetch(url, withSecretHeaders({
                 method: "GET",
                 credentials: "include",
+                signal: aborter.signal
               }));
 
               if (!resp.ok) {
@@ -14878,6 +14996,8 @@ const savedStrip = document.getElementById("savedScriptsStrip");
               console.warn("[offbook] room download failed", err);
               alert("Room download failed: " + (err?.message || String(err)));
             } finally {
+              try { if (pollTimer) clearInterval(pollTimer); } catch {}
+              try { mixUI.close(); } catch {}
               btn.disabled = false;
               btn.textContent = prevLabel;
             }
