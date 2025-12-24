@@ -1374,45 +1374,48 @@ export function initHttpRoutes(app: Express) {
           }
         };
 
-        // Upload to R2 if enabled
-        let micKey: string | undefined;
-        let readerKey: string | undefined;
-
-        if (r2Enabled()) {
-          try {
-            micKey = `stems/${user.id}/${takeId}-mic${micExt}`;
-            readerKey = `stems/${user.id}/${takeId}-reader${readerExt}`;
-
-            await r2PutFile(micKey, micPath, micFile.mimetype || "audio/webm");
-            await r2PutFile(readerKey, readerPath, readerFile.mimetype || "audio/webm");
-
-            console.log("[stems] Uploaded to R2: user=%s takeId=%s micKey=%s readerKey=%s",
-              user.id, takeId, micKey, readerKey);
-
-            storageInfo.r2 = {
-              mic: micKey,
-              reader: readerKey
-            };
-          } catch (err) {
-            console.error("[stems] R2 upload failed, keeping local only:", err);
-          }
-        }
-
-        // Update success event
+        // Update success event for local save
         lastStemsUploadEvent = {
           ...lastStemsUploadEvent,
           stage: "complete",
           micPath,
-          readerPath,
-          micKey,
-          readerKey
+          readerPath
         };
 
+        // Respond immediately once local stems exist (prevents iOS fetch timeouts)
         res.json({
           ok: true,
           takeId,
           storage: storageInfo
         });
+
+        // Upload to R2 in the background (best-effort)
+        if (r2Enabled()) {
+          const micKey = `stems/${user.id}/${takeId}-mic${micExt}`;
+          const readerKey = `stems/${user.id}/${takeId}-reader${readerExt}`;
+
+          lastStemsUploadEvent = { ...lastStemsUploadEvent, stage: "r2_uploading", micKey, readerKey };
+          lastStemsUploadError = null;
+
+          void (async () => {
+            try {
+              // Upload both stems in parallel to avoid doubling the wait time
+              await Promise.all([
+                r2PutFile(micKey, micPath, micFile.mimetype || "audio/webm"),
+                r2PutFile(readerKey, readerPath, readerFile.mimetype || "audio/webm"),
+              ]);
+
+              lastStemsUploadEvent = { ...lastStemsUploadEvent, stage: "complete", micKey, readerKey };
+
+              console.log("[stems] Uploaded to R2: user=%s takeId=%s micKey=%s readerKey=%s",
+                user.id, takeId, micKey, readerKey);
+            } catch (err) {
+              console.error("[stems] R2 upload failed (background), keeping local only:", err);
+              lastStemsUploadError = { at: new Date().toISOString(), error: String(err) };
+              lastStemsUploadEvent = { ...lastStemsUploadEvent, stage: "complete_local" };
+            }
+          })();
+        }
       } catch (err) {
         console.error("Error in POST /api/gallery/upload_stems", err);
         lastStemsUploadError = {
