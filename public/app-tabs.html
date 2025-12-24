@@ -3346,6 +3346,47 @@ JANE: Ready?"></textarea>
       setTimeout(() => URL.revokeObjectURL(blobUrl), 10_000);
     }
 
+    async function prefetchRoomFile(url, filename) {
+      const resp = await fetch(url, {
+        method: "GET",
+        headers: withSecretHeaders({}),
+        credentials: "include",
+      });
+      if (!resp.ok) {
+        let msg = `${resp.status}`;
+        try { msg = await resp.text(); } catch {}
+        throw new Error(`Room fetch failed (${resp.status}): ${msg}`);
+      }
+      const blob = await resp.blob();
+      const type = blob.type || "video/mp4";
+      const file = new File([blob], filename, { type });
+      ROOM_READY_FILE = { file, filename };
+    }
+
+    async function savePrefetchedRoomFile() {
+      if (!ROOM_READY_FILE) throw new Error("No Room file ready");
+      const { file, filename } = ROOM_READY_FILE;
+
+      // iOS-friendly: share sheet on a direct tap
+      if (navigator.share && (!navigator.canShare || navigator.canShare({ files: [file] }))) {
+        await navigator.share({ files: [file], title: filename });
+        ROOM_READY_FILE = null;
+        return;
+      }
+
+      // fallback download
+      const blobUrl = URL.createObjectURL(file);
+      const a = document.createElement("a");
+      a.href = blobUrl;
+      a.download = filename;
+      a.rel = "noopener";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 10_000);
+      ROOM_READY_FILE = null;
+    }
+
     // --- Dev flag: enable server STT plumbing when ?stt2=1 is present ---
 
     const STT2_ENABLED = new URLSearchParams(window.location.search).has("stt2");
@@ -5303,6 +5344,7 @@ JANE: Ready?"></textarea>
     // --- TDZ fix: declare R early so Safari doesn't throw before it's assigned ---
 
     let R = null;
+    let ROOM_READY_FILE = null; // { file, filename }
 
       if(typeof window !== "undefined"){
 
@@ -14635,7 +14677,28 @@ const savedStrip = document.getElementById("savedScriptsStrip");
               const filenameBase = cleanName(take.label || take.name || "offbook-take");
               const filename = `${filenameBase}-room.mp4`;
 
-              await downloadBinaryToDevice(url, filename);
+              // Prefetch the file
+              await prefetchRoomFile(url, filename);
+
+              // Reset button state before showing modal
+              btn.disabled = false;
+              btn.textContent = prevLabel;
+
+              // Show "Room ready" and wait for user tap to save
+              // This ensures iOS treats the share as a direct user gesture
+              if (confirm("Room ready! Tap OK to save/share.")) {
+                try {
+                  await savePrefetchedRoomFile();
+                } catch(saveErr) {
+                  console.warn("[offbook] room save failed", saveErr);
+                  alert("Failed to save Room file: " + (saveErr?.message || String(saveErr)));
+                }
+              } else {
+                // User cancelled - clear the prefetched file
+                ROOM_READY_FILE = null;
+              }
+
+              return; // Skip the finally block since we already reset button state
 
             } catch(err){
               console.warn("[offbook] room download failed", err);
