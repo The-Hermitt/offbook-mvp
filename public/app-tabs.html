@@ -9003,17 +9003,23 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
       function rms(buf){ let sum=0; for(let i=0;i<buf.length;i++){ const v=buf[i]/128-1; sum+=v*v; } return Math.sqrt(sum/buf.length); }
 
-      async function startMicMonitor(){
+      async function startMicMonitor(existingStream){
 
-        if(micStream) return;
+        // If we already have micStream and no existingStream passed, reuse it
+        if(micStream && !existingStream) return;
 
         try{
 
-          const stream = await navigator.mediaDevices.getUserMedia({audio:true});
+          // Reuse existing stream if provided (during recording), otherwise get new one
+          const stream = existingStream || await navigator.mediaDevices.getUserMedia({audio:true});
 
           // after getUserMedia:
 
-          micStream=stream;
+          // Only set micStream if we own this stream (not passed from recording)
+          const ownsStream = !existingStream;
+          if (ownsStream) {
+            micStream=stream;
+          }
 
           window.__OB_MIC_STREAM = stream;
 
@@ -9191,13 +9197,19 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
       function stopMicMonitor(){
 
-        try{ micStream?.getTracks().forEach(t=>t.stop()); }catch{};
+        // Only stop micStream if it's not the recording stream (R.stream)
+        // During recording, R.stream owns the mic and will be cleaned up separately
+        if (micStream && micStream !== R?.stream) {
+          try{ micStream.getTracks().forEach(t=>t.stop()); }catch{};
+        }
 
         micStream=null;
 
-        window.__OB_MIC_STREAM = null;
-
-        window.__OB_MIC_TRACK = null;
+        // Don't clear global stream refs if recording is active
+        if (!R?.stream) {
+          window.__OB_MIC_STREAM = null;
+          window.__OB_MIC_TRACK = null;
+        }
 
         showRouteWarn(false);
 
@@ -12857,7 +12869,9 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
         }
 
-
+        // Add safety delay after mic acquisition before starting reader playback
+        // Helps iOS settle audio routing before beeps/countdown
+        await new Promise(r => setTimeout(r, 150));
 
         await doBeepsAndCountdown();
 
@@ -12871,13 +12885,17 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
         R.prevSrToggle = srToggleOn;
 
+        // Reuse the recording stream for monitoring - no second getUserMedia call
         try{
 
-          await requestMicPermissionOnce();
+          // Don't call requestMicPermissionOnce - we already have the stream
+          // srPermGranted will be set when we successfully got userStream above
 
-          srToggleOn = true;
+          // Don't start SpeechRecognition during recording - causes audio route changes
+          // srToggleOn = true;
 
-          await startMicMonitor();
+          // Pass the recording stream to monitoring - reuses the same mic track
+          await startMicMonitor(userStream);
 
         }catch{}
 
