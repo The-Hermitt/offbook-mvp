@@ -3346,94 +3346,159 @@ JANE: Ready?"></textarea>
       setTimeout(() => URL.revokeObjectURL(blobUrl), 10_000);
     }
 
-    async function prefetchRoomFile(url, filename) {
-      const resp = await fetch(url, {
-        method: "GET",
-        headers: withSecretHeaders({}),
-        credentials: "include",
-      });
-      if (!resp.ok) {
-        let msg = `${resp.status}`;
-        try { msg = await resp.text(); } catch {}
-        throw new Error(`Room fetch failed (${resp.status}): ${msg}`);
-      }
-      const blob = await resp.blob();
-      const type = blob.type || "video/mp4";
-      const file = new File([blob], filename, { type });
-      ROOM_READY_FILE = { file, filename };
-    }
+    // Mix Ready Modal (OffBook-styled) + Room file cache
+    const roomFileCache = new Map(); // takeId -> { file, filename, timestamp }
+    const ROOM_CACHE_TTL = 2 * 60 * 1000; // 2 minutes
 
-    // Room Ready Modal helpers
-    let roomModalEl = null;
-    let roomModalResolve = null;
-
-    function showRoomModal() {
-      if (!roomModalEl) {
-        roomModalEl = document.createElement("div");
-        roomModalEl.style.cssText = `
+    function showMixReadyModal(takeId) {
+      return new Promise((resolve) => {
+        // Create dark overlay
+        const overlay = document.createElement("div");
+        overlay.style.cssText = `
           position: fixed;
           top: 0;
           left: 0;
           right: 0;
           bottom: 0;
-          background: rgba(0,0,0,0.7);
+          background: rgba(0, 0, 0, 0.85);
           display: flex;
           align-items: center;
           justify-content: center;
           z-index: 10000;
+          animation: fadeIn 0.2s ease;
         `;
 
+        // Create dialog panel with OffBook styling
         const panel = document.createElement("div");
         panel.style.cssText = `
-          background: white;
-          border-radius: 8px;
-          padding: 20px;
-          max-width: 300px;
+          background: #1a1a1a;
+          border: 1px solid #333;
+          border-radius: 12px;
+          padding: 24px;
+          min-width: 280px;
+          max-width: 340px;
           text-align: center;
+          box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
         `;
 
-        const msg = document.createElement("p");
-        msg.textContent = "Room ready!";
-        msg.style.cssText = "margin: 0 0 16px 0; font-size: 16px; font-weight: 500;";
+        // Title
+        const title = document.createElement("h3");
+        title.textContent = "Mix ready!";
+        title.style.cssText = "margin: 0 0 20px 0; font-size: 18px; font-weight: 600; color: #fff;";
 
+        // Button container
         const btnContainer = document.createElement("div");
-        btnContainer.style.cssText = "display: flex; gap: 10px; justify-content: center;";
+        btnContainer.style.cssText = "display: flex; gap: 12px; justify-content: center;";
 
+        // Cancel button
         const btnCancel = document.createElement("button");
         btnCancel.textContent = "Cancel";
-        btnCancel.style.cssText = "padding: 10px 20px; border: 1px solid #ccc; background: white; border-radius: 4px; cursor: pointer;";
+        btnCancel.style.cssText = `
+          padding: 12px 24px;
+          border: 1px solid #444;
+          background: transparent;
+          color: #aaa;
+          border-radius: 8px;
+          cursor: pointer;
+          font-size: 15px;
+          font-weight: 500;
+          transition: all 0.2s;
+        `;
+        btnCancel.onmouseenter = () => {
+          btnCancel.style.background = "#222";
+          btnCancel.style.color = "#fff";
+        };
+        btnCancel.onmouseleave = () => {
+          btnCancel.style.background = "transparent";
+          btnCancel.style.color = "#aaa";
+        };
         btnCancel.onclick = () => {
-          hideRoomModal();
-          if (roomModalResolve) roomModalResolve(false);
+          document.body.removeChild(overlay);
+          resolve({ action: "cancel" });
         };
 
+        // Save/Share button
         const btnSave = document.createElement("button");
         btnSave.textContent = "Save/Share";
-        btnSave.style.cssText = "padding: 10px 20px; border: none; background: #007bff; color: white; border-radius: 4px; cursor: pointer;";
-        btnSave.onclick = () => {
-          hideRoomModal();
-          if (roomModalResolve) roomModalResolve(true);
+        btnSave.style.cssText = `
+          padding: 12px 24px;
+          border: none;
+          background: #4a9eff;
+          color: #fff;
+          border-radius: 8px;
+          cursor: pointer;
+          font-size: 15px;
+          font-weight: 500;
+          transition: all 0.2s;
+        `;
+        btnSave.onmouseenter = () => {
+          btnSave.style.background = "#6ab0ff";
+        };
+        btnSave.onmouseleave = () => {
+          btnSave.style.background = "#4a9eff";
+        };
+        btnSave.onclick = async () => {
+          // Get cached file
+          const cached = roomFileCache.get(takeId);
+          if (!cached) {
+            document.body.removeChild(overlay);
+            resolve({ action: "error", message: "File not found in cache" });
+            return;
+          }
+
+          // Check cache expiry
+          if (Date.now() - cached.timestamp > ROOM_CACHE_TTL) {
+            roomFileCache.delete(takeId);
+            document.body.removeChild(overlay);
+            resolve({ action: "expired" });
+            return;
+          }
+
+          const { file, filename } = cached;
+
+          try {
+            // Try navigator.share immediately (no awaits before this!)
+            const canShareFiles =
+              !!navigator.share &&
+              (!navigator.canShare || navigator.canShare({ files: [file] }));
+
+            if (canShareFiles) {
+              await navigator.share({ files: [file], title: filename });
+              document.body.removeChild(overlay);
+              resolve({ action: "shared" });
+              return;
+            }
+          } catch (shareErr) {
+            console.warn("[offbook] share failed, falling back to download", shareErr);
+          }
+
+          // Fallback: <a download>
+          try {
+            const objUrl = URL.createObjectURL(file);
+            const a = document.createElement("a");
+            a.href = objUrl;
+            a.download = filename;
+            a.rel = "noopener";
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            setTimeout(() => URL.revokeObjectURL(objUrl), 20000);
+            document.body.removeChild(overlay);
+            resolve({ action: "downloaded" });
+          } catch (dlErr) {
+            console.error("[offbook] download fallback failed", dlErr);
+            document.body.removeChild(overlay);
+            resolve({ action: "error", message: String(dlErr) });
+          }
         };
 
         btnContainer.appendChild(btnCancel);
         btnContainer.appendChild(btnSave);
-        panel.appendChild(msg);
+        panel.appendChild(title);
         panel.appendChild(btnContainer);
-        roomModalEl.appendChild(panel);
-      }
-
-      document.body.appendChild(roomModalEl);
-
-      return new Promise((resolve) => {
-        roomModalResolve = resolve;
+        overlay.appendChild(panel);
+        document.body.appendChild(overlay);
       });
-    }
-
-    function hideRoomModal() {
-      if (roomModalEl && roomModalEl.parentNode) {
-        roomModalEl.parentNode.removeChild(roomModalEl);
-      }
-      roomModalResolve = null;
     }
 
     // --- Dev flag: enable server STT plumbing when ?stt2=1 is present ---
@@ -5393,7 +5458,6 @@ JANE: Ready?"></textarea>
     // --- TDZ fix: declare R early so Safari doesn't throw before it's assigned ---
 
     let R = null;
-    let ROOM_READY_FILE = null; // { file, filename }
 
       if(typeof window !== "undefined"){
 
@@ -14726,58 +14790,39 @@ const savedStrip = document.getElementById("savedScriptsStrip");
               const filenameBase = cleanName(take.label || take.name || "offbook-take");
               const filename = `${filenameBase}-room.mp4`;
 
-              // Prefetch the file
-              await prefetchRoomFile(url, filename);
+              // Fetch the Room mix
+              const resp = await fetch(url, withSecretHeaders({
+                method: "GET",
+                credentials: "include",
+              }));
+
+              if (!resp.ok) {
+                throw new Error(`Room mix failed (${resp.status})`);
+              }
+
+              const blob = await resp.blob();
+
+              // Create File object and cache it
+              const file = new File([blob], filename, { type: "video/mp4" });
+              roomFileCache.set(id, {
+                file,
+                filename,
+                timestamp: Date.now()
+              });
 
               // Reset button state before showing modal
               btn.disabled = false;
               btn.textContent = prevLabel;
 
-              // Show Room Ready modal and wait for user action
-              const userWantsSave = await showRoomModal();
+              // Show Mix Ready modal and wait for user action
+              const result = await showMixReadyModal(id);
 
-              if (userWantsSave && ROOM_READY_FILE) {
-                try {
-                  const { file, filename } = ROOM_READY_FILE;
-
-                  // Use the same canShare logic as the Download button
-                  try {
-                    const canShareFiles =
-                      !!navigator.share &&
-                      (!navigator.canShare || navigator.canShare({ files: [file] }));
-
-                    if (canShareFiles) {
-                      await navigator.share({ files: [file], title: filename });
-                      ROOM_READY_FILE = null;
-                      return;
-                    }
-                  } catch (shareErr) {
-                    console.warn("[offbook] share failed, falling back to download", shareErr);
-                  }
-
-                  // Fallback: <a download>
-                  const blob = file;
-                  const objUrl = URL.createObjectURL(blob);
-                  const a = document.createElement("a");
-                  a.href = objUrl;
-                  a.download = filename;
-                  a.rel = "noopener";
-                  document.body.appendChild(a);
-                  a.click();
-                  a.remove();
-                  setTimeout(() => URL.revokeObjectURL(objUrl), 20000);
-                  ROOM_READY_FILE = null;
-
-                } catch(saveErr) {
-                  console.warn("[offbook] room save failed", saveErr);
-                  alert("Failed to save Room file: " + (saveErr?.message || String(saveErr)));
-                }
-              } else {
-                // User cancelled - clear the prefetched file
-                ROOM_READY_FILE = null;
+              if (result.action === "expired") {
+                alert("Mix file expired. Please tap Room again.");
+              } else if (result.action === "error") {
+                alert("Failed to save mix: " + (result.message || "Unknown error"));
               }
-
-              return; // Skip the finally block since we already reset button state
+              // On success (shared/downloaded), modal already handled everything
 
             } catch(err){
               console.warn("[offbook] room download failed", err);
