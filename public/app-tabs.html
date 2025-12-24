@@ -12773,11 +12773,15 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
         R.recordStartMs = Date.now();
 
-        try{ R.rec.start(); }
+        try{
+          R.rec.start();
+        } catch(err){
+          console.error(err);
+          const msg = (err && err.message) ? err.message : String(err);
+          const eb = document.getElementById('errbar');
+          if (eb) { eb.textContent = msg; eb.style.display = 'block'; }
 
-        catch(e){
-
-          setStatus("Record error: " + e);
+          setStatus("Record error: " + err);
 
           R.recording = false;
 
@@ -12791,7 +12795,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
           setRailStates();
 
-          setStatusRec("Recorder error: "+e);
+          setStatusRec("Recorder error: "+err);
 
           stopAllAudioHard();
 
