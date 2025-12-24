@@ -3363,27 +3363,50 @@ JANE: Ready?"></textarea>
       ROOM_READY_FILE = { file, filename };
     }
 
-    async function savePrefetchedRoomFile() {
-      if (!ROOM_READY_FILE) throw new Error("No Room file ready");
-      const { file, filename } = ROOM_READY_FILE;
-
-      // iOS-friendly: share sheet on a direct tap
-      if (navigator.share && (!navigator.canShare || navigator.canShare({ files: [file] }))) {
-        await navigator.share({ files: [file], title: filename });
-        ROOM_READY_FILE = null;
-        return;
-      }
-
-      // fallback download
-      const blobUrl = URL.createObjectURL(file);
+    function openInNewTab(url) {
       const a = document.createElement("a");
-      a.href = blobUrl;
-      a.download = filename;
+      a.href = url;
+      a.target = "_blank";
       a.rel = "noopener";
       document.body.appendChild(a);
       a.click();
       a.remove();
-      setTimeout(() => URL.revokeObjectURL(blobUrl), 10_000);
+    }
+
+    async function savePrefetchedRoomFile(url) {
+      if (!ROOM_READY_FILE) throw new Error("No Room file ready");
+      const { file, filename } = ROOM_READY_FILE;
+
+      // Multi-level fallback chain for iOS compatibility
+      if (navigator.share) {
+        try {
+          const canShareFiles = (!navigator.canShare) || navigator.canShare({ files: [file] });
+
+          if (canShareFiles) {
+            await navigator.share({ files: [file], title: filename });
+            ROOM_READY_FILE = null;
+            return;
+          }
+        } catch (shareErr) {
+          console.warn("[offbook] share(files) failed", shareErr);
+
+          // iOS fallback: share the URL (lets user "Save to Files" from the share sheet)
+          try {
+            await navigator.share({ url, title: filename });
+            ROOM_READY_FILE = null;
+            return;
+          } catch (shareUrlErr) {
+            console.warn("[offbook] share(url) failed", shareUrlErr);
+            // final fallback: open download in a new tab (keeps app open)
+            openInNewTab(url);
+            ROOM_READY_FILE = null;
+            return;
+          }
+        }
+      }
+
+      // If no navigator.share at all, open in new tab as fallback
+      openInNewTab(url);
       ROOM_READY_FILE = null;
     }
 
@@ -14688,7 +14711,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
               // This ensures iOS treats the share as a direct user gesture
               if (confirm("Room ready! Tap OK to save/share.")) {
                 try {
-                  await savePrefetchedRoomFile();
+                  await savePrefetchedRoomFile(url);
                 } catch(saveErr) {
                   console.warn("[offbook] room save failed", saveErr);
                   alert("Failed to save Room file: " + (saveErr?.message || String(saveErr)));
