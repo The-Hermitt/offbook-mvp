@@ -1562,38 +1562,58 @@ export function initHttpRoutes(app: Express) {
         return res.status(404).json({ error: "file_missing" });
       }
 
-      // Handle R2-stored take videos by downloading to temp
+      // Prefer local take file if it exists (even when DB stores r2://...)
+      // This avoids slow/stalled R2 downloads right after recording.
       let takeInputPath = filePath;
-      if (filePath.startsWith("r2://")) {
-        const r2Key = filePath.substring(5); // Remove "r2://" prefix
-        const tmpDir = path.join(os.tmpdir(), "offbook");
-        fs.mkdirSync(tmpDir, { recursive: true });
 
-        tempTakeFile = path.join(tmpDir, `${id}-take.mp4`);
-        takeInputPath = tempTakeFile;
-
-        lastMixdownEvent = {
-          ...lastMixdownEvent,
-          stage: "downloading_take_r2",
-          r2Key,
-          tempPath: tempTakeFile
-        };
-
-        console.log("[mixed_file] Downloading take from R2: key=%s to temp=%s", r2Key, tempTakeFile);
-
+      if (filePath && filePath.startsWith("r2://")) {
+        const localDir = path.join(process.cwd(), "uploads", "gallery", String(user.id));
         try {
-          const takeResult = await r2GetObjectStream(r2Key);
-          await pipeStreamToFile(takeResult.stream, tempTakeFile, "take", 120000);
-          console.log("[mixed_file] Downloaded take from R2 successfully");
-        } catch (err) {
-          console.error("[mixed_file] Failed to download take from R2:", err);
+          if (fs.existsSync(localDir)) {
+            const files = fs.readdirSync(localDir);
+            const match = files.find((f) => f.startsWith(`${id}.`)); // id.mp4 / id.webm / etc
+            if (match) {
+              takeInputPath = path.join(localDir, match);
+              lastMixdownEvent = { ...(lastMixdownEvent as any), stage: "using_local_take", localPath: takeInputPath };
+              console.log("[mixed_file] Using local take file instead of R2: %s", takeInputPath);
+            }
+          }
+        } catch (e) {
+          console.warn("[mixdown] local take scan failed", e);
+        }
+
+        // If local file not found, download from R2
+        if (takeInputPath === filePath) {
+          const r2Key = filePath.substring(5); // Remove "r2://" prefix
+          const tmpDir = path.join(os.tmpdir(), "offbook");
+          fs.mkdirSync(tmpDir, { recursive: true });
+
+          tempTakeFile = path.join(tmpDir, `${id}-take.mp4`);
+          takeInputPath = tempTakeFile;
+
           lastMixdownEvent = {
             ...lastMixdownEvent,
-            stage: "error",
-            errorCode: "take_download_failed",
-            errorMessage: String(err)
+            stage: "downloading_take_r2",
+            r2Key,
+            tempPath: tempTakeFile
           };
-          return res.status(500).json({ error: "take_download_failed" });
+
+          console.log("[mixed_file] Downloading take from R2: key=%s to temp=%s", r2Key, tempTakeFile);
+
+          try {
+            const takeResult = await r2GetObjectStream(r2Key);
+            await pipeStreamToFile(takeResult.stream, tempTakeFile, "take", 120000);
+            console.log("[mixed_file] Downloaded take from R2 successfully");
+          } catch (err) {
+            console.error("[mixed_file] Failed to download take from R2:", err);
+            lastMixdownEvent = {
+              ...lastMixdownEvent,
+              stage: "error",
+              errorCode: "take_download_failed",
+              errorMessage: String(err)
+            };
+            return res.status(500).json({ error: "take_download_failed" });
+          }
         }
       }
 
@@ -1708,15 +1728,20 @@ export function initHttpRoutes(app: Express) {
       }
 
       // Determine output path with versioning
-      let outPath: string;
-      if (filePath.startsWith("r2://")) {
-        // For R2-stored takes, write output to temp
-        const tmpDir = path.join(os.tmpdir(), "offbook");
-        fs.mkdirSync(tmpDir, { recursive: true });
-        outPath = path.join(tmpDir, `${id}-${mode}-${MIX_VER}.mixed.mp4`);
+      // Use takeInputPath directory (not filePath) since takeInputPath may be local even if filePath is r2://
+      const outDir = takeInputPath.startsWith("r2://")
+        ? path.join(os.tmpdir(), "offbook")
+        : path.dirname(takeInputPath);
+
+      if (takeInputPath.startsWith("r2://")) {
+        fs.mkdirSync(outDir, { recursive: true });
+      }
+
+      const outPath = path.join(outDir, `${id}-${mode}-${MIX_VER}.mixed.mp4`);
+
+      // Mark as temp output if we're using temp directory
+      if (takeInputPath.startsWith("r2://") || takeInputPath.includes(os.tmpdir())) {
         tempOutputFile = outPath;
-      } else {
-        outPath = path.join(path.dirname(filePath), `${id}-${mode}-${MIX_VER}.mixed.mp4`);
       }
       const outExists = fs.existsSync(outPath);
 
