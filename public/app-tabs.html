@@ -13183,8 +13183,8 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
                   await uploadStemsToServer(savedTake.id, micBlob, readerBlob);
                 } catch (err) {
-                  console.error("[offbook] Stem upload failed:", err);
-                  alert("Warning: Stem upload failed. Room mixdown may not work for this take.\n\n" + String(err).slice(0, 200));
+                  console.warn("[offbook] Stem upload failed (silent):", err);
+                  // No user-facing warning - stems will fallback to legacy mode
                 }
               }
 
@@ -13842,7 +13842,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
             console.warn("uploadTakeToServer failed", resp.status, txt);
 
-            obToast("Gallery upload error. Please try again.");
+            showToastOnce("Upload failed. This take is saved on this device.", 3500);
 
             return;
 
@@ -13871,7 +13871,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
           console.warn("uploadTakeToServer error", err);
 
-          obToast("Gallery upload error. Please try again.");
+          showToastOnce("Upload failed. This take is saved on this device.", 3500);
 
         }
 
@@ -14149,7 +14149,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
             <div class="take-card" data-id="${escapeHtml(t.id)}">
 
-              <video class="take-thumb" src="${escapeHtml(src)}" playsinline preload="none"></video>
+              <video class="take-thumb" ${src ? `src="${escapeHtml(src)}"` : ''} playsinline preload="none"></video>
 
               <div class="take-row" style="justify-content:space-between;align-items:center;">
 
@@ -14686,7 +14686,11 @@ const savedStrip = document.getElementById("savedScriptsStrip");
                   }));
 
                   if (!resp.ok) {
-                    obToast(`Playback download failed (${resp.status})`);
+                    if (resp.status === 404) {
+                      showToastOnce("This take isn't available anymore. Try deleting it.", 3500);
+                    } else {
+                      showToastOnce(`Playback download failed (${resp.status})`, 3500);
+                    }
                     console.error("[offbook] Playback download failed", resp.status);
                     return;
                   }
@@ -14713,7 +14717,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
               } catch (err) {
                 console.error("[offbook] Playback failed", err);
-                obToast("Playback failed. Try again or delete this take.");
+                showToastOnce("Playback failed. Try again or delete this take.", 3500);
               }
 
             }else{
@@ -14731,12 +14735,9 @@ const savedStrip = document.getElementById("savedScriptsStrip");
           video?.addEventListener("pause", ()=>{ if(btnPlay && !video.error) btnPlay.textContent = "Play"; });
 
           video?.addEventListener("error", (e)=>{
-            console.error("[offbook] Video playback error", video?.error);
+            console.warn("[offbook] Video playback error (silent)", video?.error);
             if(btnPlay) btnPlay.textContent = "Play";
-            const errorCode = video?.error?.code;
-            const errorMessage = video?.error?.message || "Unknown error";
-            markTakeBad(card, "This take looks corrupted. Delete it.");
-            obToast("This take looks corrupted. Try deleting it.");
+            // Don't show user-facing alerts - prevents iOS popups on Gallery load
           });
 
 
@@ -14807,7 +14808,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
           
             } catch(err){
               console.warn("[offbook] download failed", err);
-              obToast("Download failed: " + (err?.message || String(err)));
+              showToastOnce("Download failed: " + (err?.message || String(err)), 3500);
             } finally {
               btn.disabled = false;
               btn.textContent = prevLabel;
@@ -14844,9 +14845,11 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
               // Default: allow cache hits (much faster, avoids timeouts)
               // If you ever need to force rebuild, add ?mixforce=1 to the app URL.
+              // Always include legacy=1 to support older takes without stems
               const sp = new URLSearchParams();
               sp.set("dl","1");
               sp.set("mode","room");
+              sp.set("legacy","1");
               if (new URLSearchParams(location.search).get("mixforce") === "1") sp.set("force","1");
               const url = `/api/gallery/${encodeURIComponent(id)}/mixed_file?${sp.toString()}`;
 
@@ -14881,15 +14884,15 @@ const savedStrip = document.getElementById("savedScriptsStrip");
               const result = await showMixReadyModal(id);
 
               if (result.action === "expired") {
-                obToast("Mix file expired. Please tap Room again.");
+                showToastOnce("Mix file expired. Please tap Room again.", 3500);
               } else if (result.action === "error") {
-                obToast("Failed to save mix: " + (result.message || "Unknown error"));
+                showToastOnce("Failed to save mix: " + (result.message || "Unknown error"), 3500);
               }
               // On success (shared/downloaded), modal already handled everything
 
             } catch(err){
               console.warn("[offbook] room download failed", err);
-              obToast("Room download failed: " + (err?.message || String(err)));
+              showToastOnce("Room mix failed for this take. Try again or record a new take.", 3500);
             } finally {
               btn.disabled = false;
               btn.textContent = prevLabel;
