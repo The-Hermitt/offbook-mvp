@@ -1303,7 +1303,7 @@ export function initHttpRoutes(app: Express) {
   api.post(
     "/gallery/upload_stems",
     requireUser,
-    upload.fields([
+    galleryUpload.fields([
       { name: "mic", maxCount: 1 },
       { name: "reader", maxCount: 1 }
     ]),
@@ -1327,6 +1327,10 @@ export function initHttpRoutes(app: Express) {
 
         const micFile = files.mic[0];
         const readerFile = files.reader[0];
+
+        if (!micFile?.path || !readerFile?.path) {
+          return res.status(400).json({ error: "stems_upload_bad_storage", hint: "Expected disk storage with file.path" });
+        }
 
         // Determine file extensions from original names or default to .webm
         const micExt = path.extname(micFile.originalname || "") || ".webm";
