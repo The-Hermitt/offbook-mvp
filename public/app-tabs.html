@@ -12804,6 +12804,18 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
         try{
           R.rec.start();
+
+          // Start stem recorders at the same moment as the main recorder (Room stems)
+          try {
+            if (R.recMic && R.recMic.state === "inactive") R.recMic.start();
+          } catch (e) {
+            console.warn("[offbook] recMic.start failed", e);
+          }
+          try {
+            if (R.recReader && R.recReader.state === "inactive") R.recReader.start();
+          } catch (e) {
+            console.warn("[offbook] recReader.start failed", e);
+          }
         } catch(err){
           console.error(err);
           const msg = (err && err.message) ? err.message : String(err);
@@ -13691,8 +13703,8 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
       async function uploadStemsToServer(takeId, micBlob, readerBlob) {
         try {
-          const userKey = getSignedInUserKey();
-          if (!userKey) return; // not signed in, skip
+          // Don't gate stems upload on localStorage userKey.
+          // If auth is missing, the server will reject and we'll see it.
 
           if (!takeId || !micBlob || !readerBlob) {
             console.warn("[offbook] uploadStemsToServer: missing data", { takeId, micBlob, readerBlob });
