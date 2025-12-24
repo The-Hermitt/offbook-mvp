@@ -14648,15 +14648,57 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
 
 
-          btnPlay?.addEventListener("click", ()=>{
+          btnPlay?.addEventListener("click", async ()=>{
 
             if(!video) return;
 
             if(video.paused){
 
-              try{ video.currentTime = 0; video.play(); }catch{}
+              // Attempt to play with fallback logic
+              try {
+                video.currentTime = 0;
+                await video.play();
+                if(btnPlay) btnPlay.textContent = "Pause";
+              } catch (playErr) {
+                console.warn("[offbook] Initial play failed, attempting fallback fetch", playErr);
 
-              if(btnPlay) btnPlay.textContent = "Pause";
+                // Fallback: fetch video file from server
+                try {
+                  const takeId = take.serverId || take.id;
+                  if (!takeId) throw new Error("No takeId available for playback");
+
+                  const url = `/api/gallery/${encodeURIComponent(takeId)}/file`;
+                  const resp = await fetch(url, withSecretHeaders({
+                    method: "GET",
+                    credentials: "include",
+                  }));
+
+                  if (!resp.ok) {
+                    const errorText = await resp.text().catch(() => "");
+                    throw new Error(`Playback fetch failed (${resp.status}): ${errorText || resp.statusText}`);
+                  }
+
+                  const blob = await resp.blob();
+                  const objectUrl = URL.createObjectURL(blob);
+
+                  // Replace video source and try playing again
+                  video.src = objectUrl;
+                  video.load();
+                  video.currentTime = 0;
+                  await video.play();
+
+                  if(btnPlay) btnPlay.textContent = "Pause";
+
+                  // Cleanup object URL after video ends
+                  video.addEventListener("ended", () => {
+                    URL.revokeObjectURL(objectUrl);
+                  }, { once: true });
+
+                } catch (fallbackErr) {
+                  console.error("[offbook] Playback fallback failed", fallbackErr);
+                  alert("Playback failed: " + (fallbackErr?.message || String(fallbackErr)));
+                }
+              }
 
             }else{
 
@@ -14671,6 +14713,14 @@ const savedStrip = document.getElementById("savedScriptsStrip");
           video?.addEventListener("ended", ()=>{ if(btnPlay) btnPlay.textContent = "Play"; });
 
           video?.addEventListener("pause", ()=>{ if(btnPlay && !video.error) btnPlay.textContent = "Play"; });
+
+          video?.addEventListener("error", (e)=>{
+            console.error("[offbook] Video playback error", video?.error);
+            if(btnPlay) btnPlay.textContent = "Play";
+            const errorCode = video?.error?.code;
+            const errorMessage = video?.error?.message || "Unknown error";
+            alert(`Video playback error (code ${errorCode}): ${errorMessage}`);
+          });
 
 
           btnDl?.addEventListener("click", async ()=>{
