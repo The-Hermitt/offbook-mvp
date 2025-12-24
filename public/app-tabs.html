@@ -13280,7 +13280,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
                   console.log("[offbook] Assembled stems:", { micSize: micBlob.size, readerSize: readerBlob.size });
 
-                  await uploadStemsToServer(savedTake.serverId || savedTake.id, micBlob, readerBlob);
+                  await uploadStemsToServer(savedTake.id, micBlob, readerBlob);
                 } catch (err) {
                   console.error("[offbook] Stem upload failed:", err);
                   alert("Warning: Stem upload failed. Room mixdown may not work for this take.\n\n" + String(err).slice(0, 200));
@@ -13837,9 +13837,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
           form.append("file", blob, filename);
 
-          const localId = take.id ? String(take.id) : "";
-          const isLegacyLocalId = /^TK\d+$/i.test(localId);
-          if (localId && !isLegacyLocalId) form.append("id", localId);
+          if (take.id) form.append("id", take.id);
 
 
 
@@ -14933,6 +14931,12 @@ const savedStrip = document.getElementById("savedScriptsStrip");
                 .slice(0, 60) || "offbook-take";
 
               let id = take.serverId || take.id;
+
+              // Guard against legacy TK-style IDs
+              if (id && /^TK\d+/.test(id)) {
+                alert("This is an old take saved with a legacy ID. Please record a new take to use Room.");
+                return;
+              }
 
               // If no serverId, upload to get one
               if (!take.serverId) {
