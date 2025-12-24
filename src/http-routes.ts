@@ -431,6 +431,8 @@ export function initHttpRoutes(app: Express) {
   // Room diagnosability: capture last mixdown error and event
   let lastMixdownError: any = null;
   let lastMixdownEvent: any = null;
+  let lastStemsUploadEvent: any = null;
+  let lastStemsUploadError: any = null;
 
   function runFfmpeg(args: string[]): Promise<void> {
     return new Promise((resolve, reject) => {
@@ -627,6 +629,11 @@ export function initHttpRoutes(app: Express) {
   // GET /debug/last_mixdown - Room diagnosability
   debug.get("/last_mixdown", audit("/debug/last_mixdown"), (req: Request, res: Response) => {
     return res.json({ ok: true, lastMixdownEvent, lastMixdownError });
+  });
+
+  // GET /debug/last_stems_upload - Room diagnosability
+  debug.get("/last_stems_upload", audit("/debug/last_stems_upload"), (req: Request, res: Response) => {
+    return res.json({ ok: true, lastStemsUploadEvent, lastStemsUploadError });
   });
 
   // POST /debug/upload_script_text
@@ -1310,12 +1317,26 @@ export function initHttpRoutes(app: Express) {
     async (req: Request, res: Response) => {
       try {
         const user = (req as any).user || res.locals.user;
+        const files = (req as any).files;
+        const takeId = String(req.body?.id || "");
+
+        const micFile = files?.mic?.[0];
+        const readerFile = files?.reader?.[0];
+
+        // Initialize debug event at the start
+        lastStemsUploadError = null;
+        lastStemsUploadEvent = {
+          at: new Date().toISOString(),
+          stage: "requested",
+          takeId,
+          userId: String(user?.id || ""),
+          hasMic: !!micFile,
+          hasReader: !!readerFile,
+        };
+
         if (!user || !user.id) {
           return res.status(401).json({ error: "Unauthorized" });
         }
-
-        const files = (req as any).files;
-        const takeId = String(req.body?.id || "");
 
         if (!takeId) {
           return res.status(400).json({ error: "id_required" });
@@ -1324,9 +1345,6 @@ export function initHttpRoutes(app: Express) {
         if (!files?.mic || !files?.reader) {
           return res.status(400).json({ error: "mic_and_reader_required" });
         }
-
-        const micFile = files.mic[0];
-        const readerFile = files.reader[0];
 
         if (!micFile?.path || !readerFile?.path) {
           return res.status(400).json({ error: "stems_upload_bad_storage", hint: "Expected disk storage with file.path" });
@@ -1357,10 +1375,13 @@ export function initHttpRoutes(app: Express) {
         };
 
         // Upload to R2 if enabled
+        let micKey: string | undefined;
+        let readerKey: string | undefined;
+
         if (r2Enabled()) {
           try {
-            const micKey = `stems/${user.id}/${takeId}-mic${micExt}`;
-            const readerKey = `stems/${user.id}/${takeId}-reader${readerExt}`;
+            micKey = `stems/${user.id}/${takeId}-mic${micExt}`;
+            readerKey = `stems/${user.id}/${takeId}-reader${readerExt}`;
 
             await r2PutFile(micKey, micPath, micFile.mimetype || "audio/webm");
             await r2PutFile(readerKey, readerPath, readerFile.mimetype || "audio/webm");
@@ -1377,6 +1398,16 @@ export function initHttpRoutes(app: Express) {
           }
         }
 
+        // Update success event
+        lastStemsUploadEvent = {
+          ...lastStemsUploadEvent,
+          stage: "complete",
+          micPath,
+          readerPath,
+          micKey,
+          readerKey
+        };
+
         res.json({
           ok: true,
           takeId,
@@ -1384,6 +1415,14 @@ export function initHttpRoutes(app: Express) {
         });
       } catch (err) {
         console.error("Error in POST /api/gallery/upload_stems", err);
+        lastStemsUploadError = {
+          at: new Date().toISOString(),
+          error: String((err as any)?.message || err)
+        };
+        lastStemsUploadEvent = {
+          ...lastStemsUploadEvent,
+          stage: "error"
+        };
         res.status(500).json({ error: "internal_error" });
       }
     }
