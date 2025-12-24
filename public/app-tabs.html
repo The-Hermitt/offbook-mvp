@@ -3311,6 +3311,41 @@ JANE: Ready?"></textarea>
 
     }
 
+    async function downloadBinaryToDevice(url, filename) {
+      const resp = await fetch(url, {
+        method: "GET",
+        headers: withSecretHeaders({}),
+        credentials: "include",
+      });
+
+      if (!resp.ok) {
+        let msg = `${resp.status}`;
+        try { msg = await resp.text(); } catch {}
+        throw new Error(`Download failed (${resp.status}): ${msg}`);
+      }
+
+      const blob = await resp.blob();
+      const type = blob.type || "application/octet-stream";
+      const file = new File([blob], filename, { type });
+
+      // Prefer iOS share sheet (avoids "black page")
+      if (navigator.share && (!navigator.canShare || navigator.canShare({ files: [file] }))) {
+        await navigator.share({ files: [file], title: filename });
+        return;
+      }
+
+      // Fallback: force a download
+      const blobUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = blobUrl;
+      a.download = filename;
+      a.rel = "noopener";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 10_000);
+    }
+
     // --- Dev flag: enable server STT plumbing when ?stt2=1 is present ---
 
     const STT2_ENABLED = new URLSearchParams(window.location.search).has("stt2");
@@ -14596,62 +14631,11 @@ const savedStrip = document.getElementById("savedScriptsStrip");
               sp.set("mode","room");
               if (new URLSearchParams(location.search).get("mixforce") === "1") sp.set("force","1");
               const url = `/api/gallery/${encodeURIComponent(id)}/mixed_file?${sp.toString()}`;
-              const resp = await fetch(url, withSecretHeaders({
-                method: "GET",
-                credentials: "include",
-                cache: "no-store"
-              }));
 
-              if (!resp.ok) {
-                let errorDetail = "";
-                try {
-                  const errorData = await resp.json();
-                  errorDetail = errorData.error || "";
-                } catch (e) {
-                  // Not JSON, try text
-                  try {
-                    errorDetail = await resp.text();
-                  } catch (e2) {
-                    // Ignore
-                  }
-                }
-
-                // Special message for 404 not_found
-                if (resp.status === 404 && errorDetail === "not_found") {
-                  throw new Error("Room export isn't ready yet (upload still processing). Wait 10 seconds and try again.");
-                }
-
-                const errorMsg = errorDetail
-                  ? `Room download failed (${resp.status}): ${errorDetail}`
-                  : `Room download failed (${resp.status})`;
-                throw new Error(errorMsg);
-              }
-
-              const blob = await resp.blob();
-              const mime = blob.type || "video/mp4";
               const filenameBase = cleanName(take.label || take.name || "offbook-take");
               const filename = `${filenameBase}-room.mp4`;
 
-              if (navigator.share) {
-                try {
-                  // Force mp4 mime; iOS can be picky if blob.type is missing/weird
-                  const file = new File([blob], filename, { type: "video/mp4" });
-                  await navigator.share({ files: [file], title: filename });
-                  return;
-                } catch (shareErr) {
-                  console.warn("[offbook] share failed, falling back", shareErr);
-                }
-              }
-
-              const objUrl = URL.createObjectURL(blob);
-              const a = document.createElement("a");
-              a.href = objUrl;
-              a.download = filename;
-              a.rel = "noopener";
-              document.body.appendChild(a);
-              a.click();
-              a.remove();
-              setTimeout(()=>URL.revokeObjectURL(objUrl), 20000);
+              await downloadBinaryToDevice(url, filename);
 
             } catch(err){
               console.warn("[offbook] room download failed", err);
