@@ -1515,6 +1515,7 @@ export function initHttpRoutes(app: Express) {
 
   api.get("/gallery/:id/mixed_file", requireUser, async (req: Request, res: Response) => {
     let tempTakeFile: string | null = null;
+    let tempMicFile: string | null = null;
     let tempReaderFile: string | null = null;
     let tempOutputFile: string | null = null;
 
@@ -1556,6 +1557,41 @@ export function initHttpRoutes(app: Express) {
       if (!filePath) {
         console.log("[mixdown] Missing file_path for takeId=%s", id);
         return res.status(404).json({ error: "file_missing" });
+      }
+
+      // Handle R2-stored take videos by downloading to temp
+      let takeInputPath = filePath;
+      if (filePath.startsWith("r2://")) {
+        const r2Key = filePath.substring(5); // Remove "r2://" prefix
+        const tmpDir = path.join(os.tmpdir(), "offbook");
+        fs.mkdirSync(tmpDir, { recursive: true });
+
+        tempTakeFile = path.join(tmpDir, `${id}-take.mp4`);
+        takeInputPath = tempTakeFile;
+
+        lastMixdownEvent = {
+          ...lastMixdownEvent,
+          stage: "downloading_take_r2",
+          r2Key,
+          tempPath: tempTakeFile
+        };
+
+        console.log("[mixed_file] Downloading take from R2: key=%s to temp=%s", r2Key, tempTakeFile);
+
+        try {
+          const takeResult = await r2GetObjectStream(r2Key);
+          await pipeStreamToFile(takeResult.stream, tempTakeFile, "take", 120000);
+          console.log("[mixed_file] Downloaded take from R2 successfully");
+        } catch (err) {
+          console.error("[mixed_file] Failed to download take from R2:", err);
+          lastMixdownEvent = {
+            ...lastMixdownEvent,
+            stage: "error",
+            errorCode: "take_download_failed",
+            errorMessage: String(err)
+          };
+          return res.status(500).json({ error: "take_download_failed" });
+        }
       }
 
       // Bump this when changing ffmpeg logic to bust cache
@@ -1622,6 +1658,7 @@ export function initHttpRoutes(app: Express) {
 
               micStem = micTemp;
               readerStem = readerTemp;
+              tempMicFile = micTemp;
               tempReaderFile = readerTemp;
               console.log("[mixed_file] Downloaded stems from R2: mic=%s, reader=%s", micKey, readerKey);
               break;
@@ -1668,7 +1705,16 @@ export function initHttpRoutes(app: Express) {
       }
 
       // Determine output path with versioning
-      const outPath = path.join(path.dirname(filePath), `${id}-${mode}-${MIX_VER}.mixed.mp4`);
+      let outPath: string;
+      if (filePath.startsWith("r2://")) {
+        // For R2-stored takes, write output to temp
+        const tmpDir = path.join(os.tmpdir(), "offbook");
+        fs.mkdirSync(tmpDir, { recursive: true });
+        outPath = path.join(tmpDir, `${id}-${mode}-${MIX_VER}.mixed.mp4`);
+        tempOutputFile = outPath;
+      } else {
+        outPath = path.join(path.dirname(filePath), `${id}-${mode}-${MIX_VER}.mixed.mp4`);
+      }
       const outExists = fs.existsSync(outPath);
 
       if (useStems) {
@@ -1677,7 +1723,7 @@ export function initHttpRoutes(app: Express) {
         // Check if rebuild needed
         const micStat = fs.statSync(micStem!);
         const readerStat = fs.statSync(readerStem!);
-        const takeStat = fs.statSync(filePath);
+        const takeStat = fs.statSync(takeInputPath);
         const needsRebuild =
           !outExists ||
           fs.statSync(outPath).mtimeMs <
@@ -1695,7 +1741,7 @@ export function initHttpRoutes(app: Express) {
           const baseArgs = [
             "-y",
             "-i",
-            filePath,      // input 0: take video
+            takeInputPath, // input 0: take video
             "-i",
             micStem,       // input 1: mic stem
             "-i",
@@ -1780,7 +1826,7 @@ export function initHttpRoutes(app: Express) {
           return res.status(404).json({ error: "reader_audio_missing" });
         }
 
-        const takeStat = fs.statSync(filePath);
+        const takeStat = fs.statSync(takeInputPath);
         const readerStat = fs.statSync(readerFile);
         const needsRebuild =
           !outExists ||
@@ -1794,7 +1840,7 @@ export function initHttpRoutes(app: Express) {
           const baseArgs = [
             "-y",
             "-i",
-            filePath,
+            takeInputPath,
             "-i",
             readerFile,
             "-filter_complex",
@@ -1841,14 +1887,53 @@ export function initHttpRoutes(app: Express) {
         const safeName = takeName.replace(/[^\w.-]+/g, "_").slice(0, 80) || "take";
         res.setHeader("Content-Disposition", `attachment; filename="${safeName}-${mode}.mp4"`);
       }
+
+      // Cleanup temp files after response finishes
+      res.on("finish", () => {
+        try {
+          if (tempTakeFile && fs.existsSync(tempTakeFile)) {
+            fs.unlinkSync(tempTakeFile);
+            console.log("[mixed_file] Cleaned up temp take file: %s", tempTakeFile);
+          }
+          if (tempMicFile && fs.existsSync(tempMicFile)) {
+            fs.unlinkSync(tempMicFile);
+            console.log("[mixed_file] Cleaned up temp mic file: %s", tempMicFile);
+          }
+          if (tempReaderFile && fs.existsSync(tempReaderFile)) {
+            fs.unlinkSync(tempReaderFile);
+            console.log("[mixed_file] Cleaned up temp reader file: %s", tempReaderFile);
+          }
+          if (tempOutputFile && fs.existsSync(tempOutputFile)) {
+            fs.unlinkSync(tempOutputFile);
+            console.log("[mixed_file] Cleaned up temp output file: %s", tempOutputFile);
+          }
+        } catch (cleanupErr) {
+          console.warn("[mixed_file] Cleanup error:", cleanupErr);
+        }
+      });
+
       return res.sendFile(outPath);
     } catch (err) {
       console.error("[mixdown] Error processing mixed file request, takeId=%s, userId=%s: %s", id, user?.id, err);
+
+      // Build detailed error message with ffmpeg diagnostics if available
+      let errorMessage = String(err);
+      const ffmpegErr = (err as any)?.ffmpeg;
+      if (ffmpegErr) {
+        errorMessage += `\nFFmpeg exit code: ${ffmpegErr.code}`;
+        if (ffmpegErr.stderr) {
+          errorMessage += `\nFFmpeg stderr: ${ffmpegErr.stderr.slice(-500)}`;
+        }
+        if (ffmpegErr.args) {
+          errorMessage += `\nFFmpeg args: ${JSON.stringify(ffmpegErr.args)}`;
+        }
+      }
+
       lastMixdownEvent = {
         ...lastMixdownEvent,
         stage: "error",
         errorCode: "internal_error",
-        errorMessage: String(err)
+        errorMessage
       };
       return res.status(500).json({
         error: "internal_error",
