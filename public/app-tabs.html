@@ -13842,19 +13842,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
             console.warn("uploadTakeToServer failed", resp.status, txt);
 
-            // Surface this on device since there is no console
-
-            alert(
-
-              "Gallery upload failed (" +
-
-                resp.status +
-
-                ").\n\n" +
-
-                (txt || "").slice(0, 200)
-
-            );
+            obToast("Gallery upload error. Please try again.");
 
             return;
 
@@ -13883,7 +13871,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
           console.warn("uploadTakeToServer error", err);
 
-          alert("Gallery upload error. Please try again and mention this to Rodrigo.");
+          obToast("Gallery upload error. Please try again.");
 
         }
 
@@ -14140,13 +14128,12 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
 
 
-          if (!src && (t.serverId || t.id)) {
-
-            const id = encodeURIComponent(t.serverId || t.id);
-
-            src = `/api/gallery/${id}/file`;
-
-          }
+          // Don't auto-load remote videos - prevents iOS Safari errors
+          // Videos will be loaded on-demand when user taps Play
+          // if (!src && (t.serverId || t.id)) {
+          //   const id = encodeURIComponent(t.serverId || t.id);
+          //   src = `/api/gallery/${id}/file`;
+          // }
 
 
 
@@ -14162,7 +14149,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
             <div class="take-card" data-id="${escapeHtml(t.id)}">
 
-              <video class="take-thumb" src="${escapeHtml(src)}" playsinline preload="metadata"></video>
+              <video class="take-thumb" src="${escapeHtml(src)}" playsinline preload="none"></video>
 
               <div class="take-row" style="justify-content:space-between;align-items:center;">
 
@@ -14682,16 +14669,12 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
             if(video.paused){
 
-              // Attempt to play with fallback logic
               try {
-                video.currentTime = 0;
-                await video.play();
-                if(btnPlay) btnPlay.textContent = "Pause";
-              } catch (playErr) {
-                console.warn("[offbook] Initial play failed, attempting fallback fetch", playErr);
+                // Check if video needs to be loaded from server first
+                const needsFetch = !video.src || video.src === "" || video.src.includes("/api/gallery/");
 
-                // Fallback: fetch video file from server
-                try {
+                if (needsFetch) {
+                  // No usable blob source - fetch file first
                   const takeId = take.serverId || take.id;
                   if (!takeId) throw new Error("No takeId available for playback");
 
@@ -14699,34 +14682,38 @@ const savedStrip = document.getElementById("savedScriptsStrip");
                   const resp = await fetch(url, withSecretHeaders({
                     method: "GET",
                     credentials: "include",
+                    cache: "no-store"
                   }));
 
                   if (!resp.ok) {
-                    const errorText = await resp.text().catch(() => "");
-                    throw new Error(`Playback fetch failed (${resp.status}): ${errorText || resp.statusText}`);
+                    obToast(`Playback download failed (${resp.status})`);
+                    console.error("[offbook] Playback download failed", resp.status);
+                    return;
                   }
 
                   const blob = await resp.blob();
                   const objectUrl = URL.createObjectURL(blob);
 
-                  // Replace video source and try playing again
+                  // Set video source
                   video.src = objectUrl;
+                  rec.url = objectUrl; // Store for later cleanup
+
                   video.load();
-                  video.currentTime = 0;
-                  await video.play();
 
-                  if(btnPlay) btnPlay.textContent = "Pause";
-
-                  // Cleanup object URL after video ends
+                  // Cleanup object URL when video ends
                   video.addEventListener("ended", () => {
-                    URL.revokeObjectURL(objectUrl);
+                    try { URL.revokeObjectURL(objectUrl); } catch {}
                   }, { once: true });
-
-                } catch (fallbackErr) {
-                  console.error("[offbook] Playback fallback failed", fallbackErr);
-                  markTakeBad(card, "Playback failed. This take might be corrupted.");
-                  obToast("Playback failed: " + (fallbackErr?.message || String(fallbackErr)));
                 }
+
+                // Now play
+                video.currentTime = 0;
+                await video.play();
+                if(btnPlay) btnPlay.textContent = "Pause";
+
+              } catch (err) {
+                console.error("[offbook] Playback failed", err);
+                obToast("Playback failed. Try again or delete this take.");
               }
 
             }else{
@@ -14845,11 +14832,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
               let id = take.serverId || take.id;
 
-              // Guard against legacy TK-style IDs
-              if (id && /^TK\d+/.test(id)) {
-                alert("This is an old take saved with a legacy ID. Please record a new take to use Room.");
-                return;
-              }
+              // Note: Legacy TK-style IDs now supported via auto-fallback to legacy mode
 
               // If no serverId, upload to get one
               if (!take.serverId) {
