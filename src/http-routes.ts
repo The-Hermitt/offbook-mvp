@@ -423,10 +423,11 @@ export function initHttpRoutes(app: Express) {
   if (typeof app?.set === "function") { app.set("trust proxy", 1); }
   const audit = makeAuditMiddleware();
   const { debugLimiter, renderLimiter } = makeRateLimiters();
-  const mixdownEnabled =
-    !!process.env.MIXDOWN_ENABLED &&
-    process.env.MIXDOWN_ENABLED !== "0" &&
-    process.env.MIXDOWN_ENABLED.toLowerCase() !== "false";
+
+  function getMixdownEnabled(): boolean {
+    const v = String(process.env.MIXDOWN_ENABLED || "").trim();
+    return !!v && v !== "0" && v.toLowerCase() !== "false";
+  }
 
   // Room diagnosability: capture last mixdown error and event
   let lastMixdownError: any = null;
@@ -628,7 +629,13 @@ export function initHttpRoutes(app: Express) {
 
   // GET /debug/last_mixdown - Room diagnosability
   debug.get("/last_mixdown", audit("/debug/last_mixdown"), (req: Request, res: Response) => {
-    return res.json({ ok: true, lastMixdownEvent, lastMixdownError });
+    return res.json({
+      ok: true,
+      mixdownEnabled: getMixdownEnabled(),
+      env_MIXDOWN_ENABLED: process.env.MIXDOWN_ENABLED ?? null,
+      lastMixdownEvent,
+      lastMixdownError
+    });
   });
 
   // GET /debug/last_stems_upload - Room diagnosability
@@ -1534,7 +1541,12 @@ export function initHttpRoutes(app: Express) {
     };
 
     try {
-      if (!mixdownEnabled) {
+      if (!getMixdownEnabled()) {
+        lastMixdownEvent = {
+          ...(lastMixdownEvent as any),
+          stage: "mixdown_disabled",
+          env_MIXDOWN_ENABLED: process.env.MIXDOWN_ENABLED ?? null
+        };
         return res.status(404).json({ error: "mixdown_disabled" });
       }
 
