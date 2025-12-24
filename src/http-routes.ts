@@ -1046,13 +1046,15 @@ export function initHttpRoutes(app: Express) {
     }
 
     // Upload to R2 if enabled
+    const r2Key = `renders/${renderId}.mp3`;
     if (r2Enabled()) {
       try {
-        const r2Key = `renders/${renderId}.mp3`;
         await r2PutFile(r2Key, file, "audio/mpeg");
         console.log("[debug/render] Uploaded to R2: key=%s", r2Key);
       } catch (err) {
-        console.warn("[debug/render] R2 upload failed:", err);
+        console.error("[debug/render] R2 upload failed:", err);
+        renders.set(renderId, { status: "error", err: "r2_upload_failed", accounted: false });
+        return res.status(500).json({ error: "r2_upload_failed" });
       }
     }
 
@@ -1068,7 +1070,7 @@ export function initHttpRoutes(app: Express) {
       console.error("[credits] noteRenderComplete failed (http-routes:/debug/render):", err);
     }
     renders.set(renderId, job);
-    res.json({ render_id: renderId, status: "complete" });
+    res.json({ render_id: renderId, status: "complete", r2Key });
   });
 
   // GET /debug/render_status
