@@ -1638,7 +1638,7 @@ export function initHttpRoutes(app: Express) {
       const force = String(req.query?.force || "") === "1";
       const solo = String(req.query?.solo || "");
       const soloReader = solo === "reader";
-      const legacyRequested = String(req.query?.legacy || "") === "1";
+      let legacyRequested = String(req.query?.legacy || "") === "1";
 
       // STEMS-FIRST APPROACH: Try to find stems (mic + reader) BEFORE checking reader_render_id
       const stemsDir = path.join(process.cwd(), "uploads", "gallery", String(user.id), "stems");
@@ -1715,15 +1715,26 @@ export function initHttpRoutes(app: Express) {
         readerStemPath: readerStem || undefined
       };
 
-      // If stems missing and legacy not requested, return error
+      // If stems missing and legacy not requested, try AUTO fallback to legacy (take + reader render MP3).
       if (!useStems && !legacyRequested) {
-        console.log("[mixed_file] Stems missing and legacy mode not requested for take %s", id);
-        lastMixdownEvent = {
-          ...lastMixdownEvent,
-          stage: "error",
-          errorCode: "stems_missing"
-        };
-        return res.status(404).json({ error: "stems_missing" });
+        if (readerId) {
+          console.log("[mixed_file] Stems missing; auto-fallback to legacy for take %s", id);
+          legacyRequested = true;
+          lastMixdownEvent = {
+            ...lastMixdownEvent,
+            stage: "stems_missing_fallback_legacy",
+            legacyRequested: true,
+            legacyAuto: true
+          };
+        } else {
+          console.log("[mixed_file] Stems missing and no reader_render_id for take %s", id);
+          lastMixdownEvent = {
+            ...lastMixdownEvent,
+            stage: "error",
+            errorCode: "stems_missing"
+          };
+          return res.status(404).json({ error: "stems_missing" });
+        }
       }
 
       // Only enforce reader_render_id when legacy mode is explicitly requested
@@ -1856,14 +1867,48 @@ export function initHttpRoutes(app: Express) {
           }
         }
 
-        const readerFile = localReader;
+        let readerFile = localReader;
+
         if (!localReaderExists) {
-          lastMixdownEvent = {
-            ...lastMixdownEvent,
-            stage: "error",
-            errorCode: "reader_audio_missing"
-          };
-          return res.status(404).json({ error: "reader_audio_missing" });
+          // If reader MP3 isn't on disk (common after restarts), fetch from R2 if available.
+          if (r2Enabled()) {
+            const r2ReaderKey = `renders/${readerId!}.mp3`;
+            const tmpDir = path.join(os.tmpdir(), "offbook");
+            fs.mkdirSync(tmpDir, { recursive: true });
+
+            const tmpReader = path.join(tmpDir, `${readerId!}-reader.mp3`);
+            tempReaderFile = tmpReader;
+
+            lastMixdownEvent = {
+              ...lastMixdownEvent,
+              stage: "downloading_reader_r2",
+              r2ReaderKey,
+              tempReaderPath: tmpReader
+            };
+
+            try {
+              const readerResult = await r2GetObjectStream(r2ReaderKey);
+              await pipeStreamToFile(readerResult.stream, tmpReader, "reader", 120000);
+              readerFile = tmpReader;
+              console.log("[mixed_file] Downloaded reader MP3 from R2: %s", r2ReaderKey);
+            } catch (err) {
+              console.error("[mixed_file] Failed to download reader MP3 from R2:", err);
+              lastMixdownEvent = {
+                ...lastMixdownEvent,
+                stage: "error",
+                errorCode: "reader_audio_missing",
+                errorMessage: String(err)
+              };
+              return res.status(404).json({ error: "reader_audio_missing" });
+            }
+          } else {
+            lastMixdownEvent = {
+              ...lastMixdownEvent,
+              stage: "error",
+              errorCode: "reader_audio_missing"
+            };
+            return res.status(404).json({ error: "reader_audio_missing" });
+          }
         }
 
         const takeStat = fs.statSync(takeInputPath);
