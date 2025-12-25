@@ -3068,6 +3068,13 @@ JANE: Ready?"></textarea>
             <div style="font-size:24px; font-family:monospace; letter-spacing:4px; text-align:center; padding:12px; background:#1e1e1e; border-radius:4px;" id="linkCodeText"></div>
             <div class="small" style="margin-top:6px; text-align:center;" id="linkCodeExpiry"></div>
           </div>
+
+          <!-- Linked devices list -->
+          <div style="margin-top:16px;">
+            <div style="font-weight:600; margin-bottom:8px;">Linked devices</div>
+            <div id="linkedDevicesList"></div>
+            <div id="linkedDevicesStatus" class="small" style="margin-top:6px; color:var(--muted);"></div>
+          </div>
         </div>
 
         <div id="claimLinkSection" style="display:none; margin-top:12px; padding:12px; border:1px solid #444; border-radius:4px;">
@@ -4474,6 +4481,10 @@ JANE: Ready?"></textarea>
 
           if (linkDeviceSection) {
             linkDeviceSection.style.display = isPasskeyLoggedIn ? "" : "none";
+            // Refresh linked devices list when logged in
+            if (isPasskeyLoggedIn) {
+              refreshLinkedDevices();
+            }
           }
 
           if (claimLinkSection) {
@@ -5418,6 +5429,89 @@ JANE: Ready?"></textarea>
 
           });
 
+        }
+
+        // Refresh linked devices list
+        async function refreshLinkedDevices() {
+          const listEl = document.getElementById("linkedDevicesList");
+          const statusEl = document.getElementById("linkedDevicesStatus");
+
+          if (!listEl) return;
+
+          try {
+            const resp = await fetch("/auth/devices", withSecretHeaders({ method: "GET" }));
+            const data = await resp.json();
+
+            if (!data.ok || !data.devices) {
+              if (statusEl) statusEl.textContent = "Failed to load devices.";
+              return;
+            }
+
+            if (data.devices.length === 0) {
+              listEl.innerHTML = '<div class="small" style="color:var(--muted);">No devices linked.</div>';
+              if (statusEl) statusEl.textContent = "";
+              return;
+            }
+
+            // Render device list
+            listEl.innerHTML = data.devices.map((device, idx) => {
+              const date = device.createdAt !== "Unknown" ? new Date(device.createdAt).toLocaleDateString() : "Unknown";
+              const label = device.isCurrent ? "This device" : `Device ${idx + 1}`;
+              const revokeBtn = device.isCurrent
+                ? ""
+                : `<button class="btn secondary sm" data-credential-id="${device.credentialId}" style="margin-left:auto;">Revoke</button>`;
+
+              return `
+                <div class="linkRow" style="padding:8px 0; border-bottom:1px solid var(--border);">
+                  <div>
+                    <div style="font-weight:500;">${label}</div>
+                    <div class="small" style="color:var(--muted);">Added ${date}</div>
+                  </div>
+                  ${revokeBtn}
+                </div>
+              `;
+            }).join("");
+
+            if (statusEl) statusEl.textContent = "";
+
+            // Wire up revoke buttons
+            const revokeButtons = listEl.querySelectorAll("button[data-credential-id]");
+            revokeButtons.forEach((btn) => {
+              btn.addEventListener("click", async () => {
+                const credentialId = btn.getAttribute("data-credential-id");
+                if (!credentialId) return;
+
+                if (!confirm("Are you sure? This will remove access on that device.")) {
+                  return;
+                }
+
+                try {
+                  const revokeResp = await fetch("/auth/devices/revoke", withSecretHeaders({
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ credentialId })
+                  }));
+
+                  const revokeData = await revokeResp.json();
+
+                  if (!revokeData.ok) {
+                    alert("Failed to revoke device: " + (revokeData.error || "unknown error"));
+                    return;
+                  }
+
+                  // Refresh the list
+                  await refreshLinkedDevices();
+                  await refreshAuthUI();
+                } catch (err) {
+                  console.error("Failed to revoke device:", err);
+                  alert("Failed to revoke device. Please try again.");
+                }
+              });
+            });
+          } catch (err) {
+            console.error("Failed to load devices:", err);
+            if (statusEl) statusEl.textContent = "Failed to load devices.";
+          }
         }
 
         // Link Code handlers

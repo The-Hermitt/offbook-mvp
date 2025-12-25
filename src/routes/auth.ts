@@ -426,6 +426,87 @@ router.post("/device-link/start", async (req, res) => {
   }
 });
 
+// --- DEVICE MANAGEMENT: LIST -------------------------------------------------
+// GET /auth/devices
+// Returns list of linked devices for the current user
+router.get("/devices", async (req, res) => {
+  const sess = ensureSessionDefaults(req);
+
+  // Require passkey logged in
+  if (!sess.loggedIn || !sess.userId) {
+    return res.status(401).json({ ok: false, error: "not_logged_in" });
+  }
+
+  try {
+    const rows = await db.all<{ credential_id: string; created_at: string }>(
+      "SELECT credential_id, created_at FROM webauthn_credentials WHERE user_id = ? ORDER BY created_at ASC",
+      [sess.userId]
+    );
+
+    const devices = rows.map((row) => ({
+      credentialId: row.credential_id,
+      createdAt: row.created_at || "Unknown",
+      isCurrent: row.credential_id === sess.credentialId,
+    }));
+
+    return res.json({ ok: true, devices });
+  } catch (err) {
+    console.error("[auth] Failed to list devices:", err);
+    return res.status(500).json({ ok: false, error: "failed_to_list_devices" });
+  }
+});
+
+// --- DEVICE MANAGEMENT: REVOKE -----------------------------------------------
+// POST /auth/devices/revoke
+// Revokes a specific device credential
+router.post("/devices/revoke", express.json({ limit: "1mb" }), async (req, res) => {
+  const sess = ensureSessionDefaults(req);
+
+  // Require passkey logged in
+  if (!sess.loggedIn || !sess.userId) {
+    return res.status(401).json({ ok: false, error: "not_logged_in" });
+  }
+
+  const { credentialId } = (req.body || {}) as { credentialId?: string };
+  if (!credentialId || typeof credentialId !== "string") {
+    return res.status(400).json({ ok: false, error: "missing_credential_id" });
+  }
+
+  try {
+    // Verify the credential belongs to this user
+    const credRow = await dbGet<{ user_id: string }>(
+      "SELECT user_id FROM webauthn_credentials WHERE credential_id = ? LIMIT 1",
+      [credentialId]
+    );
+
+    if (!credRow || credRow.user_id !== sess.userId) {
+      return res.status(404).json({ ok: false, error: "credential_not_found" });
+    }
+
+    // Prevent revoking current device
+    if (credentialId === sess.credentialId) {
+      return res.status(400).json({ ok: false, error: "cannot_revoke_current_device" });
+    }
+
+    // Prevent revoking last device
+    const count = await countPasskeysForUser(sess.userId);
+    if (count <= 1) {
+      return res.status(409).json({ ok: false, error: "cannot_revoke_last_device" });
+    }
+
+    // Delete the credential
+    await dbRun(
+      "DELETE FROM webauthn_credentials WHERE user_id = ? AND credential_id = ?",
+      [sess.userId, credentialId]
+    );
+
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error("[auth] Failed to revoke device:", err);
+    return res.status(500).json({ ok: false, error: "failed_to_revoke_device" });
+  }
+});
+
 // --- DEVICE LINK CODE: CLAIM -------------------------------------------------
 // POST /auth/device-link/claim
 // Claims a link code to link this device to an existing account
