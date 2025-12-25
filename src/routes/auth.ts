@@ -437,7 +437,7 @@ router.post("/device-link/claim", async (req, res) => {
 
     // Check if already used
     if (row.used_at) {
-      return res.status(400).json({ ok: false, error: "code_already_used" });
+      return res.status(409).json({ ok: false, error: "code_already_used" });
     }
 
     // Mark as used

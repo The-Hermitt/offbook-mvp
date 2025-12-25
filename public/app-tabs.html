@@ -5382,6 +5382,10 @@ JANE: Ready?"></textarea>
 
               await fetch("/auth/signout", withSecretHeaders({ method:"POST" }));
 
+              // Clear link code errors on sign out
+              const statusEl = document.getElementById("linkCodeStatus");
+              if (statusEl) statusEl.textContent = "";
+
               await refreshAuthUI();
 
               alert("Signed out.");
@@ -5419,6 +5423,10 @@ JANE: Ready?"></textarea>
               if (codeDisplay) codeDisplay.textContent = data.code;
               if (expiryDisplay) expiryDisplay.textContent = "Expires in 10 minutes";
               if (linkCodeDisplayDiv) linkCodeDisplayDiv.style.display = "";
+
+              // Clear any claim errors when new code is generated
+              const statusEl = document.getElementById("linkCodeStatus");
+              if (statusEl) statusEl.textContent = "";
             } catch (err) {
               console.error("Failed to get link code:", err);
               alert("Failed to generate link code. Please try again.");
@@ -5427,6 +5435,12 @@ JANE: Ready?"></textarea>
         }
 
         if (btnClaimLinkCode && linkCodeInput) {
+          // Clear error when input changes
+          linkCodeInput.addEventListener("input", () => {
+            const statusEl = document.getElementById("linkCodeStatus");
+            if (statusEl) statusEl.textContent = "";
+          });
+
           btnClaimLinkCode.addEventListener("click", async () => {
             const code = linkCodeInput.value.trim().toUpperCase();
             const statusEl = document.getElementById("linkCodeStatus");
@@ -5435,6 +5449,9 @@ JANE: Ready?"></textarea>
               if (statusEl) statusEl.textContent = "Please enter a link code.";
               return;
             }
+
+            // Disable button during request
+            btnClaimLinkCode.disabled = true;
 
             try {
               // Claim the code
@@ -5447,7 +5464,11 @@ JANE: Ready?"></textarea>
               const claimData = await claimResp.json();
 
               if (!claimData.ok) {
-                if (statusEl) statusEl.textContent = "Error: " + (claimData.error || "unknown error");
+                if (claimData.error === "code_already_used") {
+                  if (statusEl) statusEl.textContent = "This code was already used. Generate a new link code on the signed-in device.";
+                } else {
+                  if (statusEl) statusEl.textContent = "Error: " + (claimData.error || "unknown error");
+                }
                 return;
               }
 
@@ -5463,6 +5484,8 @@ JANE: Ready?"></textarea>
             } catch (err) {
               console.error("Failed to claim link code:", err);
               if (statusEl) statusEl.textContent = "Failed to link. Please try again.";
+            } finally {
+              btnClaimLinkCode.disabled = false;
             }
           });
         }
