@@ -100,39 +100,64 @@ const audit = makeAuditMiddleware();
 const { debugLimiter, renderLimiter } = makeRateLimiters();
 
 function getSharedSecret(): string | undefined {
-  const s = process.env.SHARED_SECRET;
-  return s && s.trim().length > 0 ? s.trim() : undefined;
+  const s = (process.env.SHARED_SECRET || "").trim();
+  return s.length > 0 ? s : undefined;
 }
 
 type RequestWithCookies = import("express").Request & {
   cookies?: Record<string, unknown>;
 };
 
-function extractProvidedSecret(req: import("express").Request): string | undefined {
-  // Check both capitalized and lowercase header variants
-  const h1 = (req.headers["X-Shared-Secret"] as string | undefined)?.trim();
-  const h2 = (req.headers["x-shared-secret"] as string | undefined)?.trim();
+type ExtractDebug = {
+  header: string | undefined;
+  query: string | undefined;
+  cookie: string | undefined;
+};
+
+function extractProvidedSecret(req: import("express").Request): { value: string | undefined; debug: ExtractDebug } {
+  // Header: check both X-Shared-Secret and x-shared-secret
+  const h = (req.header("X-Shared-Secret") || req.header("x-shared-secret") || "").trim() || undefined;
+
+  // Query param: handle both string and array cases
+  const qRaw = (req.query as any)?.secret;
+  const q = typeof qRaw === "string" ? qRaw.trim()
+          : Array.isArray(qRaw) && typeof qRaw[0] === "string" ? qRaw[0].trim()
+          : undefined;
+
+  // Cookie: if cookie-parser is active
   const cookies = (req as RequestWithCookies).cookies;
   const rawCookie = cookies?.["ob_secret"];
   const c = typeof rawCookie === "string" ? rawCookie.trim() : undefined;
-  const q = typeof req.query.secret === "string" ? req.query.secret.trim() : undefined;
-  return h1 || h2 || c || q || undefined;
+
+  const debug: ExtractDebug = { header: h, query: q, cookie: c };
+  const value = h || q || c || undefined;
+
+  return { value, debug };
 }
 
 function requireSharedSecret(): import("express").RequestHandler {
   return (req, res, next) => {
     const expected = getSharedSecret();
     if (!expected) return next();
-    const provided = extractProvidedSecret(req);
+
+    const { value: provided, debug } = extractProvidedSecret(req);
+
     if (provided === expected) {
       if (!req.headers["x-shared-secret"]) {
         req.headers["x-shared-secret"] = provided;
       }
       return next();
     }
+
     res.status(401).json({
       error: "unauthorized",
       reason: "missing_or_invalid_secret",
+      got: {
+        header: !!debug.header,
+        query: !!debug.query,
+        cookie: !!debug.cookie,
+        expectedSet: !!expected
+      }
     });
   };
 }
