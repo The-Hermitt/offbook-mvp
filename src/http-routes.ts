@@ -1768,30 +1768,36 @@ export function initHttpRoutes(app: Express) {
               const micTemp = path.join(tmpDir, `${id}-mic-${Date.now()}${ext}`);
               const readerTemp = path.join(tmpDir, `${id}-reader-${Date.now()}${ext}`);
 
-              const micResult = await r2GetObjectStream(micKey);
-              const micWrite = fs.createWriteStream(micTemp);
-              await new Promise<void>((resolve, reject) => {
-                micResult.stream.pipe(micWrite);
-                micWrite.on("finish", () => resolve());
-                micWrite.on("error", reject);
-              });
+              try {
+                const micResult = await r2GetObjectStream(micKey);
+                await pipeStreamToFile(micResult.stream, micTemp, "mic", 120000);
 
-              const readerResult = await r2GetObjectStream(readerKey);
-              const readerWrite = fs.createWriteStream(readerTemp);
-              await new Promise<void>((resolve, reject) => {
-                readerResult.stream.pipe(readerWrite);
-                readerWrite.on("finish", () => resolve());
-                readerWrite.on("error", reject);
-              });
+                const readerResult = await r2GetObjectStream(readerKey);
+                await pipeStreamToFile(readerResult.stream, readerTemp, "reader", 120000);
 
-              micStem = micTemp;
-              readerStem = readerTemp;
-              tempMicFile = micTemp;
-              tempReaderFile = readerTemp;
-              console.log("[mixed_file] Downloaded stems from R2: mic=%s, reader=%s", micKey, readerKey);
-              break;
+                micStem = micTemp;
+                readerStem = readerTemp;
+                tempMicFile = micTemp;
+                tempReaderFile = readerTemp;
+                console.log("[mixed_file] Downloaded stems from R2: mic=%s, reader=%s", micKey, readerKey);
+                break;
+              } catch (err) {
+                console.error("[mixed_file] Failed to download stems from R2:", err);
+                lastMixdownEvent = {
+                  ...lastMixdownEvent,
+                  stage: "error",
+                  errorCode: "stems_download_failed",
+                  errorMessage: String(err),
+                  micKey,
+                  readerKey
+                };
+                return res.status(500).json({ error: "stems_download_failed" });
+              }
             }
-          } catch {}
+          } catch (err) {
+            // Continue trying other extensions if HEAD fails
+            continue;
+          }
         }
       }
 
