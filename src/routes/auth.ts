@@ -14,6 +14,7 @@ type Sess = {
   userId?: string;
   credentialId?: string;
   loggedIn?: boolean;
+  regUserHandle?: string;
 
   // — Entitlements (dev placeholders) —
   plan?: "none" | "dev";
@@ -214,9 +215,7 @@ router.get("/session", async (req, res) => {
         .filter(Boolean)
         .filter((id) => id !== userId) as string[];
 
-      const hasMine = await dbGet<{ "1": number }>("SELECT 1 FROM scripts WHERE user_id = ? LIMIT 1", [userId]);
-
-      if (!hasMine && legacyIds.length > 0) {
+      if (legacyIds.length > 0) {
         for (const legacyId of legacyIds) {
           const hasLegacy = await dbGet<{ "1": number }>("SELECT 1 FROM scripts WHERE user_id = ? LIMIT 1", [legacyId]);
           if (hasLegacy) {
@@ -373,21 +372,23 @@ router.post("/passkey/register/start", (req, res) => {
   const rpId = getRpId(req);
   const challenge = genChallenge();
 
-  // Single tester defaults; can be moved to DB later
-  const body = (req.body || {}) as { userId?: string; userName?: string; displayName?: string };
-  const userId = (body.userId || "solo-tester");
-  const userName = (body.userName || "solo@tester.example");
-  const displayName = (body.displayName || "Solo Tester");
+  const body = (req.body || {}) as { userName?: string; displayName?: string };
 
-  // Persist a stable, human-friendly user id for this session (dev only).
-  // This is what we want to use for per-user data like Gallery takes.
-  sess.userId = userId;
+  // Generate a per-session registration user handle (WebAuthn "user.id").
+  // This is NOT our DB userId; our DB userId is derived from credentialId after finish.
+  if (!sess.regUserHandle) {
+    sess.regUserHandle = `ob_${crypto.randomUUID()}`;
+  }
+  const userHandle = sess.regUserHandle;
+
+  const userName = (body.userName || `user-${userHandle.slice(3, 11)}@offbook.local`);
+  const displayName = (body.displayName || "OffBook User");
 
   // Minimal PublicKeyCredentialCreationOptions (no libs)
   const options: any = {
     rp: { id: rpId, name: "OffBook (Dev)" },
     user: {
-      id: Buffer.from(userId).toString("base64url"),
+      id: Buffer.from(userHandle).toString("base64url"),
       name: userName,
       displayName,
     },
@@ -424,8 +425,9 @@ router.post("/passkey/register/start", (req, res) => {
 // --- PASSKEY REGISTER: FINISH (DEV MODE) -------------------------------------
 // POST /auth/passkey/register/finish
 // Body: { id, rawId, response: { clientDataJSON, attestationObject? }, type }
-router.post("/passkey/register/finish", express.json({ limit: "1mb" }), (req, res) => {
+router.post("/passkey/register/finish", express.json({ limit: "1mb" }), async (req, res) => {
   const sess = ensureSessionDefaults(req);
+  const priorUserId = sess.userId;
 
   if (!sess.regChallenge) {
     return res.status(400).json({ ok: false, error: "no_challenge" });
@@ -454,9 +456,38 @@ router.post("/passkey/register/finish", express.json({ limit: "1mb" }), (req, re
   if (!originOk)    return res.status(400).json({ ok: false, error: "origin_mismatch", expected: allowedOrigin, got: clientData.origin });
 
   sess.credentialId = String(id);
-  sess.userId = deriveUserId(sess) || "passkey:registered";
+  const stableUserId = deriveUserId(sess) || "passkey:registered";
+  sess.userId = stableUserId;
   sess.loggedIn = true;
   delete sess.regChallenge;
+  delete sess.regUserHandle;
+
+  // Migrate anon data to passkey user (first-time register flow)
+  if (priorUserId && stableUserId && priorUserId.startsWith("anon:") && priorUserId !== stableUserId) {
+    try {
+      await dbRun("UPDATE scripts SET user_id = ? WHERE user_id = ?", [stableUserId, priorUserId]);
+
+      const hasDestCredits = await dbGet<{ "1": number }>(
+        "SELECT 1 FROM user_credits WHERE user_id = ? LIMIT 1",
+        [stableUserId]
+      );
+      if (!hasDestCredits) {
+        await dbRun("UPDATE user_credits SET user_id = ? WHERE user_id = ?", [stableUserId, priorUserId]);
+      }
+
+      const hasDestGallery = await dbGet<{ "1": number }>(
+        "SELECT 1 FROM gallery_takes WHERE user_id = ? LIMIT 1",
+        [stableUserId]
+      );
+      if (!hasDestGallery) {
+        await dbRun("UPDATE gallery_takes SET user_id = ? WHERE user_id = ?", [stableUserId, priorUserId]);
+      }
+
+      console.log("[auth] migrated anon data from %s to %s (register)", priorUserId, stableUserId);
+    } catch (err) {
+      console.error("[auth] failed to migrate anon data from %s to %s (register)", priorUserId, stableUserId, err);
+    }
+  }
 
   return res.json({ ok: true, userId: sess.userId, credentialId: sess.credentialId, autoSignedIn: true });
 });
