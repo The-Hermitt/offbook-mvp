@@ -1771,7 +1771,7 @@ export function initHttpRoutes(app: Express) {
 
             if (micHead.exists && readerHead.exists) {
               // Download both stems to temp
-              const tmpDir = path.join(require("os").tmpdir(), "offbook-mix");
+              const tmpDir = path.join(os.tmpdir(), "offbook-mix");
               fs.mkdirSync(tmpDir, { recursive: true });
 
               const micTemp = path.join(tmpDir, `${id}-mic-${Date.now()}${ext}`);
