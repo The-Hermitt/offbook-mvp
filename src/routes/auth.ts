@@ -363,6 +363,15 @@ router.post("/signout", (req, res) => {
   const sess = req.session as Sess;
   if (sess) {
     sess.loggedIn = false;
+
+    // Clear passkey + linking state so "link another device" works cleanly
+    delete sess.credentialId;
+    delete sess.userId;
+    delete sess.authChallenge;
+    delete sess.regChallenge;
+    delete sess.regUserHandle;
+    delete sess.pendingLinkUserId;
+    delete sess.pendingLinkCode;
   }
 
   return res.json({ ok: true });
@@ -498,18 +507,6 @@ router.post("/passkey/register/start", (req, res) => {
     },
   };
 
-  // Avoid duplicate credentials on the same device during dev:
-  // if we already have a credentialId for this session, tell the browser to exclude it.
-  if (sess.credentialId) {
-    options.excludeCredentials = [
-      {
-        type: "public-key",
-        id: sess.credentialId,     // base64url string (client will convert to ArrayBuffer)
-        transports: ["internal"],  // platform authenticator (Face ID / Touch ID)
-      },
-    ];
-  }
-
   sess.regChallenge = challenge;
   return res.json({ options });
 });
@@ -552,23 +549,37 @@ router.post("/passkey/register/finish", express.json({ limit: "1mb" }), async (r
   // Determine stable userId: use pendingLinkUserId if linking, otherwise derive from credential
   const stableUserId = sess.pendingLinkUserId || deriveUserId({ ...sess, credentialId }) || "passkey:registered";
 
-  // If linking via code, atomically consume it now
-  if (sess.pendingLinkUserId && sess.pendingLinkCode) {
-    try {
-      const usedAt = new Date().toISOString();
-      const now = new Date().toISOString();
-      const result = await dbRun(
-        "UPDATE device_link_codes SET used_at = ? WHERE code = ? AND user_id = ? AND used_at IS NULL AND expires_at > ?",
-        [usedAt, sess.pendingLinkCode, sess.pendingLinkUserId, now]
-      );
+  // If we're linking, atomically consume the link code now (after FaceID success)
+  if (sess.pendingLinkCode) {
+    const normalized = sess.pendingLinkCode.trim().toUpperCase();
 
-      // Check if exactly 1 row was updated (code was valid, unused, and not expired)
-      if (!result || result.changes !== 1) {
-        return res.status(409).json({ ok: false, error: "code_already_used" });
-      }
-    } catch (err) {
-      console.error("[auth] Failed to consume link code:", err);
-      return res.status(500).json({ ok: false, error: "failed_to_consume_code" });
+    const linkRow = await dbGet<{ expires_at: string; used_at: string | null }>(
+      "SELECT expires_at, used_at FROM device_link_codes WHERE code = ?",
+      [normalized]
+    );
+
+    if (!linkRow) {
+      return res.status(404).json({ ok: false, error: "invalid_code" });
+    }
+
+    const expiresAt = new Date(linkRow.expires_at);
+    if (Date.now() > expiresAt.getTime()) {
+      return res.status(400).json({ ok: false, error: "code_expired" });
+    }
+
+    if (linkRow.used_at) {
+      return res.status(409).json({ ok: false, error: "code_already_used" });
+    }
+
+    const usedAt = new Date().toISOString();
+    const upd = await dbRun(
+      "UPDATE device_link_codes SET used_at = ? WHERE code = ? AND used_at IS NULL",
+      [usedAt, normalized]
+    );
+
+    const changed = (upd?.rowCount ?? upd?.changes ?? 0);
+    if (changed === 0) {
+      return res.status(409).json({ ok: false, error: "code_already_used" });
     }
   }
 
