@@ -2525,6 +2525,59 @@
 
       }
 
+      /* Full-screen busy overlay */
+      .ob-busy {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(0, 0, 0, 0.8);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 10000;
+      }
+
+      .ob-busy.hidden {
+        display: none;
+      }
+
+      .ob-busy-card {
+        background: #1e1e1e;
+        border: 1px solid #444;
+        border-radius: 8px;
+        padding: 32px;
+        text-align: center;
+        max-width: 300px;
+      }
+
+      .ob-spin {
+        width: 48px;
+        height: 48px;
+        border: 4px solid #333;
+        border-top-color: #fff;
+        border-radius: 50%;
+        margin: 0 auto 16px;
+        animation: spin 1s linear infinite;
+      }
+
+      @keyframes spin {
+        to { transform: rotate(360deg); }
+      }
+
+      .ob-busy-text {
+        font-size: 16px;
+        font-weight: 600;
+        margin-bottom: 8px;
+        color: #fff;
+      }
+
+      .ob-busy-sub {
+        font-size: 13px;
+        color: #999;
+      }
+
   </style>
 
 </head>
@@ -6150,6 +6203,18 @@ JANE: Ready?"></textarea>
       }
 
       function showLocked(){ showErr(LOCKED_MSG); }
+
+      function showBusy(msg){
+        const el = document.getElementById("obBusy");
+        const tx = document.getElementById("obBusyText");
+        if (tx) tx.textContent = msg || "Working…";
+        if (el) el.classList.remove("hidden");
+      }
+
+      function hideBusy(){
+        const el = document.getElementById("obBusy");
+        if (el) el.classList.add("hidden");
+      }
 
       if(errbar){
 
@@ -12922,6 +12987,17 @@ const savedStrip = document.getElementById("savedScriptsStrip");
             console.warn("[offbook] Failed to create reader stem recorder:", e);
             R.recReader = null;
           }
+
+          // Create stop-promises to ensure stems flush before finalizeTake
+          R._micStoppedP = R.recMic ? new Promise(resolve => {
+            const prev = R.recMic.onstop;
+            R.recMic.onstop = (...args) => { try{ prev && prev.apply(R.recMic,args);}catch{}; resolve(true); };
+          }) : Promise.resolve(true);
+
+          R._readerStoppedP = R.recReader ? new Promise(resolve => {
+            const prev = R.recReader.onstop;
+            R.recReader.onstop = (...args) => { try{ prev && prev.apply(R.recReader,args);}catch{}; resolve(true); };
+          }) : Promise.resolve(true);
         }
 
         R.rec.ondataavailable = (e)=>{ if(e.data && e.data.size>0) R.chunks.push(e.data); };
@@ -12949,6 +13025,9 @@ const savedStrip = document.getElementById("savedScriptsStrip");
           R.readerRecordGain = null; R.readerBridge = null; R.readerBridgeSource = null;
 
           restoreReaderDirectMonitor();
+
+          // iOS-safe delay to let final stem dataavailable events fire
+          await new Promise(r => setTimeout(r, 450));
 
           try{ await finalizeTake(); }
 
@@ -12996,13 +13075,34 @@ const savedStrip = document.getElementById("savedScriptsStrip");
           R.rec.start();
 
           // Start stem recorders at the same moment as the main recorder (Room stems)
+          // Use timeslice to force chunk emission on iOS
           try {
-            if (R.recMic && R.recMic.state === "inactive") R.recMic.start();
+            if (R.recMic && R.recMic.state === "inactive") {
+              try {
+                R.recMic.start(750);
+              } catch {
+                try {
+                  R.recMic.start();
+                } catch (e) {
+                  console.warn("[offbook] recMic.start failed", e);
+                }
+              }
+            }
           } catch (e) {
             console.warn("[offbook] recMic.start failed", e);
           }
           try {
-            if (R.recReader && R.recReader.state === "inactive") R.recReader.start();
+            if (R.recReader && R.recReader.state === "inactive") {
+              try {
+                R.recReader.start(750);
+              } catch {
+                try {
+                  R.recReader.start();
+                } catch (e) {
+                  console.warn("[offbook] recReader.start failed", e);
+                }
+              }
+            }
           } catch (e) {
             console.warn("[offbook] recReader.start failed", e);
           }
@@ -13120,6 +13220,10 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
         }
 
+        // Flush final chunks from stem recorders before stopping
+        try { R.recMic?.requestData?.(); } catch {}
+        try { R.recReader?.requestData?.(); } catch {}
+
         try{ R.rec?.stop(); }catch(e){ setStatus("Record error: " + e); }
 
         // Stop stem recorders
@@ -13148,11 +13252,19 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
         const aspect = R.currentAspect || (isPortrait() ? "9:16" : "16:9");
 
+        // Assemble stem blobs from captured chunks (after delay has allowed final chunks to arrive)
+        const micBlob = (R.micChunks && R.micChunks.length) ? new Blob(R.micChunks, { type: (R.recMic?.mimeType || "audio/m4a") }) : null;
+        const readerBlob = (R.readerChunks && R.readerChunks.length) ? new Blob(R.readerChunks, { type: (R.recReader?.mimeType || "audio/m4a") }) : null;
+
+        if (micBlob && readerBlob) {
+          console.log("[offbook] Assembled stems:", { micSize: micBlob.size, readerSize: readerBlob.size });
+        }
+
         let savedTake = null;
 
         try{
 
-          savedTake = await saveTakeToDB({ blob, isVid, aspect, renderId: R.render_id });
+          savedTake = await saveTakeToDB({ blob, isVid, aspect, renderId: R.render_id, micBlob, readerBlob });
 
           setStatusRec("Saved to Gallery.");
 
@@ -13170,22 +13282,17 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
             uploadTakeToServer(savedTake).then(async () => {
 
-              // After successful take upload, upload stems if available
-              if (R.micChunks && R.micChunks.length > 0 && R.readerChunks && R.readerChunks.length > 0) {
+              // After successful take upload, upload stems if available and non-empty
+              if (micBlob && readerBlob && micBlob.size > 2048 && readerBlob.size > 2048) {
                 try {
-                  const micMime = (R.recMic && R.recMic.mimeType) || "audio/webm";
-                  const readerMime = (R.recReader && R.recReader.mimeType) || "audio/webm";
-
-                  const micBlob = new Blob(R.micChunks, { type: micMime });
-                  const readerBlob = new Blob(R.readerChunks, { type: readerMime });
-
-                  console.log("[offbook] Assembled stems:", { micSize: micBlob.size, readerSize: readerBlob.size });
-
-                  await uploadStemsToServer(savedTake.id, micBlob, readerBlob);
+                  await uploadStemsToServer(savedTake.serverId || savedTake.id, micBlob, readerBlob);
                 } catch (err) {
-                  console.error("[offbook] Stem upload failed:", err);
-                  alert("Warning: Stem upload failed. Room mixdown may not work for this take.\n\n" + String(err).slice(0, 200));
+                  console.warn("[offbook] Stem upload failed:", err);
+                  alert(`Stem upload failed: ${err?.message || String(err)}. Room will be unavailable for this take.`);
                 }
+              } else {
+                // iPhone-visible debug without console
+                alert(`Stems not captured (mic=${micBlob?micBlob.size:0} bytes, reader=${readerBlob?readerBlob.size:0} bytes). Room will be unavailable.`);
               }
 
             }).catch(err => {
@@ -13280,6 +13387,24 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
         }
 
+        async function get(id){
+
+          await ready();
+
+          return new Promise((res, rej)=>{
+
+            const tx = db.transaction(STORE, "readonly");
+
+            const req = tx.objectStore(STORE).get(id);
+
+            req.onsuccess = () => res(req.result || null);
+
+            req.onerror = () => rej(req.error);
+
+          });
+
+        }
+
         async function del(id){
 
           await ready();
@@ -13298,7 +13423,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
         }
 
-        return { put, getAll, del };
+        return { put, getAll, get, del };
 
       })();
 
@@ -13418,7 +13543,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
 
 
-      async function saveTakeToDB({ blob, isVid, aspect, renderId }){
+      async function saveTakeToDB({ blob, isVid, aspect, renderId, micBlob, readerBlob }){
 
         if(!("indexedDB" in window)) throw new Error("indexeddb-unavailable");
 
@@ -13468,7 +13593,11 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
           readerRenderId: typeof renderId === "string" ? renderId : (typeof R?.render_id === "string" ? R.render_id : (localStorage.getItem("offbook:last_render_id") || "")),
 
-          userKey
+          userKey,
+
+          micBlob: micBlob || null,
+
+          readerBlob: readerBlob || null
 
         };
 
@@ -13824,7 +13953,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
 
 
-          const resp = await fetch("/api/gallery/upload", {
+          const resp = await fetch("/api/gallery/upload", withSecretHeaders({
 
             method: "POST",
 
@@ -13832,7 +13961,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
             credentials: "include"
 
-          });
+          }));
 
 
 
@@ -13915,11 +14044,11 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
           console.log("[offbook] Uploading stems for takeId:", takeId);
 
-          const resp = await fetch("/api/gallery/upload_stems", {
+          const resp = await fetch("/api/gallery/upload_stems", withSecretHeaders({
             method: "POST",
             body: form,
             credentials: "include"
-          });
+          }));
 
           if (!resp.ok) {
             const txt = await resp.text().catch(() => "");
@@ -13944,7 +14073,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
         try{
 
-          const resp = await fetch("/api/gallery/notes", {
+          const resp = await fetch("/api/gallery/notes", withSecretHeaders({
 
             method: "POST",
 
@@ -13954,7 +14083,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
             credentials: "include"
 
-          });
+          }));
 
           if(!resp.ok){
 
@@ -13978,7 +14107,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
         try{
 
-          const resp = await fetch("/api/gallery/delete", {
+          const resp = await fetch("/api/gallery/delete", withSecretHeaders({
 
             method: "POST",
 
@@ -13988,11 +14117,20 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
             credentials: "include"
 
-          });
+          }));
 
           if(!resp.ok){
 
             console.warn("deleteTakeOnServer failed", resp.status);
+
+            // Show error to user on iPhone (no console access)
+            try{
+              const errorText = await resp.text();
+              const truncated = errorText.slice(0, 200);
+              alert(`Delete failed (${resp.status}): ${truncated}`);
+            }catch{
+              alert(`Delete failed (${resp.status})`);
+            }
 
           }
 
@@ -14162,7 +14300,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
             <div class="take-card" data-id="${escapeHtml(t.id)}">
 
-              <video class="take-thumb" src="${escapeHtml(src)}" playsinline preload="metadata"></video>
+              <video class="take-thumb" data-src="${escapeHtml(src)}" playsinline preload="none"></video>
 
               <div class="take-row" style="justify-content:space-between;align-items:center;">
 
@@ -14187,6 +14325,8 @@ const savedStrip = document.getElementById("savedScriptsStrip");
                 </div>
 
               </div>
+
+              <div class="take-err" style="margin-top:8px;color:#ffb4b4;font-size:12px;"></div>
 
               <textarea class="take-note" placeholder="Add a note…">${noteSafe}</textarea>
 
@@ -14654,6 +14794,15 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
             if(video.paused){
 
+              // If video.src is empty, set it from data-src first
+              if (!video.src || video.src === "") {
+                const dataSrc = video.getAttribute("data-src");
+                if (dataSrc) {
+                  video.src = dataSrc;
+                  video.load();
+                }
+              }
+
               // Attempt to play with fallback logic
               try {
                 video.currentTime = 0;
@@ -14696,7 +14845,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
                 } catch (fallbackErr) {
                   console.error("[offbook] Playback fallback failed", fallbackErr);
-                  alert("Playback failed: " + (fallbackErr?.message || String(fallbackErr)));
+                  showToastOnce("Playback failed: " + (fallbackErr?.message || String(fallbackErr)), 3500);
                 }
               }
 
@@ -14717,9 +14866,27 @@ const savedStrip = document.getElementById("savedScriptsStrip");
           video?.addEventListener("error", (e)=>{
             console.error("[offbook] Video playback error", video?.error);
             if(btnPlay) btnPlay.textContent = "Play";
-            const errorCode = video?.error?.code;
-            const errorMessage = video?.error?.message || "Unknown error";
-            alert(`Video playback error (code ${errorCode}): ${errorMessage}`);
+
+            const errorCode = video?.error?.code || "?";
+
+            // Find or create error message div
+            let errDiv = card.querySelector(".take-err");
+            if (!errDiv) {
+              errDiv = document.createElement("div");
+              errDiv.className = "take-err";
+              errDiv.style.cssText = "margin-top:8px;color:#ffb4b4;font-size:12px;";
+              const rowDiv = card.querySelector(".take-row");
+              if (rowDiv) {
+                rowDiv.parentNode.insertBefore(errDiv, rowDiv.nextSibling);
+              }
+            }
+
+            errDiv.textContent = `Playback failed (code ${errorCode}). This take may be corrupt or missing. Try Delete.`;
+
+            // Reset the video element so it doesn't poison other cards
+            video.pause();
+            video.removeAttribute("src");
+            video.load();
           });
 
 
@@ -14803,8 +14970,9 @@ const savedStrip = document.getElementById("savedScriptsStrip");
             if(!btn) return;
 
             const prevLabel = btn.textContent || "Room";
-            btn.textContent = "Preparing…";
+            btn.textContent = "Mixing…";
             btn.disabled = true;
+            showBusy("Mixing take…");
 
             try{
               const cleanName = (s) => String(s||"")
@@ -14841,13 +15009,69 @@ const savedStrip = document.getElementById("savedScriptsStrip");
               const filename = `${filenameBase}-room.mp4`;
 
               // Fetch the Room mix
-              const resp = await fetch(url, withSecretHeaders({
+              let resp = await fetch(url, withSecretHeaders({
                 method: "GET",
                 credentials: "include",
               }));
 
+              // Handle missing data errors with self-heal from IndexedDB
               if (!resp.ok) {
-                throw new Error(`Room mix failed (${resp.status})`);
+                if (resp.status === 404) {
+                  // Parse error to determine what's missing
+                  const j = await resp.json().catch(() => null);
+                  const errCode = j?.error || j?.errorCode || "";
+
+                  if (errCode === "stems_missing" || errCode === "not_found") {
+                    // Self-heal: re-upload from IndexedDB
+                    console.log(`[offbook] Server missing data (${errCode}), attempting repair from IndexedDB...`);
+
+                    // Load full record from IndexedDB
+                    const full = await GalleryDB.get(take.id);
+
+                    if (!full) {
+                      alert("Room repair failed: take not found on device.");
+                      return;
+                    }
+
+                    // Show visible status to user
+                    showBusy("Repairing…");
+                    btn.textContent = "Repairing…";
+
+                    try {
+                      // If take itself is missing (not_found), re-upload it
+                      if (errCode === "not_found") {
+                        if (full.blob) {
+                          console.log("[offbook] Re-uploading take to server...");
+                          await uploadTakeToServer(full);
+                        }
+                      }
+
+                      // If stems are missing, re-upload them
+                      if (full.micBlob && full.readerBlob) {
+                        console.log("[offbook] Re-uploading stems to server...");
+                        await uploadStemsToServer(id, full.micBlob, full.readerBlob);
+                      }
+
+                      // Retry the mixed_file fetch once
+                      showBusy("Mixing take…");
+                      resp = await fetch(url, withSecretHeaders({
+                        method: "GET",
+                        credentials: "include",
+                      }));
+
+                      if (!resp.ok) {
+                        const retryBody = await resp.text().catch(() => "");
+                        throw new Error(`Room mix failed after repair (${resp.status}): ${retryBody.slice(0, 200)}`);
+                      }
+                    } catch (repairErr) {
+                      throw repairErr;
+                    }
+                  } else {
+                    throw new Error(`Room mix failed (${resp.status})`);
+                  }
+                } else {
+                  throw new Error(`Room mix failed (${resp.status})`);
+                }
               }
 
               const blob = await resp.blob();
@@ -14859,6 +15083,9 @@ const savedStrip = document.getElementById("savedScriptsStrip");
                 filename,
                 timestamp: Date.now()
               });
+
+              // Hide busy overlay before showing modal
+              hideBusy();
 
               // Reset button state before showing modal
               btn.disabled = false;
@@ -14878,6 +15105,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
               console.warn("[offbook] room download failed", err);
               alert("Room download failed: " + (err?.message || String(err)));
             } finally {
+              hideBusy();
               btn.disabled = false;
               btn.textContent = prevLabel;
             }
@@ -16107,6 +16335,14 @@ const savedStrip = document.getElementById("savedScriptsStrip");
     })();
 
   </script>
+
+  <div id="obBusy" class="ob-busy hidden" aria-live="polite">
+    <div class="ob-busy-card">
+      <div class="ob-spin"></div>
+      <div id="obBusyText" class="ob-busy-text">Mixing take…</div>
+      <div class="ob-busy-sub">This can take a moment.</div>
+    </div>
+  </div>
 
 </body>
 

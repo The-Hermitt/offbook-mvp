@@ -643,6 +643,80 @@ export function initHttpRoutes(app: Express) {
     return res.json({ ok: true, lastStemsUploadEvent, lastStemsUploadError });
   });
 
+  // GET /debug/stems_check?take_id=...
+  debug.get("/stems_check", requireUser, audit("/debug/stems_check"), async (req: Request, res: Response) => {
+    try {
+      const user = (req as any).user || res.locals.user;
+      if (!user || !user.id) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+
+      const takeId = String(req.query?.take_id || "");
+      if (!takeId) {
+        return res.status(400).json({ error: "take_id required" });
+      }
+
+      const userId = String(user.id);
+      const r2IsEnabled = r2Enabled();
+
+      if (!r2IsEnabled) {
+        return res.json({
+          ok: true,
+          takeId,
+          userId,
+          r2Enabled: false,
+          found: false,
+          message: "R2 not enabled"
+        });
+      }
+
+      // Try all possible extensions (same list as mixed_file)
+      const stemExts = [".m4a", ".webm", ".mp3", ".wav", ".ogg", ".mp4"];
+      const triedExts: string[] = [];
+
+      for (const ext of stemExts) {
+        triedExts.push(ext);
+        const micKey = `stems/${userId}/${takeId}-mic${ext}`;
+        const readerKey = `stems/${userId}/${takeId}-reader${ext}`;
+
+        try {
+          const micHead = await r2Head(micKey);
+          const readerHead = await r2Head(readerKey);
+
+          if (micHead && readerHead) {
+            // Found matching pair
+            return res.json({
+              ok: true,
+              takeId,
+              userId,
+              r2Enabled: true,
+              found: true,
+              micKey,
+              readerKey,
+              triedExts
+            });
+          }
+        } catch (err) {
+          // Continue trying other extensions
+          continue;
+        }
+      }
+
+      // No matching pair found
+      return res.json({
+        ok: true,
+        takeId,
+        userId,
+        r2Enabled: true,
+        found: false,
+        triedExts
+      });
+    } catch (err) {
+      console.error("Error in GET /debug/stems_check", err);
+      return res.status(500).json({ error: "internal_error" });
+    }
+  });
+
   // POST /debug/upload_script_text
   debug.post("/upload_script_text", audit("/debug/upload_script_text"), async (req: Request, res: Response) => {
     const { userId } = getPasskeySession(req as any);
@@ -1374,29 +1448,7 @@ export function initHttpRoutes(app: Express) {
         console.log("[stems] Saved locally: user=%s takeId=%s mic=%s reader=%s",
           user.id, takeId, micPath, readerPath);
 
-        const storageInfo: any = {
-          local: {
-            mic: micPath,
-            reader: readerPath
-          }
-        };
-
-        // Update success event for local save
-        lastStemsUploadEvent = {
-          ...lastStemsUploadEvent,
-          stage: "complete",
-          micPath,
-          readerPath
-        };
-
-        // Respond immediately once local stems exist (prevents iOS fetch timeouts)
-        res.json({
-          ok: true,
-          takeId,
-          storage: storageInfo
-        });
-
-        // Upload to R2 in the background (best-effort)
+        // Upload to R2 deterministically (not best-effort) BEFORE responding
         if (r2Enabled()) {
           const micKey = `stems/${user.id}/${takeId}-mic${micExt}`;
           const readerKey = `stems/${user.id}/${takeId}-reader${readerExt}`;
@@ -1404,25 +1456,66 @@ export function initHttpRoutes(app: Express) {
           lastStemsUploadEvent = { ...lastStemsUploadEvent, stage: "r2_uploading", micKey, readerKey };
           lastStemsUploadError = null;
 
-          void (async () => {
-            try {
-              // Upload both stems in parallel to avoid doubling the wait time
-              await Promise.all([
-                r2PutFile(micKey, micPath, micFile.mimetype || "audio/webm"),
-                r2PutFile(readerKey, readerPath, readerFile.mimetype || "audio/webm"),
-              ]);
+          try {
+            // Upload both stems in parallel to avoid doubling the wait time
+            await Promise.all([
+              r2PutFile(micKey, micPath, micFile.mimetype || "audio/webm"),
+              r2PutFile(readerKey, readerPath, readerFile.mimetype || "audio/webm"),
+            ]);
 
-              lastStemsUploadEvent = { ...lastStemsUploadEvent, stage: "complete", micKey, readerKey };
+            // Verify both stems exist in R2
+            const micHead = await r2Head(micKey);
+            const readerHead = await r2Head(readerKey);
 
-              console.log("[stems] Uploaded to R2: user=%s takeId=%s micKey=%s readerKey=%s",
-                user.id, takeId, micKey, readerKey);
-            } catch (err) {
-              console.error("[stems] R2 upload failed (background), keeping local only:", err);
-              lastStemsUploadError = { at: new Date().toISOString(), error: String(err) };
-              lastStemsUploadEvent = { ...lastStemsUploadEvent, stage: "complete_local" };
+            if (!micHead || !readerHead) {
+              throw new Error("r2_verify_failed");
             }
-          })();
+
+            lastStemsUploadEvent = { ...lastStemsUploadEvent, stage: "complete", micKey, readerKey, micPath, readerPath };
+
+            console.log("[stems] Uploaded to R2: user=%s takeId=%s micKey=%s readerKey=%s",
+              user.id, takeId, micKey, readerKey);
+
+            // Respond with R2 persistence confirmation
+            return res.json({
+              ok: true,
+              takeId,
+              storage: {
+                micKey,
+                readerKey,
+                micExt,
+                readerExt,
+                persisted: "r2"
+              }
+            });
+          } catch (err) {
+            console.error("[stems] R2 upload failed, keeping local only:", err);
+            lastStemsUploadError = { at: new Date().toISOString(), error: String(err) };
+            lastStemsUploadEvent = { ...lastStemsUploadEvent, stage: "error_r2", micPath, readerPath };
+
+            // Keep local stems, respond with error
+            return res.status(502).json({
+              ok: false,
+              error: "r2_upload_failed"
+            });
+          }
         }
+
+        // R2 not enabled - respond with local-only persistence
+        lastStemsUploadEvent = {
+          ...lastStemsUploadEvent,
+          stage: "complete_local",
+          micPath,
+          readerPath
+        };
+
+        res.json({
+          ok: true,
+          takeId,
+          storage: {
+            persisted: "local_only"
+          }
+        });
       } catch (err) {
         console.error("Error in POST /api/gallery/upload_stems", err);
         lastStemsUploadError = {
@@ -1657,6 +1750,7 @@ export function initHttpRoutes(app: Express) {
       } catch {}
 
       // If not found locally, try R2
+      const stemProbe: any[] = [];
       if ((!micStem || !readerStem) && r2Enabled()) {
         const stemExts = [".m4a", ".webm", ".mp3", ".wav", ".ogg", ".mp4"];
         for (const ext of stemExts) {
@@ -1667,40 +1761,64 @@ export function initHttpRoutes(app: Express) {
             const micHead = await r2Head(micKey);
             const readerHead = await r2Head(readerKey);
 
+            stemProbe.push({
+              ext,
+              micKey,
+              readerKey,
+              micExists: micHead.exists,
+              readerExists: readerHead.exists
+            });
+
             if (micHead.exists && readerHead.exists) {
               // Download both stems to temp
-              const tmpDir = path.join(require("os").tmpdir(), "offbook-mix");
+              const tmpDir = path.join(os.tmpdir(), "offbook-mix");
               fs.mkdirSync(tmpDir, { recursive: true });
 
               const micTemp = path.join(tmpDir, `${id}-mic-${Date.now()}${ext}`);
               const readerTemp = path.join(tmpDir, `${id}-reader-${Date.now()}${ext}`);
 
-              const micResult = await r2GetObjectStream(micKey);
-              const micWrite = fs.createWriteStream(micTemp);
-              await new Promise<void>((resolve, reject) => {
-                micResult.stream.pipe(micWrite);
-                micWrite.on("finish", () => resolve());
-                micWrite.on("error", reject);
-              });
+              try {
+                const micResult = await r2GetObjectStream(micKey);
+                await pipeStreamToFile(micResult.stream, micTemp, "mic", 120000);
 
-              const readerResult = await r2GetObjectStream(readerKey);
-              const readerWrite = fs.createWriteStream(readerTemp);
-              await new Promise<void>((resolve, reject) => {
-                readerResult.stream.pipe(readerWrite);
-                readerWrite.on("finish", () => resolve());
-                readerWrite.on("error", reject);
-              });
+                const readerResult = await r2GetObjectStream(readerKey);
+                await pipeStreamToFile(readerResult.stream, readerTemp, "reader", 120000);
 
-              micStem = micTemp;
-              readerStem = readerTemp;
-              tempMicFile = micTemp;
-              tempReaderFile = readerTemp;
-              console.log("[mixed_file] Downloaded stems from R2: mic=%s, reader=%s", micKey, readerKey);
-              break;
+                micStem = micTemp;
+                readerStem = readerTemp;
+                tempMicFile = micTemp;
+                tempReaderFile = readerTemp;
+                console.log("[mixed_file] Downloaded stems from R2: mic=%s, reader=%s", micKey, readerKey);
+                break;
+              } catch (err) {
+                console.error("[mixed_file] Failed to download stems from R2:", err);
+                lastMixdownEvent = {
+                  ...lastMixdownEvent,
+                  stage: "error",
+                  errorCode: "stems_download_failed",
+                  errorMessage: String(err),
+                  micKey,
+                  readerKey,
+                  stemProbe
+                };
+                return res.status(500).json({ error: "stems_download_failed" });
+              }
             }
-          } catch {}
+          } catch (err) {
+            // Log HEAD failure and continue trying other extensions
+            stemProbe.push({
+              ext,
+              micKey,
+              readerKey,
+              headError: String(err)
+            });
+            continue;
+          }
         }
       }
+
+      // Attach stem probe results to debug event
+      lastMixdownEvent = { ...(lastMixdownEvent as any), stemProbe };
 
       // Check if stems exist
       const useStems = !!(micStem && readerStem && fs.existsSync(micStem) && fs.existsSync(readerStem));
@@ -2000,6 +2118,15 @@ export function initHttpRoutes(app: Express) {
         return res.status(404).json({ error: "file_missing" });
       }
 
+      // Helper to infer video MIME type by extension
+      const inferMimeByExt = (pathOrKey: string): string | undefined => {
+        const ext = path.extname(pathOrKey).toLowerCase();
+        if (ext === ".mp4" || ext === ".m4v") return "video/mp4";
+        if (ext === ".mov") return "video/quicktime";
+        if (ext === ".webm") return "video/webm";
+        return undefined;
+      };
+
       const wantsDownload =
         (typeof req.query?.download === "string" && req.query.download === "1") ||
         (typeof req.query?.dl === "string" && req.query.dl === "1");
@@ -2016,11 +2143,18 @@ export function initHttpRoutes(app: Express) {
             .slice(0, 80)) ||
         "download";
 
+      // Set Cache-Control: no-store for this route
+      res.setHeader("Cache-Control", "no-store");
+
       // Check if file is stored in R2
       if (filePath.startsWith("r2://")) {
         const r2Key = filePath.substring(5); // Remove "r2://" prefix
         const mime = (row as any).mime_type as string | undefined;
         const rangeHeader = req.headers.range;
+
+        // Compute extension from best available string
+        const extSource = r2Key || (row as any).filename || (row as any).name || "";
+        const inferredMime = inferMimeByExt(extSource);
 
         try {
           const { stream, contentType, contentLength, contentRange, statusCode } =
@@ -2029,11 +2163,9 @@ export function initHttpRoutes(app: Express) {
           // Set headers
           res.setHeader("Accept-Ranges", "bytes");
 
-          if (mime && typeof mime === "string") {
-            res.setHeader("Content-Type", mime);
-          } else if (contentType) {
-            res.setHeader("Content-Type", contentType);
-          }
+          // Prioritize inferred MIME to fix legacy takes with wrong stored mime_type
+          const effectiveMime = inferredMime || contentType || (mime && mime.startsWith("video/") ? mime : undefined) || "video/mp4";
+          res.setHeader("Content-Type", effectiveMime);
 
           if (contentLength !== undefined) {
             res.setHeader("Content-Length", contentLength);
@@ -2059,19 +2191,52 @@ export function initHttpRoutes(app: Express) {
           return res.status(404).json({ error: "file_missing" });
         }
 
-        const pathSafeName = path.basename(filePath);
-
-        // Force the correct MIME type for Safari, even if the extension is odd.
-        const mime = (row as any).mime_type as string | undefined;
-        if (mime && typeof mime === "string") {
-          res.type(mime);
+        // Check if file is empty (0 bytes)
+        const stats = fs.statSync(filePath);
+        if (stats.size === 0) {
+          return res.status(404).json({ error: "file_empty" });
         }
 
+        // Compute extension from best available string
+        const extSource = filePath || (row as any).filename || (row as any).name || "";
+        const inferredMime = inferMimeByExt(extSource);
+        const storedMime = (row as any).mime_type as string | undefined;
+
+        // Prioritize inferred MIME to fix legacy takes with wrong stored mime_type
+        const effectiveMime = inferredMime || storedMime || "video/mp4";
+
+        // Set Accept-Ranges header for all local files
+        res.setHeader("Accept-Ranges", "bytes");
+
         if (wantsDownload) {
+          res.setHeader("Content-Type", effectiveMime);
           return res.download(filePath, safeName);
         }
 
-        res.sendFile(filePath);
+        // Handle Range requests (206 Partial Content)
+        const rangeHeader = req.headers.range;
+        if (rangeHeader) {
+          const parts = rangeHeader.replace(/bytes=/, "").split("-");
+          const start = parseInt(parts[0], 10);
+          const end = parts[1] ? parseInt(parts[1], 10) : stats.size - 1;
+
+          // Clamp to file bounds
+          const clampedStart = Math.max(0, Math.min(start, stats.size - 1));
+          const clampedEnd = Math.max(clampedStart, Math.min(end, stats.size - 1));
+          const chunkSize = clampedEnd - clampedStart + 1;
+
+          res.status(206);
+          res.setHeader("Content-Range", `bytes ${clampedStart}-${clampedEnd}/${stats.size}`);
+          res.setHeader("Content-Length", chunkSize);
+          res.setHeader("Content-Type", effectiveMime);
+
+          const fileStream = fs.createReadStream(filePath, { start: clampedStart, end: clampedEnd });
+          fileStream.pipe(res);
+        } else {
+          // No Range header: send entire file
+          res.setHeader("Content-Type", effectiveMime);
+          res.sendFile(filePath);
+        }
       }
     } catch (err) {
       console.error("Error in GET /api/gallery/:id/file", err);
