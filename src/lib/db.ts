@@ -214,6 +214,17 @@ export async function ensureSchema(): Promise<void> {
       )
     `);
 
+    // Device link codes table (for multi-device passkey linking)
+    await dbExec(`
+      CREATE TABLE IF NOT EXISTS device_link_codes (
+        code TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        expires_at ${USING_POSTGRES ? 'TIMESTAMP NOT NULL' : 'TEXT NOT NULL'},
+        used_at ${USING_POSTGRES ? 'TIMESTAMP' : 'TEXT'},
+        created_at ${USING_POSTGRES ? 'TIMESTAMP DEFAULT NOW()' : "TEXT NOT NULL DEFAULT (datetime('now'))"}
+      )
+    `);
+
     // SQLite-specific: Add missing columns if needed
     if (!USING_POSTGRES) {
       await ensureGalleryTakesColumns();

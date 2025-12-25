@@ -3054,6 +3054,25 @@ JANE: Ready?"></textarea>
 
         <div class="spacer8"></div>
 
+        <!-- Link another device section -->
+        <div id="linkDeviceSection" style="display:none; margin-top:12px; padding:12px; border:1px solid #444; border-radius:4px;">
+          <div style="font-weight:600; margin-bottom:8px;">Link another device</div>
+          <button id="btnGetLinkCode" class="btn secondary">Get Link Code</button>
+          <div id="linkCodeDisplay" style="display:none; margin-top:12px;">
+            <div style="font-size:24px; font-family:monospace; letter-spacing:4px; text-align:center; padding:12px; background:#1e1e1e; border-radius:4px;" id="linkCodeText"></div>
+            <div class="small" style="margin-top:6px; text-align:center;" id="linkCodeExpiry"></div>
+          </div>
+        </div>
+
+        <div id="claimLinkSection" style="display:none; margin-top:12px; padding:12px; border:1px solid #444; border-radius:4px;">
+          <div style="font-weight:600; margin-bottom:8px;">Link to existing account</div>
+          <input id="linkCodeInput" type="text" placeholder="Enter Link Code (ABCD-EFGH)" style="width:100%; margin-bottom:8px; text-transform:uppercase;" />
+          <button id="btnClaimLinkCode" class="btn">Link & Register Passkey</button>
+          <div id="linkCodeStatus" class="small" style="margin-top:6px;"></div>
+        </div>
+
+        <div class="spacer8"></div>
+
         <pre id="authStatus" class="status" aria-live="polite"></pre>
 
         <div id="authStatusFriendly" class="small" style="display:none"></div>
@@ -4438,6 +4457,21 @@ JANE: Ready?"></textarea>
 
 
 
+          // Link Code sections visibility
+          const linkDeviceSection = document.getElementById("linkDeviceSection");
+          const claimLinkSection = document.getElementById("claimLinkSection");
+          const isPasskeyLoggedIn = Boolean(s?.passkey?.loggedIn);
+
+          if (linkDeviceSection) {
+            linkDeviceSection.style.display = isPasskeyLoggedIn ? "" : "none";
+          }
+
+          if (claimLinkSection) {
+            claimLinkSection.style.display = !isPasskeyLoggedIn ? "" : "none";
+          }
+
+
+
           if (typeof S !== "undefined") {
 
             try {
@@ -5360,6 +5394,77 @@ JANE: Ready?"></textarea>
 
           });
 
+        }
+
+        // Link Code handlers
+        const btnGetLinkCode = document.getElementById("btnGetLinkCode");
+        const btnClaimLinkCode = document.getElementById("btnClaimLinkCode");
+        const linkCodeInput = document.getElementById("linkCodeInput");
+
+        if (btnGetLinkCode) {
+          btnGetLinkCode.addEventListener("click", async () => {
+            try {
+              const resp = await fetch("/auth/device-link/start", withSecretHeaders({ method: "POST" }));
+              const data = await resp.json();
+
+              if (!data.ok) {
+                alert("Failed to generate link code: " + (data.error || "unknown error"));
+                return;
+              }
+
+              const codeDisplay = document.getElementById("linkCodeText");
+              const expiryDisplay = document.getElementById("linkCodeExpiry");
+              const linkCodeDisplayDiv = document.getElementById("linkCodeDisplay");
+
+              if (codeDisplay) codeDisplay.textContent = data.code;
+              if (expiryDisplay) expiryDisplay.textContent = "Expires in 10 minutes";
+              if (linkCodeDisplayDiv) linkCodeDisplayDiv.style.display = "";
+            } catch (err) {
+              console.error("Failed to get link code:", err);
+              alert("Failed to generate link code. Please try again.");
+            }
+          });
+        }
+
+        if (btnClaimLinkCode && linkCodeInput) {
+          btnClaimLinkCode.addEventListener("click", async () => {
+            const code = linkCodeInput.value.trim().toUpperCase();
+            const statusEl = document.getElementById("linkCodeStatus");
+
+            if (!code) {
+              if (statusEl) statusEl.textContent = "Please enter a link code.";
+              return;
+            }
+
+            try {
+              // Claim the code
+              const claimResp = await fetch("/auth/device-link/claim", withSecretHeaders({
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ code })
+              }));
+
+              const claimData = await claimResp.json();
+
+              if (!claimData.ok) {
+                if (statusEl) statusEl.textContent = "Error: " + (claimData.error || "unknown error");
+                return;
+              }
+
+              // Code claimed successfully, now register passkey
+              if (statusEl) statusEl.textContent = "Code accepted! Registering passkey...";
+
+              await startRegisterFlow();
+              await refreshAuthUI();
+
+              alert("Successfully linked! You can now sign in on this device.");
+              linkCodeInput.value = "";
+              if (statusEl) statusEl.textContent = "";
+            } catch (err) {
+              console.error("Failed to claim link code:", err);
+              if (statusEl) statusEl.textContent = "Failed to link. Please try again.";
+            }
+          });
         }
 
       }

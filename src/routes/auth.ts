@@ -15,6 +15,7 @@ type Sess = {
   credentialId?: string;
   loggedIn?: boolean;
   regUserHandle?: string;
+  pendingLinkUserId?: string;
 
   // — Entitlements (dev placeholders) —
   plan?: "none" | "dev";
@@ -366,6 +367,96 @@ router.post("/signout", (req, res) => {
   return res.json({ ok: true });
 });
 
+// --- DEVICE LINK CODE: START -------------------------------------------------
+// POST /auth/device-link/start
+// Generates a link code for the current passkey user to link another device
+router.post("/device-link/start", async (req, res) => {
+  const sess = ensureSessionDefaults(req);
+
+  // Require passkey logged in
+  if (!sess.loggedIn || !sess.userId) {
+    return res.status(401).json({ ok: false, error: "not_logged_in" });
+  }
+
+  // Generate 8-char code (ABCD-EFGH format, no ambiguous chars)
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // No O, I, 1, 0
+  let code = "";
+  for (let i = 0; i < 8; i++) {
+    code += chars[Math.floor(Math.random() * chars.length)];
+  }
+  const formattedCode = `${code.slice(0, 4)}-${code.slice(4)}`;
+
+  // Expires in 10 minutes
+  const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+  const expiresAtStr = USING_POSTGRES ? expiresAt.toISOString() : expiresAt.toISOString();
+
+  try {
+    await dbRun(
+      "INSERT INTO device_link_codes (code, user_id, expires_at, used_at) VALUES (?, ?, ?, NULL)",
+      [formattedCode, sess.userId, expiresAtStr]
+    );
+
+    return res.json({
+      ok: true,
+      code: formattedCode,
+      expires_in_sec: 600
+    });
+  } catch (err) {
+    console.error("[auth] Failed to create link code:", err);
+    return res.status(500).json({ ok: false, error: "failed_to_create_code" });
+  }
+});
+
+// --- DEVICE LINK CODE: CLAIM -------------------------------------------------
+// POST /auth/device-link/claim
+// Claims a link code to link this device to an existing account
+router.post("/device-link/claim", async (req, res) => {
+  const sess = ensureSessionDefaults(req);
+  const { code } = (req.body || {}) as { code?: string };
+
+  if (!code || typeof code !== "string") {
+    return res.status(400).json({ ok: false, error: "missing_code" });
+  }
+
+  try {
+    // Look up the code
+    const row = await dbGet<{ user_id: string; expires_at: string; used_at: string | null }>(
+      "SELECT user_id, expires_at, used_at FROM device_link_codes WHERE code = ?",
+      [code.trim().toUpperCase()]
+    );
+
+    if (!row) {
+      return res.status(404).json({ ok: false, error: "invalid_code" });
+    }
+
+    // Check expiration
+    const expiresAt = new Date(row.expires_at);
+    if (Date.now() > expiresAt.getTime()) {
+      return res.status(400).json({ ok: false, error: "code_expired" });
+    }
+
+    // Check if already used
+    if (row.used_at) {
+      return res.status(400).json({ ok: false, error: "code_already_used" });
+    }
+
+    // Mark as used
+    const usedAt = new Date().toISOString();
+    await dbRun(
+      "UPDATE device_link_codes SET used_at = ? WHERE code = ?",
+      [usedAt, code.trim().toUpperCase()]
+    );
+
+    // Store the user_id in session for the upcoming registration
+    sess.pendingLinkUserId = row.user_id;
+
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error("[auth] Failed to claim link code:", err);
+    return res.status(500).json({ ok: false, error: "failed_to_claim_code" });
+  }
+});
+
 // --- PASSKEY REGISTER: START --------------------------------------------------
 // POST /auth/passkey/register/start
 // Body optional: { userId?: string, userName?: string, displayName?: string }
@@ -459,12 +550,29 @@ router.post("/passkey/register/finish", express.json({ limit: "1mb" }), async (r
   if (!typeOk)      return res.status(400).json({ ok: false, error: "type_mismatch" });
   if (!originOk)    return res.status(400).json({ ok: false, error: "origin_mismatch", expected: allowedOrigin, got: clientData.origin });
 
-  sess.credentialId = String(id);
-  const stableUserId = deriveUserId(sess) || "passkey:registered";
+  const credentialId = String(id);
+
+  // Determine stable userId: use pendingLinkUserId if linking, otherwise derive from credential
+  const stableUserId = sess.pendingLinkUserId || deriveUserId({ ...sess, credentialId }) || "passkey:registered";
+
+  // Store credential in DB
+  try {
+    const credId = crypto.randomUUID();
+    await dbRun(
+      "INSERT INTO webauthn_credentials (id, user_id, credential_id, public_key, counter) VALUES (?, ?, ?, ?, ?)",
+      [credId, stableUserId, credentialId, "dev", 0]
+    );
+  } catch (err) {
+    console.error("[auth] Failed to store credential:", err);
+    return res.status(500).json({ ok: false, error: "failed_to_store_credential" });
+  }
+
+  sess.credentialId = credentialId;
   sess.userId = stableUserId;
   sess.loggedIn = true;
   delete sess.regChallenge;
   delete sess.regUserHandle;
+  delete sess.pendingLinkUserId;
 
   // Migrate anon data to passkey user (first-time register flow)
   if (priorUserId && stableUserId && priorUserId.startsWith("anon:") && priorUserId !== stableUserId) {
@@ -553,13 +661,37 @@ router.post("/passkey/login/finish", express.json({ limit: "1mb" }), async (req,
   // Capture prior userId BEFORE marking logged in
   const priorUserId = req.session?.userId;
 
-  // Accept credentialId from the payload (survives restarts)
-  sess.credentialId = String(id);
+  const credentialId = String(id);
+
+  // Look up userId from webauthn_credentials DB
+  let stableUserId: string;
+  try {
+    const credRow = await dbGet<{ user_id: string }>(
+      "SELECT user_id FROM webauthn_credentials WHERE credential_id = ? LIMIT 1",
+      [credentialId]
+    );
+
+    if (credRow) {
+      stableUserId = credRow.user_id;
+    } else {
+      // Fallback: derive from credential and insert mapping
+      stableUserId = deriveUserId({ ...sess, credentialId }) || "passkey:unknown";
+      const credId = crypto.randomUUID();
+      await dbRun(
+        "INSERT INTO webauthn_credentials (id, user_id, credential_id, public_key, counter) VALUES (?, ?, ?, ?, ?)",
+        [credId, stableUserId, credentialId, "dev", 0]
+      );
+      console.log("[auth] Created credential mapping for legacy login: %s -> %s", credentialId, stableUserId);
+    }
+  } catch (err) {
+    console.error("[auth] Failed to lookup/create credential:", err);
+    return res.status(500).json({ ok: false, error: "credential_lookup_failed" });
+  }
+
+  sess.credentialId = credentialId;
+  sess.userId = stableUserId;
   sess.loggedIn = true;
   delete sess.authChallenge;
-
-  const stableUserId = deriveUserId(sess);
-  if (stableUserId) sess.userId = stableUserId;
 
   // Migrate anon scripts to passkey user
   if (priorUserId && stableUserId && priorUserId.startsWith("anon:") && priorUserId !== stableUserId) {
