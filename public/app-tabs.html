@@ -12922,6 +12922,17 @@ const savedStrip = document.getElementById("savedScriptsStrip");
             console.warn("[offbook] Failed to create reader stem recorder:", e);
             R.recReader = null;
           }
+
+          // Create stop-promises to ensure stems flush before finalizeTake
+          R._micStoppedP = R.recMic ? new Promise(resolve => {
+            const prev = R.recMic.onstop;
+            R.recMic.onstop = (...args) => { try{ prev && prev.apply(R.recMic,args);}catch{}; resolve(true); };
+          }) : Promise.resolve(true);
+
+          R._readerStoppedP = R.recReader ? new Promise(resolve => {
+            const prev = R.recReader.onstop;
+            R.recReader.onstop = (...args) => { try{ prev && prev.apply(R.recReader,args);}catch{}; resolve(true); };
+          }) : Promise.resolve(true);
         }
 
         R.rec.ondataavailable = (e)=>{ if(e.data && e.data.size>0) R.chunks.push(e.data); };
@@ -12949,6 +12960,12 @@ const savedStrip = document.getElementById("savedScriptsStrip");
           R.readerRecordGain = null; R.readerBridge = null; R.readerBridgeSource = null;
 
           restoreReaderDirectMonitor();
+
+          // Wait briefly for stem recorders to finish stopping and flush final chunks
+          await Promise.race([
+            Promise.all([R._micStoppedP || Promise.resolve(true), R._readerStoppedP || Promise.resolve(true)]),
+            new Promise(r => setTimeout(r, 1200))
+          ]);
 
           try{ await finalizeTake(); }
 
@@ -13120,6 +13137,10 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
         }
 
+        // Flush final chunks from stem recorders before stopping
+        try { R.recMic?.requestData?.(); } catch {}
+        try { R.recReader?.requestData?.(); } catch {}
+
         try{ R.rec?.stop(); }catch(e){ setStatus("Record error: " + e); }
 
         // Stop stem recorders
@@ -13148,22 +13169,12 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
         const aspect = R.currentAspect || (isPortrait() ? "9:16" : "16:9");
 
-        // Assemble stem blobs before saving to IndexedDB (if available)
-        let micBlob = null;
-        let readerBlob = null;
+        // Assemble stem blobs from captured chunks (after stop-wait has completed)
+        const micBlob = (R.micChunks?.length ? new Blob(R.micChunks, { type: (R.recMic?.mimeType || "audio/webm") }) : null);
+        const readerBlob = (R.readerChunks?.length ? new Blob(R.readerChunks, { type: (R.recReader?.mimeType || "audio/webm") }) : null);
 
-        if (R.micChunks && R.micChunks.length > 0 && R.readerChunks && R.readerChunks.length > 0) {
-          try {
-            const micMime = (R.recMic && R.recMic.mimeType) || "audio/webm";
-            const readerMime = (R.recReader && R.recReader.mimeType) || "audio/webm";
-
-            micBlob = new Blob(R.micChunks, { type: micMime });
-            readerBlob = new Blob(R.readerChunks, { type: readerMime });
-
-            console.log("[offbook] Assembled stems:", { micSize: micBlob.size, readerSize: readerBlob.size });
-          } catch (err) {
-            console.warn("[offbook] Stem assembly failed:", err);
-          }
+        if (micBlob && readerBlob) {
+          console.log("[offbook] Assembled stems:", { micSize: micBlob.size, readerSize: readerBlob.size });
         }
 
         let savedTake = null;
@@ -13191,7 +13202,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
               // After successful take upload, upload stems if available
               if (micBlob && readerBlob) {
                 try {
-                  await uploadStemsToServer(savedTake.id, micBlob, readerBlob);
+                  await uploadStemsToServer(savedTake.serverId || savedTake.id, micBlob, readerBlob);
                 } catch (err) {
                   console.warn("[offbook] Stem upload failed (silent):", err);
                   // No user-facing warning - stems will fallback to legacy mode
