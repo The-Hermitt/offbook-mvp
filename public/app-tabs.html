@@ -5438,8 +5438,25 @@ JANE: Ready?"></textarea>
 
           if (!listEl) return;
 
+          // Show loading state
+          if (statusEl) statusEl.textContent = "Loading linked devices…";
+          listEl.innerHTML = "";
+
           try {
             const resp = await fetch("/auth/devices", withSecretHeaders({ method: "GET" }));
+
+            // Handle HTTP errors
+            if (!resp.ok) {
+              let data = null;
+              try {
+                data = await resp.json();
+              } catch {}
+              if (statusEl) {
+                statusEl.textContent = `Linked devices unavailable (${resp.status}). ${data?.error || ""}`.trim();
+              }
+              return;
+            }
+
             const data = await resp.json();
 
             if (!data.ok || !data.devices) {
@@ -5449,7 +5466,7 @@ JANE: Ready?"></textarea>
 
             if (data.devices.length === 0) {
               listEl.innerHTML = '<div class="small" style="color:var(--muted);">No devices linked.</div>';
-              if (statusEl) statusEl.textContent = "";
+              if (statusEl) statusEl.textContent = "No linked devices returned. (This should not happen—try Sign Out → Sign In.)";
               return;
             }
 
@@ -5472,7 +5489,7 @@ JANE: Ready?"></textarea>
               `;
             }).join("");
 
-            if (statusEl) statusEl.textContent = "";
+            if (statusEl) statusEl.textContent = `${data.devices.length} device(s) linked.`;
 
             // Wire up revoke buttons
             const revokeButtons = listEl.querySelectorAll("button[data-credential-id]");
