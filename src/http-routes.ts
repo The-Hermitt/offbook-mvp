@@ -1750,6 +1750,7 @@ export function initHttpRoutes(app: Express) {
       } catch {}
 
       // If not found locally, try R2
+      const stemProbe: any[] = [];
       if ((!micStem || !readerStem) && r2Enabled()) {
         const stemExts = [".m4a", ".webm", ".mp3", ".wav", ".ogg", ".mp4"];
         for (const ext of stemExts) {
@@ -1759,6 +1760,14 @@ export function initHttpRoutes(app: Express) {
           try {
             const micHead = await r2Head(micKey);
             const readerHead = await r2Head(readerKey);
+
+            stemProbe.push({
+              ext,
+              micKey,
+              readerKey,
+              micExists: micHead.exists,
+              readerExists: readerHead.exists
+            });
 
             if (micHead.exists && readerHead.exists) {
               // Download both stems to temp
@@ -1789,17 +1798,27 @@ export function initHttpRoutes(app: Express) {
                   errorCode: "stems_download_failed",
                   errorMessage: String(err),
                   micKey,
-                  readerKey
+                  readerKey,
+                  stemProbe
                 };
                 return res.status(500).json({ error: "stems_download_failed" });
               }
             }
           } catch (err) {
-            // Continue trying other extensions if HEAD fails
+            // Log HEAD failure and continue trying other extensions
+            stemProbe.push({
+              ext,
+              micKey,
+              readerKey,
+              headError: String(err)
+            });
             continue;
           }
         }
       }
+
+      // Attach stem probe results to debug event
+      lastMixdownEvent = { ...(lastMixdownEvent as any), stemProbe };
 
       // Check if stems exist
       const useStems = !!(micStem && readerStem && fs.existsSync(micStem) && fs.existsSync(readerStem));
