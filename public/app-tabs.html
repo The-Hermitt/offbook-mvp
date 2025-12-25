@@ -9021,6 +9021,9 @@ const savedStrip = document.getElementById("savedScriptsStrip");
             micStream=stream;
           }
 
+          // Track ownership globally so stopMicMonitor knows whether to stop tracks
+          window.__OB_MIC_MONITOR_OWNS_STREAM = ownsStream;
+
           window.__OB_MIC_STREAM = stream;
 
           const track = (typeof stream?.getAudioTracks === "function") ? stream.getAudioTracks()[0] : null;
@@ -9033,7 +9036,10 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
           // so we can send recent audio chunks to the server for debug-only STT.
 
-          if (STT2_ENABLED && window.MediaRecorder && !stt2Recorder) {
+          // IMPORTANT: Do NOT create STT2 recorder on a borrowed stream during recording.
+          // The main MediaRecorder already owns the stream.
+
+          if (STT2_ENABLED && window.MediaRecorder && !stt2Recorder && ownsStream) {
 
             try {
 
@@ -9197,16 +9203,19 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
       function stopMicMonitor(){
 
-        // Only stop micStream if it's not the recording stream (R.stream)
-        // During recording, R.stream owns the mic and will be cleaned up separately
-        if (micStream && micStream !== R?.stream) {
+        // Only stop tracks if the monitor owns the stream
+        // If stream was borrowed from recorder, DO NOT stop tracks
+        const ownsStream = window.__OB_MIC_MONITOR_OWNS_STREAM || false;
+
+        if (ownsStream && micStream) {
           try{ micStream.getTracks().forEach(t=>t.stop()); }catch{};
         }
 
         micStream=null;
+        window.__OB_MIC_MONITOR_OWNS_STREAM = false;
 
-        // Don't clear global stream refs if recording is active
-        if (!R?.stream) {
+        // Don't clear global stream refs if recording is active (stream borrowed)
+        if (ownsStream) {
           window.__OB_MIC_STREAM = null;
           window.__OB_MIC_TRACK = null;
         }
@@ -9313,7 +9322,10 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
           myLineStartMs=performance.now();
 
-          if (speakerFallbackActive()) {
+          // IMPORTANT: Do NOT auto-route to speaker during recording.
+          // This causes iOS to switch audio output mid-recording, moving reader from headphones to speaker.
+          // Keep the warning UI if needed, but don't auto-switch output.
+          if (speakerFallbackActive() && !R?.recording) {
 
             (async () => {
 
@@ -12894,8 +12906,12 @@ const savedStrip = document.getElementById("savedScriptsStrip");
           // Don't start SpeechRecognition during recording - causes audio route changes
           // srToggleOn = true;
 
-          // Pass the recording stream to monitoring - reuses the same mic track
-          await startMicMonitor(userStream);
+          // Create audio-only stream from userStream to pass to monitoring
+          // This ensures we're only monitoring the audio track, not video
+          const audioOnly = new MediaStream(userStream.getAudioTracks());
+
+          // Pass the audio-only stream to monitoring - reuses the same mic track
+          await startMicMonitor(audioOnly);
 
         }catch{}
 
