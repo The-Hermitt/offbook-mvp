@@ -8979,11 +8979,11 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
       /* Speech Rec (unchanged timings) */
 
-      const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+      const SR=(_route?.isiOS ? null : (window.SpeechRecognition||window.webkitSpeechRecognition));
 
       const sr=SR?new SR():null;
 
-      let srToggleOn=false, srPermGranted=false, srActive=false;
+      let srToggleOn=false, srPermGranted=false, srActive=false, srSuppressed=false;
 
   let myLineStartMs=0, firstEnergyAt=0, advanceLock=false;
 
@@ -9851,7 +9851,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
           // Next line is yours: re-arm speech recognition if enabled.
 
-          if (srToggleOn && srPermGranted) {
+          if (srToggleOn && srPermGranted && !srSuppressed) {
 
             setTimeout(() => {
 
@@ -10091,7 +10091,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
           updateMicBadge();
 
-          if(srToggleOn && srPermGranted && onMyLine() && !(E.inlineForm&&E.inlineForm.isConnected)){
+          if(srToggleOn && srPermGranted && !srSuppressed && onMyLine() && !(E.inlineForm&&E.inlineForm.isConnected)){
 
             try{ sr.start(); }catch{}
 
@@ -10486,6 +10486,8 @@ const savedStrip = document.getElementById("savedScriptsStrip");
       setInterval(()=>{
 
         if(!(sr && srToggleOn && srPermGranted)) return;
+
+        if(srSuppressed) return;
 
         if(!(onMyLine()) || (E.inlineForm&&E.inlineForm.isConnected)) return;
 
@@ -12192,15 +12194,19 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
         R.prevSrToggle = null;
 
-        if(prev){
+        // Restore all three SR state variables
+        srToggleOn = prev;
+        srPermGranted = (R.prevSrPermGranted !== undefined) ? R.prevSrPermGranted : srPermGranted;
+        srSuppressed = (R.prevSrSuppressed !== undefined) ? R.prevSrSuppressed : false;
 
-          srToggleOn = true;
+        R.prevSrPermGranted = undefined;
+        R.prevSrSuppressed = undefined;
+
+        if(prev){
 
           startMicMonitor().catch(()=>{});
 
         }else{
-
-          srToggleOn = false;
 
           stopMicMonitor();
 
@@ -12895,7 +12901,10 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
 
 
+        // Save previous SR state to restore after recording
         R.prevSrToggle = srToggleOn;
+        R.prevSrPermGranted = srPermGranted;
+        R.prevSrSuppressed = srSuppressed;
 
         // Reuse the recording stream for monitoring - no second getUserMedia call
         try{
@@ -12903,8 +12912,10 @@ const savedStrip = document.getElementById("savedScriptsStrip");
           // Don't call requestMicPermissionOnce - we already have the stream
           // srPermGranted will be set when we successfully got userStream above
 
-          // Don't start SpeechRecognition during recording - causes audio route changes
-          // srToggleOn = true;
+          // Enable energy-based cueing during recording, but suppress actual SR on iOS
+          srSuppressed = true;
+          srPermGranted = true;
+          srToggleOn = true;
 
           // Create audio-only stream from userStream to pass to monitoring
           // This ensures we're only monitoring the audio track, not video
@@ -13012,7 +13023,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
         try{
 
-          if(sr && srToggleOn && srPermGranted && onMyLine()){
+          if(sr && srToggleOn && srPermGranted && !srSuppressed && onMyLine()){
 
             try{ sr.stop(); }catch{}
 
