@@ -5,6 +5,15 @@ import db, { dbGet, dbRun, USING_POSTGRES } from "../lib/db";
 
 const INCLUDED_RENDERS_PER_MONTH = Number(process.env.INCLUDED_RENDERS_PER_MONTH || 0);
 const DEV_STARTING_CREDITS = Number(process.env.DEV_STARTING_CREDITS || 0);
+const MAX_PASSKEYS_PER_USER = 2;
+
+async function countUserPasskeys(userId: string): Promise<number> {
+  const row = await dbGet<{ c: number }>(
+    "SELECT COUNT(1) AS c FROM webauthn_credentials WHERE user_id = ?",
+    [userId]
+  );
+  return Number(row?.c ?? 0);
+}
 
 // Session type stored in req.session (extends cookie-session)
 type Sess = {
@@ -549,6 +558,9 @@ router.post("/passkey/register/finish", express.json({ limit: "1mb" }), async (r
   // Determine stable userId: use pendingLinkUserId if linking, otherwise derive from credential
   const stableUserId = sess.pendingLinkUserId || deriveUserId({ ...sess, credentialId }) || "passkey:registered";
 
+  // Identify the target account for the new credential
+  const targetUserId = sess.pendingLinkUserId ?? stableUserId;
+
   // If we're linking, atomically consume the link code now (after FaceID success)
   if (sess.pendingLinkCode) {
     const normalized = sess.pendingLinkCode.trim().toUpperCase();
@@ -583,12 +595,27 @@ router.post("/passkey/register/finish", express.json({ limit: "1mb" }), async (r
     }
   }
 
+  // Enforce device cap only when this is adding a *new* credential to an existing account
+  if (targetUserId) {
+    const existing = await dbGet<{ "1": number }>(
+      "SELECT 1 FROM webauthn_credentials WHERE credential_id = ? LIMIT 1",
+      [String(id)]
+    );
+
+    if (!existing) {
+      const n = await countUserPasskeys(targetUserId);
+      if (n >= MAX_PASSKEYS_PER_USER) {
+        return res.status(409).json({ ok: false, error: "device_cap_reached", max: MAX_PASSKEYS_PER_USER });
+      }
+    }
+  }
+
   // Store credential in DB
   try {
     const credId = crypto.randomUUID();
     await dbRun(
       "INSERT INTO webauthn_credentials (id, user_id, credential_id, public_key, counter) VALUES (?, ?, ?, ?, ?)",
-      [credId, stableUserId, credentialId, "dev", 0]
+      [credId, targetUserId, credentialId, "dev", 0]
     );
   } catch (err) {
     console.error("[auth] Failed to store credential:", err);
@@ -705,6 +732,13 @@ router.post("/passkey/login/finish", express.json({ limit: "1mb" }), async (req,
     } else {
       // Fallback: derive from credential and insert mapping
       stableUserId = deriveUserId({ ...sess, credentialId }) || "passkey:unknown";
+
+      // Enforce device cap before inserting new credential mapping
+      const n = await countUserPasskeys(stableUserId);
+      if (n >= MAX_PASSKEYS_PER_USER) {
+        return res.status(409).json({ ok: false, error: "device_cap_reached", max: MAX_PASSKEYS_PER_USER });
+      }
+
       const credId = crypto.randomUUID();
       await dbRun(
         "INSERT INTO webauthn_credentials (id, user_id, credential_id, public_key, counter) VALUES (?, ?, ?, ?, ?)",
