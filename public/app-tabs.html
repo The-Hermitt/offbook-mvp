@@ -13188,8 +13188,8 @@ const savedStrip = document.getElementById("savedScriptsStrip");
         const aspect = R.currentAspect || (isPortrait() ? "9:16" : "16:9");
 
         // Assemble stem blobs from captured chunks (after delay has allowed final chunks to arrive)
-        const micBlob = (R.micChunks && R.micChunks.length) ? new Blob(R.micChunks, { type: (R.recMic?.mimeType || "audio/mp4") }) : null;
-        const readerBlob = (R.readerChunks && R.readerChunks.length) ? new Blob(R.readerChunks, { type: (R.recReader?.mimeType || "audio/mp4") }) : null;
+        const micBlob = (R.micChunks && R.micChunks.length) ? new Blob(R.micChunks, { type: (R.recMic?.mimeType || "audio/m4a") }) : null;
+        const readerBlob = (R.readerChunks && R.readerChunks.length) ? new Blob(R.readerChunks, { type: (R.recReader?.mimeType || "audio/m4a") }) : null;
 
         if (micBlob && readerBlob) {
           console.log("[offbook] Assembled stems:", { micSize: micBlob.size, readerSize: readerBlob.size });
@@ -13322,6 +13322,24 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
         }
 
+        async function get(id){
+
+          await ready();
+
+          return new Promise((res, rej)=>{
+
+            const tx = db.transaction(STORE, "readonly");
+
+            const req = tx.objectStore(STORE).get(id);
+
+            req.onsuccess = () => res(req.result || null);
+
+            req.onerror = () => rej(req.error);
+
+          });
+
+        }
+
         async function del(id){
 
           await ready();
@@ -13340,7 +13358,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
         }
 
-        return { put, getAll, del };
+        return { put, getAll, get, del };
 
       })();
 
@@ -14930,42 +14948,63 @@ const savedStrip = document.getElementById("savedScriptsStrip");
                 credentials: "include",
               }));
 
-              // Handle stems_missing error with on-demand upload
+              // Handle missing data errors with self-heal from IndexedDB
               if (!resp.ok) {
                 if (resp.status === 404) {
-                  let errorData = null;
-                  try {
-                    errorData = await resp.json();
-                  } catch {
-                    try {
-                      errorData = { error: await resp.text() };
-                    } catch {
-                      errorData = { error: "unknown" };
+                  // Parse error to determine what's missing
+                  const j = await resp.json().catch(() => null);
+                  const errCode = j?.error || j?.errorCode || "";
+
+                  if (errCode === "stems_missing" || errCode === "not_found") {
+                    // Self-heal: re-upload from IndexedDB
+                    console.log(`[offbook] Server missing data (${errCode}), attempting repair from IndexedDB...`);
+
+                    // Load full record from IndexedDB
+                    const full = await GalleryDB.get(take.id);
+
+                    if (!full) {
+                      alert("Room repair failed: take not found on device.");
+                      return;
                     }
-                  }
 
-                  if (errorData.error === "stems_missing") {
-                    // Check if we have stems in IndexedDB
-                    if (take.micBlob && take.readerBlob) {
-                      console.log("[offbook] Stems missing on server, uploading from IndexedDB...");
-                      try {
-                        await uploadStemsToServer(id, take.micBlob, take.readerBlob);
+                    // Show visible status to user
+                    btn.textContent = "Repairing...";
+                    btn.disabled = true;
 
-                        // Retry the mixed_file fetch once
-                        resp = await fetch(url, withSecretHeaders({
-                          method: "GET",
-                          credentials: "include",
-                        }));
-
-                        if (!resp.ok) {
-                          throw new Error(`Room mix failed after stem upload (${resp.status})`);
+                    try {
+                      // If take itself is missing (not_found), re-upload it
+                      if (errCode === "not_found") {
+                        if (full.blob) {
+                          console.log("[offbook] Re-uploading take to server...");
+                          await uploadTakeToServer(full);
                         }
-                      } catch (stemErr) {
-                        console.error("[offbook] Stem upload failed:", stemErr);
-                        throw new Error("Room unavailable: stem upload failed. " + (stemErr?.message || String(stemErr)));
                       }
-                    } else {
-                      throw new Error("Room unavailable for this take (missing stems). Record a new take to use Room.");
+
+                      // If stems are missing, re-upload them
+                      if (full.micBlob && full.readerBlob) {
+                        console.log("[offbook] Re-uploading stems to server...");
+                        await uploadStemsToServer(id, full.micBlob, full.readerBlob);
+                      }
+
+                      // Retry the mixed_file fetch once
+                      resp = await fetch(url, withSecretHeaders({
+                        method: "GET",
+                        credentials: "include",
+                      }));
+
+                      if (!resp.ok) {
+                        const retryBody = await resp.text().catch(() => "");
+                        throw new Error(`Room mix failed after repair (${resp.status}): ${retryBody.slice(0, 200)}`);
+                      }
+
+                      // Success - restore button state
+                      btn.textContent = prevLabel;
+                      btn.disabled = false;
+                    } catch (repairErr) {
+                      // Restore button state before throwing
+                      btn.textContent = prevLabel;
+                      btn.disabled = false;
+                      throw repairErr;
                     }
                   } else {
                     throw new Error(`Room mix failed (${resp.status})`);
