@@ -13082,19 +13082,9 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
             Promise.resolve(step(true, { immediate: dashyScene })).catch(()=>{});
 
-            const endWatch = setInterval(()=>{
-
-              if(!R.recording) return clearInterval(endWatch);
-
-              if(!playing){
-
-                try{ R.rec?.stop(); }catch{}
-
-                clearInterval(endWatch);
-
-              }
-
-            }, 300);
+            // IMPORTANT: do NOT auto-stop recording based on `playing`.
+            // `playing` becomes false during the user's turn (reader not speaking),
+            // which was stopping the recorder mid-take.
 
           }catch{}
 
@@ -13108,7 +13098,9 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
             try{ R.audio.currentTime = 0; await R.audio.play(); }catch{}
 
-            R.audio.onended = ()=>{ setTimeout(()=>{ try{ R.rec?.stop(); }catch{} }, 120); };
+            // IMPORTANT: do NOT auto-stop the recorder when reader playback ends.
+            // User must press Stop to end the take.
+            R.audio.onended = null;
 
           }else{
 
