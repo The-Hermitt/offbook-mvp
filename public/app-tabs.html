@@ -490,6 +490,10 @@
 
     .row{ display:flex; gap:10px } .row>*{ flex:1 }
 
+    .linkRow{ display:flex; align-items:center; }
+
+    .ml-auto{ margin-left:auto; }
+
     .spacer6{ height:6px } .spacer8{ height:8px } .spacer12{ height:12px } .spacer16{ height:16px }
 
     .tabbar{
@@ -3056,8 +3060,10 @@ JANE: Ready?"></textarea>
 
         <!-- Link another device section -->
         <div id="linkDeviceSection" style="display:none; margin-top:12px; padding:12px; border:1px solid #444; border-radius:4px;">
-          <div style="font-weight:600; margin-bottom:8px;">Link another device</div>
-          <button id="btnGetLinkCode" class="btn secondary">Get Link Code</button>
+          <div class="linkRow">
+            <div style="font-weight:600;">Link another device</div>
+            <button id="btnGetLinkCode" class="btn secondary ml-auto">Get Link Code</button>
+          </div>
           <div id="linkCodeDisplay" style="display:none; margin-top:12px;">
             <div style="font-size:24px; font-family:monospace; letter-spacing:4px; text-align:center; padding:12px; background:#1e1e1e; border-radius:4px;" id="linkCodeText"></div>
             <div class="small" style="margin-top:6px; text-align:center;" id="linkCodeExpiry"></div>
