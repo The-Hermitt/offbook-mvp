@@ -2000,6 +2000,15 @@ export function initHttpRoutes(app: Express) {
         return res.status(404).json({ error: "file_missing" });
       }
 
+      // Helper to infer video MIME type by extension
+      const inferMimeByExt = (pathOrKey: string): string | undefined => {
+        const ext = path.extname(pathOrKey).toLowerCase();
+        if (ext === ".mp4" || ext === ".m4v") return "video/mp4";
+        if (ext === ".mov") return "video/quicktime";
+        if (ext === ".webm") return "video/webm";
+        return undefined;
+      };
+
       const wantsDownload =
         (typeof req.query?.download === "string" && req.query.download === "1") ||
         (typeof req.query?.dl === "string" && req.query.dl === "1");
@@ -2016,11 +2025,18 @@ export function initHttpRoutes(app: Express) {
             .slice(0, 80)) ||
         "download";
 
+      // Set Cache-Control: no-store for this route
+      res.setHeader("Cache-Control", "no-store");
+
       // Check if file is stored in R2
       if (filePath.startsWith("r2://")) {
         const r2Key = filePath.substring(5); // Remove "r2://" prefix
         const mime = (row as any).mime_type as string | undefined;
         const rangeHeader = req.headers.range;
+
+        // Compute extension from best available string
+        const extSource = r2Key || (row as any).filename || (row as any).name || "";
+        const inferredMime = inferMimeByExt(extSource);
 
         try {
           const { stream, contentType, contentLength, contentRange, statusCode } =
@@ -2029,11 +2045,9 @@ export function initHttpRoutes(app: Express) {
           // Set headers
           res.setHeader("Accept-Ranges", "bytes");
 
-          if (mime && typeof mime === "string") {
-            res.setHeader("Content-Type", mime);
-          } else if (contentType) {
-            res.setHeader("Content-Type", contentType);
-          }
+          // Prioritize inferred MIME to fix legacy takes with wrong stored mime_type
+          const effectiveMime = inferredMime || contentType || (mime && mime.startsWith("video/") ? mime : undefined) || "video/mp4";
+          res.setHeader("Content-Type", effectiveMime);
 
           if (contentLength !== undefined) {
             res.setHeader("Content-Length", contentLength);
@@ -2065,20 +2079,13 @@ export function initHttpRoutes(app: Express) {
           return res.status(404).json({ error: "file_empty" });
         }
 
-        // Infer effective MIME type from file extension when stored mime_type is missing/mismatched
-        const ext = path.extname(filePath).toLowerCase();
+        // Compute extension from best available string
+        const extSource = filePath || (row as any).filename || (row as any).name || "";
+        const inferredMime = inferMimeByExt(extSource);
         const storedMime = (row as any).mime_type as string | undefined;
-        let effectiveMime = storedMime;
 
-        if (ext === ".mp4" || ext === ".m4v") {
-          effectiveMime = "video/mp4";
-        } else if (ext === ".webm") {
-          effectiveMime = "video/webm";
-        } else if (ext === ".mov") {
-          effectiveMime = "video/quicktime";
-        } else if (!effectiveMime) {
-          effectiveMime = "application/octet-stream";
-        }
+        // Prioritize inferred MIME to fix legacy takes with wrong stored mime_type
+        const effectiveMime = inferredMime || storedMime || "video/mp4";
 
         // Set Accept-Ranges header for all local files
         res.setHeader("Accept-Ranges", "bytes");

@@ -14171,7 +14171,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
             <div class="take-card" data-id="${escapeHtml(t.id)}">
 
-              <video class="take-thumb" src="${escapeHtml(src)}" playsinline preload="metadata"></video>
+              <video class="take-thumb" data-src="${escapeHtml(src)}" playsinline preload="none"></video>
 
               <div class="take-row" style="justify-content:space-between;align-items:center;">
 
@@ -14196,6 +14196,8 @@ const savedStrip = document.getElementById("savedScriptsStrip");
                 </div>
 
               </div>
+
+              <div class="take-err" style="margin-top:8px;color:#ffb4b4;font-size:12px;"></div>
 
               <textarea class="take-note" placeholder="Add a note…">${noteSafe}</textarea>
 
@@ -14663,6 +14665,15 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
             if(video.paused){
 
+              // If video.src is empty, set it from data-src first
+              if (!video.src || video.src === "") {
+                const dataSrc = video.getAttribute("data-src");
+                if (dataSrc) {
+                  video.src = dataSrc;
+                  video.load();
+                }
+              }
+
               // Attempt to play with fallback logic
               try {
                 video.currentTime = 0;
@@ -14705,7 +14716,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
                 } catch (fallbackErr) {
                   console.error("[offbook] Playback fallback failed", fallbackErr);
-                  alert("Playback failed: " + (fallbackErr?.message || String(fallbackErr)));
+                  showToastOnce("Playback failed: " + (fallbackErr?.message || String(fallbackErr)), 3500);
                 }
               }
 
@@ -14726,9 +14737,27 @@ const savedStrip = document.getElementById("savedScriptsStrip");
           video?.addEventListener("error", (e)=>{
             console.error("[offbook] Video playback error", video?.error);
             if(btnPlay) btnPlay.textContent = "Play";
-            const errorCode = video?.error?.code;
-            const errorMessage = video?.error?.message || "Unknown error";
-            alert(`Video playback error (code ${errorCode}): ${errorMessage}`);
+
+            const errorCode = video?.error?.code || "?";
+
+            // Find or create error message div
+            let errDiv = card.querySelector(".take-err");
+            if (!errDiv) {
+              errDiv = document.createElement("div");
+              errDiv.className = "take-err";
+              errDiv.style.cssText = "margin-top:8px;color:#ffb4b4;font-size:12px;";
+              const rowDiv = card.querySelector(".take-row");
+              if (rowDiv) {
+                rowDiv.parentNode.insertBefore(errDiv, rowDiv.nextSibling);
+              }
+            }
+
+            errDiv.textContent = `Playback failed (code ${errorCode}). This take may be corrupt or missing. Try Delete.`;
+
+            // Reset the video element so it doesn't poison other cards
+            video.pause();
+            video.removeAttribute("src");
+            video.load();
           });
 
 
