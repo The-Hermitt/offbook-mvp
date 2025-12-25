@@ -465,7 +465,8 @@ router.post("/device-link/claim", async (req, res) => {
     sess.pendingLinkUserId = row.user_id;
     sess.pendingLinkCode = normalizedCode;
 
-    return res.json({ ok: true });
+    const count = await countPasskeysForUser(row.user_id);
+    return res.json({ ok: true, count, max: MAX_PASSKEYS_PER_USER });
   } catch (err) {
     console.error("[auth] Failed to claim link code:", err);
     return res.status(500).json({ ok: false, error: "failed_to_claim_code" });

@@ -5486,6 +5486,12 @@ JANE: Ready?"></textarea>
                 return;
               }
 
+              // Check if account is already at max capacity (preflight)
+              if (claimData?.count != null && claimData?.max != null && Number(claimData.count) >= Number(claimData.max)) {
+                if (statusEl) statusEl.textContent = `Max devices used (${claimData.max}). This account can't link more devices.`;
+                return;
+              }
+
               // Code claimed successfully, now register passkey
               if (statusEl) statusEl.textContent = "Code accepted! Registering passkey...";
 
@@ -5501,6 +5507,8 @@ JANE: Ready?"></textarea>
               const errStr = String(err);
               if (errStr.includes("device_cap_reached")) {
                 if (statusEl) statusEl.textContent = "This account is already linked to 2 devices. Revoke one device to link a new one.";
+              } else if (errStr.includes("timed out or was not allowed") || errStr.includes("NotAllowedError")) {
+                if (statusEl) statusEl.textContent = "Passkey request was cancelled or blocked. If you're linking a 3rd device, this account may already be full.";
               } else {
                 // Show the actual error message for debugging
                 const errMsg = err?.message || errStr;
