@@ -147,6 +147,7 @@ const router = express.Router();
 
 const INVITE_CODE = (process.env.INVITE_CODE || "").trim();
 const ENFORCE_AUTH_GATE = /^true$/i.test(process.env.ENFORCE_AUTH_GATE || "");
+const ENABLE_SOLO_TESTER_MIGRATION = process.env.ENABLE_SOLO_TESTER_MIGRATION === "1";
 
 function shortSha256(input: string): string {
   return crypto.createHash("sha256").update(input).digest("hex").slice(0, 16);
@@ -211,7 +212,10 @@ router.get("/session", async (req, res) => {
         : null;
 
       // Build list of legacy IDs to check (dedupe and skip current userId)
-      const legacyIds = ["solo-tester", anonLegacy]
+      const legacyIds = [
+        ENABLE_SOLO_TESTER_MIGRATION ? "solo-tester" : null,
+        anonLegacy,
+      ]
         .filter(Boolean)
         .filter((id) => id !== userId) as string[];
 
