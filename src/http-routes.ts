@@ -2059,19 +2059,59 @@ export function initHttpRoutes(app: Express) {
           return res.status(404).json({ error: "file_missing" });
         }
 
-        const pathSafeName = path.basename(filePath);
-
-        // Force the correct MIME type for Safari, even if the extension is odd.
-        const mime = (row as any).mime_type as string | undefined;
-        if (mime && typeof mime === "string") {
-          res.type(mime);
+        // Check if file is empty (0 bytes)
+        const stats = fs.statSync(filePath);
+        if (stats.size === 0) {
+          return res.status(404).json({ error: "file_empty" });
         }
 
+        // Infer effective MIME type from file extension when stored mime_type is missing/mismatched
+        const ext = path.extname(filePath).toLowerCase();
+        const storedMime = (row as any).mime_type as string | undefined;
+        let effectiveMime = storedMime;
+
+        if (ext === ".mp4" || ext === ".m4v") {
+          effectiveMime = "video/mp4";
+        } else if (ext === ".webm") {
+          effectiveMime = "video/webm";
+        } else if (ext === ".mov") {
+          effectiveMime = "video/quicktime";
+        } else if (!effectiveMime) {
+          effectiveMime = "application/octet-stream";
+        }
+
+        // Set Accept-Ranges header for all local files
+        res.setHeader("Accept-Ranges", "bytes");
+
         if (wantsDownload) {
+          res.setHeader("Content-Type", effectiveMime);
           return res.download(filePath, safeName);
         }
 
-        res.sendFile(filePath);
+        // Handle Range requests (206 Partial Content)
+        const rangeHeader = req.headers.range;
+        if (rangeHeader) {
+          const parts = rangeHeader.replace(/bytes=/, "").split("-");
+          const start = parseInt(parts[0], 10);
+          const end = parts[1] ? parseInt(parts[1], 10) : stats.size - 1;
+
+          // Clamp to file bounds
+          const clampedStart = Math.max(0, Math.min(start, stats.size - 1));
+          const clampedEnd = Math.max(clampedStart, Math.min(end, stats.size - 1));
+          const chunkSize = clampedEnd - clampedStart + 1;
+
+          res.status(206);
+          res.setHeader("Content-Range", `bytes ${clampedStart}-${clampedEnd}/${stats.size}`);
+          res.setHeader("Content-Length", chunkSize);
+          res.setHeader("Content-Type", effectiveMime);
+
+          const fileStream = fs.createReadStream(filePath, { start: clampedStart, end: clampedEnd });
+          fileStream.pipe(res);
+        } else {
+          // No Range header: send entire file
+          res.setHeader("Content-Type", effectiveMime);
+          res.sendFile(filePath);
+        }
       }
     } catch (err) {
       console.error("Error in GET /api/gallery/:id/file", err);

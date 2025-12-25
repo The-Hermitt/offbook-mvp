@@ -13944,7 +13944,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
         try{
 
-          const resp = await fetch("/api/gallery/notes", {
+          const resp = await fetch("/api/gallery/notes", withSecretHeaders({
 
             method: "POST",
 
@@ -13954,7 +13954,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
             credentials: "include"
 
-          });
+          }));
 
           if(!resp.ok){
 
@@ -13978,7 +13978,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
         try{
 
-          const resp = await fetch("/api/gallery/delete", {
+          const resp = await fetch("/api/gallery/delete", withSecretHeaders({
 
             method: "POST",
 
@@ -13988,11 +13988,20 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
             credentials: "include"
 
-          });
+          }));
 
           if(!resp.ok){
 
             console.warn("deleteTakeOnServer failed", resp.status);
+
+            // Show error to user on iPhone (no console access)
+            try{
+              const errorText = await resp.text();
+              const truncated = errorText.slice(0, 200);
+              alert(`Delete failed (${resp.status}): ${truncated}`);
+            }catch{
+              alert(`Delete failed (${resp.status})`);
+            }
 
           }
 
