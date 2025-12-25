@@ -14316,9 +14316,9 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
                   <button type="button" class="btn sm secondary" data-act="play">Play</button>
 
-                  <button type="button" class="btn sm" data-act="dl">Download</button>
+                  <button type="button" class="btn sm secondary" data-act="dl">Raw</button>
 
-                  <button type="button" class="btn sm secondary" data-act="room">Room</button>
+                  <button type="button" class="btn sm" data-act="room">Download</button>
 
                   <button type="button" class="btn sm secondary" data-act="del">Delete</button>
 
@@ -14893,50 +14893,50 @@ const savedStrip = document.getElementById("savedScriptsStrip");
           btnDl?.addEventListener("click", async ()=>{
             const btn = btnDl;
             if(!btn) return;
-          
-            const prevLabel = btn.textContent || "Download";
+
+            const prevLabel = btn.textContent || "Raw";
             btn.textContent = "Preparing…";
             btn.disabled = true;
-          
+
             try{
               const cleanName = (s) => String(s||"")
                 .replace(/[^\w\s-]/g, "")
                 .trim()
                 .replace(/\s+/g, "-")
                 .slice(0, 60) || "offbook-take";
-          
+
               const id = take.serverId || take.id;
               let blob = null;
-          
+
               if (take.blob instanceof Blob) {
                 blob = take.blob;
               } else {
                 if (!id) throw new Error("No file available for this take.");
-          
+
                 const url = `/api/gallery/${encodeURIComponent(id)}/file`;
                 const resp = await fetch(url, withSecretHeaders({
                   method: "GET",
                   credentials: "include",
                   cache: "no-store"
                 }));
-          
+
                 if (!resp.ok) {
                   throw new Error(`Download failed (${resp.status})`);
                 }
-          
+
                 blob = await resp.blob();
               }
-          
+
               const mime = blob.type || "video/mp4";
               const filenameBase = cleanName(take.label || take.name || "offbook-take");
               const filename = `${filenameBase}.mp4`;
-          
+
               try{
                 const file = new File([blob], filename, { type: mime });
                 const canShareFiles =
                   !!navigator.share &&
                   (!navigator.canShare || navigator.canShare({ files: [file] }));
-          
+
                 if (canShareFiles) {
                   await navigator.share({ files: [file], title: filename });
                   return;
@@ -14944,7 +14944,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
               } catch (shareErr) {
                 console.warn("[offbook] share failed, falling back", shareErr);
               }
-          
+
               const objUrl = URL.createObjectURL(blob);
               const a = document.createElement("a");
               a.href = objUrl;
@@ -14954,10 +14954,10 @@ const savedStrip = document.getElementById("savedScriptsStrip");
               a.click();
               a.remove();
               setTimeout(()=>URL.revokeObjectURL(objUrl), 20000);
-          
+
             } catch(err){
-              console.warn("[offbook] download failed", err);
-              alert("Download failed: " + (err?.message || String(err)));
+              console.warn("[offbook] raw download failed", err);
+              alert("Raw download failed: " + (err?.message || String(err)));
             } finally {
               btn.disabled = false;
               btn.textContent = prevLabel;
@@ -14969,7 +14969,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
             const btn = btnRoom;
             if(!btn) return;
 
-            const prevLabel = btn.textContent || "Room";
+            const prevLabel = btn.textContent || "Download";
             btn.textContent = "Mixing…";
             btn.disabled = true;
             showBusy("Mixing take…");
