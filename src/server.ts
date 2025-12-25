@@ -109,12 +109,14 @@ type RequestWithCookies = import("express").Request & {
 };
 
 function extractProvidedSecret(req: import("express").Request): string | undefined {
-  const h = (req.headers["x-shared-secret"] as string | undefined)?.trim();
+  // Check both capitalized and lowercase header variants
+  const h1 = (req.headers["X-Shared-Secret"] as string | undefined)?.trim();
+  const h2 = (req.headers["x-shared-secret"] as string | undefined)?.trim();
   const cookies = (req as RequestWithCookies).cookies;
   const rawCookie = cookies?.["ob_secret"];
   const c = typeof rawCookie === "string" ? rawCookie.trim() : undefined;
   const q = typeof req.query.secret === "string" ? req.query.secret.trim() : undefined;
-  return h || c || q || undefined;
+  return h1 || h2 || c || q || undefined;
 }
 
 function requireSharedSecret(): import("express").RequestHandler {
