@@ -7,7 +7,7 @@ const INCLUDED_RENDERS_PER_MONTH = Number(process.env.INCLUDED_RENDERS_PER_MONTH
 const DEV_STARTING_CREDITS = Number(process.env.DEV_STARTING_CREDITS || 0);
 const MAX_PASSKEYS_PER_USER = 2;
 
-async function countUserPasskeys(userId: string): Promise<number> {
+async function countPasskeysForUser(userId: string): Promise<number> {
   const row = await dbGet<{ c: number }>(
     "SELECT COUNT(1) AS c FROM webauthn_credentials WHERE user_id = ?",
     [userId]
@@ -603,7 +603,7 @@ router.post("/passkey/register/finish", express.json({ limit: "1mb" }), async (r
     );
 
     if (!existing) {
-      const n = await countUserPasskeys(targetUserId);
+      const n = await countPasskeysForUser(targetUserId);
       if (n >= MAX_PASSKEYS_PER_USER) {
         return res.status(409).json({ ok: false, error: "device_cap_reached", max: MAX_PASSKEYS_PER_USER });
       }
@@ -734,7 +734,7 @@ router.post("/passkey/login/finish", express.json({ limit: "1mb" }), async (req,
       stableUserId = deriveUserId({ ...sess, credentialId }) || "passkey:unknown";
 
       // Enforce device cap before inserting new credential mapping
-      const n = await countUserPasskeys(stableUserId);
+      const n = await countPasskeysForUser(stableUserId);
       if (n >= MAX_PASSKEYS_PER_USER) {
         return res.status(409).json({ ok: false, error: "device_cap_reached", max: MAX_PASSKEYS_PER_USER });
       }

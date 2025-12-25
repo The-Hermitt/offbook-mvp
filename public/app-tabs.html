@@ -5498,11 +5498,12 @@ JANE: Ready?"></textarea>
             } catch (err) {
               console.error("Failed to claim link code:", err);
               // Show friendly message for device cap
-              const errMsg = err?.message || String(err);
-              if (errMsg.includes("device_cap_reached")) {
-                if (statusEl) statusEl.textContent = "This account is already linked to 2 devices. Please sign in on an existing device.";
+              const errStr = String(err);
+              if (errStr.includes("device_cap_reached")) {
+                if (statusEl) statusEl.textContent = "This account is already linked to 2 devices. Revoke one device to link a new one.";
               } else {
                 // Show the actual error message for debugging
+                const errMsg = err?.message || errStr;
                 if (statusEl) statusEl.textContent = "Error: " + errMsg;
               }
             } finally {
