@@ -13148,11 +13148,29 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
         const aspect = R.currentAspect || (isPortrait() ? "9:16" : "16:9");
 
+        // Assemble stem blobs before saving to IndexedDB (if available)
+        let micBlob = null;
+        let readerBlob = null;
+
+        if (R.micChunks && R.micChunks.length > 0 && R.readerChunks && R.readerChunks.length > 0) {
+          try {
+            const micMime = (R.recMic && R.recMic.mimeType) || "audio/webm";
+            const readerMime = (R.recReader && R.recReader.mimeType) || "audio/webm";
+
+            micBlob = new Blob(R.micChunks, { type: micMime });
+            readerBlob = new Blob(R.readerChunks, { type: readerMime });
+
+            console.log("[offbook] Assembled stems:", { micSize: micBlob.size, readerSize: readerBlob.size });
+          } catch (err) {
+            console.warn("[offbook] Stem assembly failed:", err);
+          }
+        }
+
         let savedTake = null;
 
         try{
 
-          savedTake = await saveTakeToDB({ blob, isVid, aspect, renderId: R.render_id });
+          savedTake = await saveTakeToDB({ blob, isVid, aspect, renderId: R.render_id, micBlob, readerBlob });
 
           setStatusRec("Saved to Gallery.");
 
@@ -13171,20 +13189,12 @@ const savedStrip = document.getElementById("savedScriptsStrip");
             uploadTakeToServer(savedTake).then(async () => {
 
               // After successful take upload, upload stems if available
-              if (R.micChunks && R.micChunks.length > 0 && R.readerChunks && R.readerChunks.length > 0) {
+              if (micBlob && readerBlob) {
                 try {
-                  const micMime = (R.recMic && R.recMic.mimeType) || "audio/webm";
-                  const readerMime = (R.recReader && R.recReader.mimeType) || "audio/webm";
-
-                  const micBlob = new Blob(R.micChunks, { type: micMime });
-                  const readerBlob = new Blob(R.readerChunks, { type: readerMime });
-
-                  console.log("[offbook] Assembled stems:", { micSize: micBlob.size, readerSize: readerBlob.size });
-
                   await uploadStemsToServer(savedTake.id, micBlob, readerBlob);
                 } catch (err) {
-                  console.error("[offbook] Stem upload failed:", err);
-                  alert("Warning: Stem upload failed. Room mixdown may not work for this take.\n\n" + String(err).slice(0, 200));
+                  console.warn("[offbook] Stem upload failed (silent):", err);
+                  // No user-facing warning - stems will fallback to legacy mode
                 }
               }
 
@@ -13418,7 +13428,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
 
 
-      async function saveTakeToDB({ blob, isVid, aspect, renderId }){
+      async function saveTakeToDB({ blob, isVid, aspect, renderId, micBlob, readerBlob }){
 
         if(!("indexedDB" in window)) throw new Error("indexeddb-unavailable");
 
@@ -13468,7 +13478,11 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
           readerRenderId: typeof renderId === "string" ? renderId : (typeof R?.render_id === "string" ? R.render_id : (localStorage.getItem("offbook:last_render_id") || "")),
 
-          userKey
+          userKey,
+
+          micBlob: micBlob || null,
+
+          readerBlob: readerBlob || null
 
         };
 
@@ -13824,7 +13838,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
 
 
-          const resp = await fetch("/api/gallery/upload", {
+          const resp = await fetch("/api/gallery/upload", withSecretHeaders({
 
             method: "POST",
 
@@ -13832,7 +13846,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
             credentials: "include"
 
-          });
+          }));
 
 
 
@@ -13915,11 +13929,11 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
           console.log("[offbook] Uploading stems for takeId:", takeId);
 
-          const resp = await fetch("/api/gallery/upload_stems", {
+          const resp = await fetch("/api/gallery/upload_stems", withSecretHeaders({
             method: "POST",
             body: form,
             credentials: "include"
-          });
+          }));
 
           if (!resp.ok) {
             const txt = await resp.text().catch(() => "");
@@ -14879,13 +14893,54 @@ const savedStrip = document.getElementById("savedScriptsStrip");
               const filename = `${filenameBase}-room.mp4`;
 
               // Fetch the Room mix
-              const resp = await fetch(url, withSecretHeaders({
+              let resp = await fetch(url, withSecretHeaders({
                 method: "GET",
                 credentials: "include",
               }));
 
+              // Handle stems_missing error with on-demand upload
               if (!resp.ok) {
-                throw new Error(`Room mix failed (${resp.status})`);
+                if (resp.status === 404) {
+                  let errorData = null;
+                  try {
+                    errorData = await resp.json();
+                  } catch {
+                    try {
+                      errorData = { error: await resp.text() };
+                    } catch {
+                      errorData = { error: "unknown" };
+                    }
+                  }
+
+                  if (errorData.error === "stems_missing") {
+                    // Check if we have stems in IndexedDB
+                    if (take.micBlob && take.readerBlob) {
+                      console.log("[offbook] Stems missing on server, uploading from IndexedDB...");
+                      try {
+                        await uploadStemsToServer(id, take.micBlob, take.readerBlob);
+
+                        // Retry the mixed_file fetch once
+                        resp = await fetch(url, withSecretHeaders({
+                          method: "GET",
+                          credentials: "include",
+                        }));
+
+                        if (!resp.ok) {
+                          throw new Error(`Room mix failed after stem upload (${resp.status})`);
+                        }
+                      } catch (stemErr) {
+                        console.error("[offbook] Stem upload failed:", stemErr);
+                        throw new Error("Room unavailable: stem upload failed. " + (stemErr?.message || String(stemErr)));
+                      }
+                    } else {
+                      throw new Error("Room unavailable for this take (missing stems). Record a new take to use Room.");
+                    }
+                  } else {
+                    throw new Error(`Room mix failed (${resp.status})`);
+                  }
+                } else {
+                  throw new Error(`Room mix failed (${resp.status})`);
+                }
               }
 
               const blob = await resp.blob();
