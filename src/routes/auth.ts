@@ -16,6 +16,7 @@ type Sess = {
   loggedIn?: boolean;
   regUserHandle?: string;
   pendingLinkUserId?: string;
+  pendingLinkCode?: string;
 
   // — Entitlements (dev placeholders) —
   plan?: "none" | "dev";
@@ -440,15 +441,11 @@ router.post("/device-link/claim", async (req, res) => {
       return res.status(409).json({ ok: false, error: "code_already_used" });
     }
 
-    // Mark as used
-    const usedAt = new Date().toISOString();
-    await dbRun(
-      "UPDATE device_link_codes SET used_at = ? WHERE code = ?",
-      [usedAt, code.trim().toUpperCase()]
-    );
-
-    // Store the user_id in session for the upcoming registration
+    // Store the user_id and code in session for the upcoming registration
+    // Code will be consumed atomically during register/finish
+    const normalizedCode = code.trim().toUpperCase();
     sess.pendingLinkUserId = row.user_id;
+    sess.pendingLinkCode = normalizedCode;
 
     return res.json({ ok: true });
   } catch (err) {
@@ -555,6 +552,26 @@ router.post("/passkey/register/finish", express.json({ limit: "1mb" }), async (r
   // Determine stable userId: use pendingLinkUserId if linking, otherwise derive from credential
   const stableUserId = sess.pendingLinkUserId || deriveUserId({ ...sess, credentialId }) || "passkey:registered";
 
+  // If linking via code, atomically consume it now
+  if (sess.pendingLinkUserId && sess.pendingLinkCode) {
+    try {
+      const usedAt = new Date().toISOString();
+      const now = new Date().toISOString();
+      const result = await dbRun(
+        "UPDATE device_link_codes SET used_at = ? WHERE code = ? AND user_id = ? AND used_at IS NULL AND expires_at > ?",
+        [usedAt, sess.pendingLinkCode, sess.pendingLinkUserId, now]
+      );
+
+      // Check if exactly 1 row was updated (code was valid, unused, and not expired)
+      if (!result || result.changes !== 1) {
+        return res.status(409).json({ ok: false, error: "code_already_used" });
+      }
+    } catch (err) {
+      console.error("[auth] Failed to consume link code:", err);
+      return res.status(500).json({ ok: false, error: "failed_to_consume_code" });
+    }
+  }
+
   // Store credential in DB
   try {
     const credId = crypto.randomUUID();
@@ -573,6 +590,7 @@ router.post("/passkey/register/finish", express.json({ limit: "1mb" }), async (r
   delete sess.regChallenge;
   delete sess.regUserHandle;
   delete sess.pendingLinkUserId;
+  delete sess.pendingLinkCode;
 
   // Migrate anon data to passkey user (first-time register flow)
   if (priorUserId && stableUserId && priorUserId.startsWith("anon:") && priorUserId !== stableUserId) {

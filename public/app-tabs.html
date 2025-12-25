@@ -3379,6 +3379,10 @@ JANE: Ready?"></textarea>
 
       next.headers = headers;
 
+      // Ensure session cookies survive iOS fetches
+      if (!next.credentials) next.credentials = "include";
+      if (!next.cache) next.cache = "no-store";
+
       return next;
 
     }
@@ -4924,7 +4928,12 @@ JANE: Ready?"></textarea>
 
         }));
 
-        if(!r2.ok) throw new Error("login_finish_failed");
+        if(!r2.ok) {
+          const errData = await r2.json().catch(() => ({}));
+          const errMsg = errData.error || "login_finish_failed";
+          const errDetails = errData.expected && errData.got ? ` (expected: ${errData.expected}, got: ${errData.got})` : "";
+          throw new Error(errMsg + errDetails);
+        }
 
         return r2.json();
 
@@ -4976,7 +4985,12 @@ JANE: Ready?"></textarea>
 
         }));
 
-        if(!r2.ok) throw new Error("register_finish_failed");
+        if(!r2.ok) {
+          const errData = await r2.json().catch(() => ({}));
+          const errMsg = errData.error || "register_finish_failed";
+          const errDetails = errData.expected && errData.got ? ` (expected: ${errData.expected}, got: ${errData.got})` : "";
+          throw new Error(errMsg + errDetails);
+        }
 
         return r2.json();
 
@@ -5483,7 +5497,8 @@ JANE: Ready?"></textarea>
               if (statusEl) statusEl.textContent = "";
             } catch (err) {
               console.error("Failed to claim link code:", err);
-              if (statusEl) statusEl.textContent = "Failed to link. Please try again.";
+              // Show the actual error message for debugging
+              if (statusEl) statusEl.textContent = "Error: " + (err?.message || String(err));
             } finally {
               btnClaimLinkCode.disabled = false;
             }
