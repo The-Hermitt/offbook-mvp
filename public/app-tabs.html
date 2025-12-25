@@ -12961,11 +12961,8 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
           restoreReaderDirectMonitor();
 
-          // Wait briefly for stem recorders to finish stopping and flush final chunks
-          await Promise.race([
-            Promise.all([R._micStoppedP || Promise.resolve(true), R._readerStoppedP || Promise.resolve(true)]),
-            new Promise(r => setTimeout(r, 1200))
-          ]);
+          // iOS-safe delay to let final stem dataavailable events fire
+          await new Promise(r => setTimeout(r, 450));
 
           try{ await finalizeTake(); }
 
@@ -13013,13 +13010,34 @@ const savedStrip = document.getElementById("savedScriptsStrip");
           R.rec.start();
 
           // Start stem recorders at the same moment as the main recorder (Room stems)
+          // Use timeslice to force chunk emission on iOS
           try {
-            if (R.recMic && R.recMic.state === "inactive") R.recMic.start();
+            if (R.recMic && R.recMic.state === "inactive") {
+              try {
+                R.recMic.start(750);
+              } catch {
+                try {
+                  R.recMic.start();
+                } catch (e) {
+                  console.warn("[offbook] recMic.start failed", e);
+                }
+              }
+            }
           } catch (e) {
             console.warn("[offbook] recMic.start failed", e);
           }
           try {
-            if (R.recReader && R.recReader.state === "inactive") R.recReader.start();
+            if (R.recReader && R.recReader.state === "inactive") {
+              try {
+                R.recReader.start(750);
+              } catch {
+                try {
+                  R.recReader.start();
+                } catch (e) {
+                  console.warn("[offbook] recReader.start failed", e);
+                }
+              }
+            }
           } catch (e) {
             console.warn("[offbook] recReader.start failed", e);
           }
@@ -13169,9 +13187,9 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
         const aspect = R.currentAspect || (isPortrait() ? "9:16" : "16:9");
 
-        // Assemble stem blobs from captured chunks (after stop-wait has completed)
-        const micBlob = (R.micChunks?.length ? new Blob(R.micChunks, { type: (R.recMic?.mimeType || "audio/webm") }) : null);
-        const readerBlob = (R.readerChunks?.length ? new Blob(R.readerChunks, { type: (R.recReader?.mimeType || "audio/webm") }) : null);
+        // Assemble stem blobs from captured chunks (after delay has allowed final chunks to arrive)
+        const micBlob = (R.micChunks && R.micChunks.length) ? new Blob(R.micChunks, { type: (R.recMic?.mimeType || "audio/mp4") }) : null;
+        const readerBlob = (R.readerChunks && R.readerChunks.length) ? new Blob(R.readerChunks, { type: (R.recReader?.mimeType || "audio/mp4") }) : null;
 
         if (micBlob && readerBlob) {
           console.log("[offbook] Assembled stems:", { micSize: micBlob.size, readerSize: readerBlob.size });
@@ -13199,14 +13217,17 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
             uploadTakeToServer(savedTake).then(async () => {
 
-              // After successful take upload, upload stems if available
-              if (micBlob && readerBlob) {
+              // After successful take upload, upload stems if available and non-empty
+              if (micBlob && readerBlob && micBlob.size > 2048 && readerBlob.size > 2048) {
                 try {
                   await uploadStemsToServer(savedTake.serverId || savedTake.id, micBlob, readerBlob);
                 } catch (err) {
-                  console.warn("[offbook] Stem upload failed (silent):", err);
-                  // No user-facing warning - stems will fallback to legacy mode
+                  console.warn("[offbook] Stem upload failed:", err);
+                  alert(`Stem upload failed: ${err?.message || String(err)}. Room will be unavailable for this take.`);
                 }
+              } else {
+                // iPhone-visible debug without console
+                alert(`Stems not captured (mic=${micBlob?micBlob.size:0} bytes, reader=${readerBlob?readerBlob.size:0} bytes). Room will be unavailable.`);
               }
 
             }).catch(err => {
