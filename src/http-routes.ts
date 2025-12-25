@@ -1723,7 +1723,7 @@ export function initHttpRoutes(app: Express) {
       }
 
       // Bump this when changing ffmpeg logic to bust cache
-      const MIX_VER = "v8";
+      const MIX_VER = "v9";
       const mode = String(req.query.mode || "room");
 
       // Query parameters
@@ -1891,9 +1891,9 @@ export function initHttpRoutes(app: Express) {
           // 3-input FFmpeg: take video + mic stem + reader stem
           const filter =
             mode === "dry"
-              ? "[2:a]highpass=f=180,lowpass=f=6500,volume=1.58[rd];" +
+              ? "[2:a]highpass=f=180,lowpass=f=6500,volume=1.99[rd];" +
                 "[1:a][rd]amix=inputs=2:weights=1 1.70:normalize=0:duration=first:dropout_transition=3,alimiter=limit=0.95[aout]"
-              : "[2:a]aecho=0.35:0.25:18|34:0.18|0.12,highpass=f=180,lowpass=f=6500,volume=1.58[room];" +
+              : "[2:a]aecho=0.35:0.25:18|34:0.18|0.12,highpass=f=180,lowpass=f=6500,volume=1.99[room];" +
                 "[1:a][room]amix=inputs=2:weights=1 1.70:normalize=0:duration=first:dropout_transition=3,alimiter=limit=0.95[aout]";
 
           const baseArgs = [
@@ -1993,7 +1993,7 @@ export function initHttpRoutes(app: Express) {
 
         if (needsRebuild) {
           const filter =
-            "[1:a]aecho=0.35:0.25:18|34:0.18|0.12,highpass=f=180,lowpass=f=6500,volume=1.58[room];" +
+            "[1:a]aecho=0.35:0.25:18|34:0.18|0.12,highpass=f=180,lowpass=f=6500,volume=1.99[room];" +
             "[0:a][room]amix=inputs=2:duration=first:dropout_transition=4[aout]";
           const baseArgs = [
             "-y",
