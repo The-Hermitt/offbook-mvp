@@ -8979,11 +8979,11 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
       /* Speech Rec (unchanged timings) */
 
-      const SR=(_route?.isiOS ? null : (window.SpeechRecognition||window.webkitSpeechRecognition));
+      const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
 
       const sr=SR?new SR():null;
 
-      let srToggleOn=false, srPermGranted=false, srActive=false, srSuppressed=false;
+      let srToggleOn=false, srPermGranted=false, srActive=false;
 
   let myLineStartMs=0, firstEnergyAt=0, advanceLock=false;
 
@@ -9003,26 +9003,17 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
       function rms(buf){ let sum=0; for(let i=0;i<buf.length;i++){ const v=buf[i]/128-1; sum+=v*v; } return Math.sqrt(sum/buf.length); }
 
-      async function startMicMonitor(existingStream){
+      async function startMicMonitor(){
 
-        // If we already have micStream and no existingStream passed, reuse it
-        if(micStream && !existingStream) return;
+        if(micStream) return;
 
         try{
 
-          // Reuse existing stream if provided (during recording), otherwise get new one
-          const stream = existingStream || await navigator.mediaDevices.getUserMedia({audio:true});
+          const stream = await navigator.mediaDevices.getUserMedia({audio:true});
 
           // after getUserMedia:
 
-          // Only set micStream if we own this stream (not passed from recording)
-          const ownsStream = !existingStream;
-          if (ownsStream) {
-            micStream=stream;
-          }
-
-          // Track ownership globally so stopMicMonitor knows whether to stop tracks
-          window.__OB_MIC_MONITOR_OWNS_STREAM = ownsStream;
+          micStream=stream;
 
           window.__OB_MIC_STREAM = stream;
 
@@ -9036,10 +9027,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
           // so we can send recent audio chunks to the server for debug-only STT.
 
-          // IMPORTANT: Do NOT create STT2 recorder on a borrowed stream during recording.
-          // The main MediaRecorder already owns the stream.
-
-          if (STT2_ENABLED && window.MediaRecorder && !stt2Recorder && ownsStream) {
+          if (STT2_ENABLED && window.MediaRecorder && !stt2Recorder) {
 
             try {
 
@@ -9203,22 +9191,13 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
       function stopMicMonitor(){
 
-        // Only stop tracks if the monitor owns the stream
-        // If stream was borrowed from recorder, DO NOT stop tracks
-        const ownsStream = window.__OB_MIC_MONITOR_OWNS_STREAM || false;
-
-        if (ownsStream && micStream) {
-          try{ micStream.getTracks().forEach(t=>t.stop()); }catch{};
-        }
+        try{ micStream?.getTracks().forEach(t=>t.stop()); }catch{};
 
         micStream=null;
-        window.__OB_MIC_MONITOR_OWNS_STREAM = false;
 
-        // Don't clear global stream refs if recording is active (stream borrowed)
-        if (ownsStream) {
-          window.__OB_MIC_STREAM = null;
-          window.__OB_MIC_TRACK = null;
-        }
+        window.__OB_MIC_STREAM = null;
+
+        window.__OB_MIC_TRACK = null;
 
         showRouteWarn(false);
 
@@ -9322,10 +9301,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
           myLineStartMs=performance.now();
 
-          // IMPORTANT: Do NOT auto-route to speaker during recording.
-          // This causes iOS to switch audio output mid-recording, moving reader from headphones to speaker.
-          // Keep the warning UI if needed, but don't auto-switch output.
-          if (speakerFallbackActive() && !R?.recording) {
+          if (speakerFallbackActive()) {
 
             (async () => {
 
@@ -9851,7 +9827,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
           // Next line is yours: re-arm speech recognition if enabled.
 
-          if (srToggleOn && srPermGranted && !srSuppressed) {
+          if (srToggleOn && srPermGranted) {
 
             setTimeout(() => {
 
@@ -10091,7 +10067,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
           updateMicBadge();
 
-          if(srToggleOn && srPermGranted && !srSuppressed && onMyLine() && !(E.inlineForm&&E.inlineForm.isConnected)){
+          if(srToggleOn && srPermGranted && onMyLine() && !(E.inlineForm&&E.inlineForm.isConnected)){
 
             try{ sr.start(); }catch{}
 
@@ -10486,8 +10462,6 @@ const savedStrip = document.getElementById("savedScriptsStrip");
       setInterval(()=>{
 
         if(!(sr && srToggleOn && srPermGranted)) return;
-
-        if(srSuppressed) return;
 
         if(!(onMyLine()) || (E.inlineForm&&E.inlineForm.isConnected)) return;
 
@@ -12194,19 +12168,15 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
         R.prevSrToggle = null;
 
-        // Restore all three SR state variables
-        srToggleOn = prev;
-        srPermGranted = (R.prevSrPermGranted !== undefined) ? R.prevSrPermGranted : srPermGranted;
-        srSuppressed = (R.prevSrSuppressed !== undefined) ? R.prevSrSuppressed : false;
-
-        R.prevSrPermGranted = undefined;
-        R.prevSrSuppressed = undefined;
-
         if(prev){
+
+          srToggleOn = true;
 
           startMicMonitor().catch(()=>{});
 
         }else{
+
+          srToggleOn = false;
 
           stopMicMonitor();
 
@@ -12887,9 +12857,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
         }
 
-        // Add safety delay after mic acquisition before starting reader playback
-        // Helps iOS settle audio routing before beeps/countdown
-        await new Promise(r => setTimeout(r, 150));
+
 
         await doBeepsAndCountdown();
 
@@ -12901,28 +12869,15 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
 
 
-        // Save previous SR state to restore after recording
         R.prevSrToggle = srToggleOn;
-        R.prevSrPermGranted = srPermGranted;
-        R.prevSrSuppressed = srSuppressed;
 
-        // Reuse the recording stream for monitoring - no second getUserMedia call
         try{
 
-          // Don't call requestMicPermissionOnce - we already have the stream
-          // srPermGranted will be set when we successfully got userStream above
+          await requestMicPermissionOnce();
 
-          // Enable energy-based cueing during recording, but suppress actual SR on iOS
-          srSuppressed = true;
-          srPermGranted = true;
           srToggleOn = true;
 
-          // Create audio-only stream from userStream to pass to monitoring
-          // This ensures we're only monitoring the audio track, not video
-          const audioOnly = new MediaStream(userStream.getAudioTracks());
-
-          // Pass the audio-only stream to monitoring - reuses the same mic track
-          await startMicMonitor(audioOnly);
+          await startMicMonitor();
 
         }catch{}
 
@@ -13023,7 +12978,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
         try{
 
-          if(sr && srToggleOn && srPermGranted && !srSuppressed && onMyLine()){
+          if(sr && srToggleOn && srPermGranted && onMyLine()){
 
             try{ sr.stop(); }catch{}
 
@@ -13109,9 +13064,19 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
             Promise.resolve(step(true, { immediate: dashyScene })).catch(()=>{});
 
-            // IMPORTANT: do NOT auto-stop recording based on `playing`.
-            // `playing` becomes false during the user's turn (reader not speaking),
-            // which was stopping the recorder mid-take.
+            const endWatch = setInterval(()=>{
+
+              if(!R.recording) return clearInterval(endWatch);
+
+              if(!playing){
+
+                try{ R.rec?.stop(); }catch{}
+
+                clearInterval(endWatch);
+
+              }
+
+            }, 300);
 
           }catch{}
 
@@ -13125,9 +13090,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
             try{ R.audio.currentTime = 0; await R.audio.play(); }catch{}
 
-            // IMPORTANT: do NOT auto-stop the recorder when reader playback ends.
-            // User must press Stop to end the take.
-            R.audio.onended = null;
+            R.audio.onended = ()=>{ setTimeout(()=>{ try{ R.rec?.stop(); }catch{} }, 120); };
 
           }else{
 
@@ -13220,8 +13183,8 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
                   await uploadStemsToServer(savedTake.id, micBlob, readerBlob);
                 } catch (err) {
-                  console.warn("[offbook] Stem upload failed (silent):", err);
-                  // No user-facing warning - stems will fallback to legacy mode
+                  console.error("[offbook] Stem upload failed:", err);
+                  alert("Warning: Stem upload failed. Room mixdown may not work for this take.\n\n" + String(err).slice(0, 200));
                 }
               }
 
@@ -13879,7 +13842,19 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
             console.warn("uploadTakeToServer failed", resp.status, txt);
 
-            showToastOnce("Upload failed. This take is saved on this device.", 3500);
+            // Surface this on device since there is no console
+
+            alert(
+
+              "Gallery upload failed (" +
+
+                resp.status +
+
+                ").\n\n" +
+
+                (txt || "").slice(0, 200)
+
+            );
 
             return;
 
@@ -13908,7 +13883,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
           console.warn("uploadTakeToServer error", err);
 
-          showToastOnce("Upload failed. This take is saved on this device.", 3500);
+          alert("Gallery upload error. Please try again and mention this to Rodrigo.");
 
         }
 
@@ -14165,12 +14140,13 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
 
 
-          // Don't auto-load remote videos - prevents iOS Safari errors
-          // Videos will be loaded on-demand when user taps Play
-          // if (!src && (t.serverId || t.id)) {
-          //   const id = encodeURIComponent(t.serverId || t.id);
-          //   src = `/api/gallery/${id}/file`;
-          // }
+          if (!src && (t.serverId || t.id)) {
+
+            const id = encodeURIComponent(t.serverId || t.id);
+
+            src = `/api/gallery/${id}/file`;
+
+          }
 
 
 
@@ -14186,7 +14162,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
             <div class="take-card" data-id="${escapeHtml(t.id)}">
 
-              <video class="take-thumb" ${src ? `src="${escapeHtml(src)}"` : ''} playsinline preload="none"></video>
+              <video class="take-thumb" src="${escapeHtml(src)}" playsinline preload="metadata"></video>
 
               <div class="take-row" style="justify-content:space-between;align-items:center;">
 
@@ -14644,35 +14620,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
       }
 
-      // Non-blocking toast notification helper
-      function obToast(msg, ms=2500){
-        try{
-          let el = document.getElementById("ob-toast");
-          if(!el){
-            el = document.createElement("div");
-            el.id = "ob-toast";
-            el.style.cssText = "position:fixed;left:12px;right:12px;bottom:84px;z-index:99999;padding:10px 12px;border-radius:12px;background:rgba(0,0,0,.85);color:#fff;font-size:14px;display:none;";
-            document.body.appendChild(el);
-          }
-          el.textContent = msg;
-          el.style.display = "block";
-          clearTimeout(el._t);
-          el._t = setTimeout(()=>{ el.style.display="none"; }, ms);
-        }catch{}
-      }
 
-      // Mark take card as corrupted/bad
-      function markTakeBad(card, msg){
-        try{
-          if(!card) return;
-          if(card.dataset.badTake === "1") return;
-          card.dataset.badTake = "1";
-          const p = document.createElement("div");
-          p.style.cssText = "margin-top:8px;font-size:12px;opacity:.9;";
-          p.textContent = msg || "This take can't be played. You can delete it.";
-          card.appendChild(p);
-        }catch{}
-      }
 
       function bindGalleryCards(root, map){
 
@@ -14706,12 +14654,16 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
             if(video.paused){
 
+              // Attempt to play with fallback logic
               try {
-                // Check if video needs to be loaded from server first
-                const needsFetch = !video.src || video.src === "" || video.src.includes("/api/gallery/");
+                video.currentTime = 0;
+                await video.play();
+                if(btnPlay) btnPlay.textContent = "Pause";
+              } catch (playErr) {
+                console.warn("[offbook] Initial play failed, attempting fallback fetch", playErr);
 
-                if (needsFetch) {
-                  // No usable blob source - fetch file first
+                // Fallback: fetch video file from server
+                try {
                   const takeId = take.serverId || take.id;
                   if (!takeId) throw new Error("No takeId available for playback");
 
@@ -14719,42 +14671,33 @@ const savedStrip = document.getElementById("savedScriptsStrip");
                   const resp = await fetch(url, withSecretHeaders({
                     method: "GET",
                     credentials: "include",
-                    cache: "no-store"
                   }));
 
                   if (!resp.ok) {
-                    if (resp.status === 404) {
-                      showToastOnce("This take isn't available anymore. Try deleting it.", 3500);
-                    } else {
-                      showToastOnce(`Playback download failed (${resp.status})`, 3500);
-                    }
-                    console.error("[offbook] Playback download failed", resp.status);
-                    return;
+                    const errorText = await resp.text().catch(() => "");
+                    throw new Error(`Playback fetch failed (${resp.status}): ${errorText || resp.statusText}`);
                   }
 
                   const blob = await resp.blob();
                   const objectUrl = URL.createObjectURL(blob);
 
-                  // Set video source
+                  // Replace video source and try playing again
                   video.src = objectUrl;
-                  rec.url = objectUrl; // Store for later cleanup
-
                   video.load();
+                  video.currentTime = 0;
+                  await video.play();
 
-                  // Cleanup object URL when video ends
+                  if(btnPlay) btnPlay.textContent = "Pause";
+
+                  // Cleanup object URL after video ends
                   video.addEventListener("ended", () => {
-                    try { URL.revokeObjectURL(objectUrl); } catch {}
+                    URL.revokeObjectURL(objectUrl);
                   }, { once: true });
+
+                } catch (fallbackErr) {
+                  console.error("[offbook] Playback fallback failed", fallbackErr);
+                  alert("Playback failed: " + (fallbackErr?.message || String(fallbackErr)));
                 }
-
-                // Now play
-                video.currentTime = 0;
-                await video.play();
-                if(btnPlay) btnPlay.textContent = "Pause";
-
-              } catch (err) {
-                console.error("[offbook] Playback failed", err);
-                showToastOnce("Playback failed. Try again or delete this take.", 3500);
               }
 
             }else{
@@ -14772,9 +14715,11 @@ const savedStrip = document.getElementById("savedScriptsStrip");
           video?.addEventListener("pause", ()=>{ if(btnPlay && !video.error) btnPlay.textContent = "Play"; });
 
           video?.addEventListener("error", (e)=>{
-            console.warn("[offbook] Video playback error (silent)", video?.error);
+            console.error("[offbook] Video playback error", video?.error);
             if(btnPlay) btnPlay.textContent = "Play";
-            // Don't show user-facing alerts - prevents iOS popups on Gallery load
+            const errorCode = video?.error?.code;
+            const errorMessage = video?.error?.message || "Unknown error";
+            alert(`Video playback error (code ${errorCode}): ${errorMessage}`);
           });
 
 
@@ -14845,7 +14790,7 @@ const savedStrip = document.getElementById("savedScriptsStrip");
           
             } catch(err){
               console.warn("[offbook] download failed", err);
-              showToastOnce("Download failed: " + (err?.message || String(err)), 3500);
+              alert("Download failed: " + (err?.message || String(err)));
             } finally {
               btn.disabled = false;
               btn.textContent = prevLabel;
@@ -14870,7 +14815,11 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
               let id = take.serverId || take.id;
 
-              // Note: Legacy TK-style IDs now supported via auto-fallback to legacy mode
+              // Guard against legacy TK-style IDs
+              if (id && /^TK\d+/.test(id)) {
+                alert("This is an old take saved with a legacy ID. Please record a new take to use Room.");
+                return;
+              }
 
               // If no serverId, upload to get one
               if (!take.serverId) {
@@ -14882,11 +14831,9 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
               // Default: allow cache hits (much faster, avoids timeouts)
               // If you ever need to force rebuild, add ?mixforce=1 to the app URL.
-              // Always include legacy=1 to support older takes without stems
               const sp = new URLSearchParams();
               sp.set("dl","1");
               sp.set("mode","room");
-              sp.set("legacy","1");
               if (new URLSearchParams(location.search).get("mixforce") === "1") sp.set("force","1");
               const url = `/api/gallery/${encodeURIComponent(id)}/mixed_file?${sp.toString()}`;
 
@@ -14921,15 +14868,15 @@ const savedStrip = document.getElementById("savedScriptsStrip");
               const result = await showMixReadyModal(id);
 
               if (result.action === "expired") {
-                showToastOnce("Mix file expired. Please tap Room again.", 3500);
+                alert("Mix file expired. Please tap Room again.");
               } else if (result.action === "error") {
-                showToastOnce("Failed to save mix: " + (result.message || "Unknown error"), 3500);
+                alert("Failed to save mix: " + (result.message || "Unknown error"));
               }
               // On success (shared/downloaded), modal already handled everything
 
             } catch(err){
               console.warn("[offbook] room download failed", err);
-              showToastOnce("Room mix failed for this take. Try again or record a new take.", 3500);
+              alert("Room download failed: " + (err?.message || String(err)));
             } finally {
               btn.disabled = false;
               btn.textContent = prevLabel;
