@@ -643,6 +643,80 @@ export function initHttpRoutes(app: Express) {
     return res.json({ ok: true, lastStemsUploadEvent, lastStemsUploadError });
   });
 
+  // GET /debug/stems_check?take_id=...
+  debug.get("/stems_check", requireUser, audit("/debug/stems_check"), async (req: Request, res: Response) => {
+    try {
+      const user = (req as any).user || res.locals.user;
+      if (!user || !user.id) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+
+      const takeId = String(req.query?.take_id || "");
+      if (!takeId) {
+        return res.status(400).json({ error: "take_id required" });
+      }
+
+      const userId = String(user.id);
+      const r2IsEnabled = r2Enabled();
+
+      if (!r2IsEnabled) {
+        return res.json({
+          ok: true,
+          takeId,
+          userId,
+          r2Enabled: false,
+          found: false,
+          message: "R2 not enabled"
+        });
+      }
+
+      // Try all possible extensions (same list as mixed_file)
+      const stemExts = [".m4a", ".webm", ".mp3", ".wav", ".ogg", ".mp4"];
+      const triedExts: string[] = [];
+
+      for (const ext of stemExts) {
+        triedExts.push(ext);
+        const micKey = `stems/${userId}/${takeId}-mic${ext}`;
+        const readerKey = `stems/${userId}/${takeId}-reader${ext}`;
+
+        try {
+          const micHead = await r2Head(micKey);
+          const readerHead = await r2Head(readerKey);
+
+          if (micHead && readerHead) {
+            // Found matching pair
+            return res.json({
+              ok: true,
+              takeId,
+              userId,
+              r2Enabled: true,
+              found: true,
+              micKey,
+              readerKey,
+              triedExts
+            });
+          }
+        } catch (err) {
+          // Continue trying other extensions
+          continue;
+        }
+      }
+
+      // No matching pair found
+      return res.json({
+        ok: true,
+        takeId,
+        userId,
+        r2Enabled: true,
+        found: false,
+        triedExts
+      });
+    } catch (err) {
+      console.error("Error in GET /debug/stems_check", err);
+      return res.status(500).json({ error: "internal_error" });
+    }
+  });
+
   // POST /debug/upload_script_text
   debug.post("/upload_script_text", audit("/debug/upload_script_text"), async (req: Request, res: Response) => {
     const { userId } = getPasskeySession(req as any);
@@ -1374,29 +1448,7 @@ export function initHttpRoutes(app: Express) {
         console.log("[stems] Saved locally: user=%s takeId=%s mic=%s reader=%s",
           user.id, takeId, micPath, readerPath);
 
-        const storageInfo: any = {
-          local: {
-            mic: micPath,
-            reader: readerPath
-          }
-        };
-
-        // Update success event for local save
-        lastStemsUploadEvent = {
-          ...lastStemsUploadEvent,
-          stage: "complete",
-          micPath,
-          readerPath
-        };
-
-        // Respond immediately once local stems exist (prevents iOS fetch timeouts)
-        res.json({
-          ok: true,
-          takeId,
-          storage: storageInfo
-        });
-
-        // Upload to R2 in the background (best-effort)
+        // Upload to R2 deterministically (not best-effort) BEFORE responding
         if (r2Enabled()) {
           const micKey = `stems/${user.id}/${takeId}-mic${micExt}`;
           const readerKey = `stems/${user.id}/${takeId}-reader${readerExt}`;
@@ -1404,25 +1456,66 @@ export function initHttpRoutes(app: Express) {
           lastStemsUploadEvent = { ...lastStemsUploadEvent, stage: "r2_uploading", micKey, readerKey };
           lastStemsUploadError = null;
 
-          void (async () => {
-            try {
-              // Upload both stems in parallel to avoid doubling the wait time
-              await Promise.all([
-                r2PutFile(micKey, micPath, micFile.mimetype || "audio/webm"),
-                r2PutFile(readerKey, readerPath, readerFile.mimetype || "audio/webm"),
-              ]);
+          try {
+            // Upload both stems in parallel to avoid doubling the wait time
+            await Promise.all([
+              r2PutFile(micKey, micPath, micFile.mimetype || "audio/webm"),
+              r2PutFile(readerKey, readerPath, readerFile.mimetype || "audio/webm"),
+            ]);
 
-              lastStemsUploadEvent = { ...lastStemsUploadEvent, stage: "complete", micKey, readerKey };
+            // Verify both stems exist in R2
+            const micHead = await r2Head(micKey);
+            const readerHead = await r2Head(readerKey);
 
-              console.log("[stems] Uploaded to R2: user=%s takeId=%s micKey=%s readerKey=%s",
-                user.id, takeId, micKey, readerKey);
-            } catch (err) {
-              console.error("[stems] R2 upload failed (background), keeping local only:", err);
-              lastStemsUploadError = { at: new Date().toISOString(), error: String(err) };
-              lastStemsUploadEvent = { ...lastStemsUploadEvent, stage: "complete_local" };
+            if (!micHead || !readerHead) {
+              throw new Error("r2_verify_failed");
             }
-          })();
+
+            lastStemsUploadEvent = { ...lastStemsUploadEvent, stage: "complete", micKey, readerKey, micPath, readerPath };
+
+            console.log("[stems] Uploaded to R2: user=%s takeId=%s micKey=%s readerKey=%s",
+              user.id, takeId, micKey, readerKey);
+
+            // Respond with R2 persistence confirmation
+            return res.json({
+              ok: true,
+              takeId,
+              storage: {
+                micKey,
+                readerKey,
+                micExt,
+                readerExt,
+                persisted: "r2"
+              }
+            });
+          } catch (err) {
+            console.error("[stems] R2 upload failed, keeping local only:", err);
+            lastStemsUploadError = { at: new Date().toISOString(), error: String(err) };
+            lastStemsUploadEvent = { ...lastStemsUploadEvent, stage: "error_r2", micPath, readerPath };
+
+            // Keep local stems, respond with error
+            return res.status(502).json({
+              ok: false,
+              error: "r2_upload_failed"
+            });
+          }
         }
+
+        // R2 not enabled - respond with local-only persistence
+        lastStemsUploadEvent = {
+          ...lastStemsUploadEvent,
+          stage: "complete_local",
+          micPath,
+          readerPath
+        };
+
+        res.json({
+          ok: true,
+          takeId,
+          storage: {
+            persisted: "local_only"
+          }
+        });
       } catch (err) {
         console.error("Error in POST /api/gallery/upload_stems", err);
         lastStemsUploadError = {
