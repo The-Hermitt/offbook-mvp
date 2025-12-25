@@ -1,7 +1,7 @@
 import express from "express";
 import crypto from "node:crypto";
 import { getAvailableCreditsForUser, spendUserCredits } from "../lib/credits";
-import db, { dbGet, dbRun } from "../lib/db";
+import db, { dbGet, dbRun, USING_POSTGRES } from "../lib/db";
 
 const INCLUDED_RENDERS_PER_MONTH = Number(process.env.INCLUDED_RENDERS_PER_MONTH || 0);
 const DEV_STARTING_CREDITS = Number(process.env.DEV_STARTING_CREDITS || 0);
@@ -388,7 +388,7 @@ router.post("/device-link/start", async (req, res) => {
 
   // Expires in 10 minutes
   const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
-  const expiresAtStr = USING_POSTGRES ? expiresAt.toISOString() : expiresAt.toISOString();
+  const expiresAtStr = expiresAt.toISOString();
 
   try {
     await dbRun(
