@@ -7,6 +7,7 @@ const INCLUDED_RENDERS_PER_MONTH = Number(process.env.INCLUDED_RENDERS_PER_MONTH
 const DEV_STARTING_CREDITS = Number(process.env.DEV_STARTING_CREDITS || 0);
 const MAX_PASSKEYS_PER_USER = 2;
 const COOLDOWN_MS = parseInt(process.env.LINK_CODE_COOLDOWN_MS || "120000", 10);
+const REAUTH_WINDOW_MS = parseInt(process.env.LINK_CODE_REAUTH_WINDOW_MS || "300000", 10); // default 5 min
 
 async function countPasskeysForUser(userId: string): Promise<number> {
   const row = await dbGet<{ c: number }>(
@@ -27,6 +28,7 @@ type Sess = {
   regUserHandle?: string;
   pendingLinkUserId?: string;
   pendingLinkCode?: string;
+  lastAuthAt?: number;
 
   // — Entitlements (dev placeholders) —
   plan?: "none" | "dev";
@@ -398,6 +400,19 @@ router.post("/device-link/start", async (req, res) => {
     return res.status(401).json({ ok: false, error: "not_logged_in" });
   }
 
+  // Require recent authentication
+  const last = typeof sess.lastAuthAt === "number" ? sess.lastAuthAt : 0;
+  const age = Date.now() - last;
+  if (!last || age > REAUTH_WINDOW_MS) {
+    console.log("[device-link] reauth_required user=%s age_ms=%s", sess.userId, age);
+    return res.status(401).json({
+      ok: false,
+      error: "reauth_required",
+      reauth_window_sec: Math.floor(REAUTH_WINDOW_MS / 1000),
+      age_sec: Math.floor(age / 1000)
+    });
+  }
+
   // Check cooldown: don't allow creating codes too frequently
   try {
     const lastCode = await dbGet<{ created_at: string }>(
@@ -704,6 +719,7 @@ router.post("/passkey/register/finish", express.json({ limit: "1mb" }), async (r
   sess.credentialId = credentialId;
   sess.userId = stableUserId;
   sess.loggedIn = true;
+  sess.lastAuthAt = Date.now();
   delete sess.regChallenge;
   delete sess.regUserHandle;
   delete sess.pendingLinkUserId;
@@ -833,6 +849,7 @@ router.post("/passkey/login/finish", express.json({ limit: "1mb" }), async (req,
   sess.credentialId = credentialId;
   sess.userId = stableUserId;
   sess.loggedIn = true;
+  sess.lastAuthAt = Date.now();
   delete sess.authChallenge;
 
   // Migrate anon scripts to passkey user

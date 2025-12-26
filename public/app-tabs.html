@@ -5556,6 +5556,14 @@ JANE: Ready?"></textarea>
               const data = await resp.json();
 
               if (!data.ok) {
+                // Handle reauth_required error with friendly message
+                if (data.error === "reauth_required") {
+                  const statusEl = document.getElementById("getLinkCodeStatus") || document.getElementById("linkCodeStatus");
+                  if (statusEl) {
+                    statusEl.textContent = "For security, tap Sign In (Face ID) and then try Get Link Code again.";
+                  }
+                  return;
+                }
                 // Handle cooldown error with friendly message
                 if (data.error === "cooldown" && data.retry_after_s) {
                   const statusEl = document.getElementById("getLinkCodeStatus");
