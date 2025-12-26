@@ -4484,7 +4484,10 @@ JANE: Ready?"></textarea>
           }
 
           // Refresh linked devices list
-          refreshLinkedDevices().catch(() => {});
+          try {
+            const fn = window.refreshLinkedDevices;
+            if (typeof fn === "function") fn().catch(() => {});
+          } catch {}
 
           if (claimLinkSection) {
             claimLinkSection.style.display = !isPasskeyLoggedIn ? "" : "none";
@@ -5536,6 +5539,9 @@ JANE: Ready?"></textarea>
             listEl.appendChild(row);
           });
         }
+
+        // Expose to refreshAuthUI (avoid scope/ReferenceError)
+        window.refreshLinkedDevices = refreshLinkedDevices;
 
         // Link Code handlers
         const btnGetLinkCode = document.getElementById("btnGetLinkCode");
