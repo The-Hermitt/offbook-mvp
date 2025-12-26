@@ -1,7 +1,7 @@
 import express from "express";
 import crypto from "node:crypto";
 import { getAvailableCreditsForUser, spendUserCredits } from "../lib/credits";
-import db, { dbGet, dbRun, USING_POSTGRES } from "../lib/db";
+import db, { dbAll, dbGet, dbRun, USING_POSTGRES } from "../lib/db";
 
 const INCLUDED_RENDERS_PER_MONTH = Number(process.env.INCLUDED_RENDERS_PER_MONTH || 0);
 const DEV_STARTING_CREDITS = Number(process.env.DEV_STARTING_CREDITS || 0);
@@ -444,7 +444,7 @@ router.get("/devices", async (req, res) => {
   }
 
   try {
-    const rows = await db.all<{ credential_id: string; created_at: string }>(
+    const rows = await dbAll<{ credential_id: string; created_at: string }>(
       "SELECT credential_id, created_at FROM webauthn_credentials WHERE user_id = ? ORDER BY created_at ASC",
       [sess.userId]
     );

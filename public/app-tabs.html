@@ -3072,8 +3072,8 @@ JANE: Ready?"></textarea>
           <!-- Linked devices list -->
           <div style="margin-top:16px;">
             <div style="font-weight:600; margin-bottom:8px;">Linked devices</div>
-            <div id="linkedDevicesStatus" style="margin-top:8px;font-size:13px;opacity:.85"></div>
-            <div id="linkedDevicesList" style="margin-top:8px"></div>
+            <div id="linkedDevicesStatus" class="muted" style="margin-top:6px;"></div>
+            <div id="linkedDevicesList" style="margin-top:10px; display:flex; flex-direction:column; gap:10px;"></div>
           </div>
         </div>
 
@@ -5475,14 +5475,14 @@ JANE: Ready?"></textarea>
               try {
                 data = await resp.json();
               } catch {}
-              elStatus.textContent = `Linked devices unavailable (${resp.status}). ${data?.error || ""}`.trim();
+              elStatus.textContent = `Could not load linked devices (${resp.status}). ${data?.error || "Please refresh."}`.trim();
               return;
             }
 
             const data = await resp.json();
 
             if (!data.ok || !data.devices) {
-              elStatus.textContent = "Failed to load devices.";
+              elStatus.textContent = "Could not load linked devices. Please refresh.";
               return;
             }
 
@@ -5549,7 +5549,7 @@ JANE: Ready?"></textarea>
             });
           } catch (err) {
             console.error("Failed to load devices:", err);
-            elStatus.textContent = "Failed to load devices.";
+            elStatus.textContent = "Could not load linked devices. Please refresh.";
           }
         }
 
