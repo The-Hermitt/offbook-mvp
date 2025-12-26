@@ -4481,11 +4481,10 @@ JANE: Ready?"></textarea>
 
           if (linkDeviceSection) {
             linkDeviceSection.style.display = isPasskeyLoggedIn ? "" : "none";
-            // Refresh linked devices list when logged in
-            if (isPasskeyLoggedIn) {
-              refreshLinkedDevices();
-            }
           }
+
+          // Refresh linked devices list
+          refreshLinkedDevices().catch(() => {});
 
           if (claimLinkSection) {
             claimLinkSection.style.display = !isPasskeyLoggedIn ? "" : "none";
@@ -5431,126 +5430,104 @@ JANE: Ready?"></textarea>
 
         }
 
-        // Refresh linked devices list
         async function refreshLinkedDevices() {
-          // Ensure the UI targets exist even if markup moved/changed
-          let elStatus = document.getElementById("linkedDevicesStatus");
-          let elList = document.getElementById("linkedDevicesList");
+          const statusEl = document.getElementById("linkedDevicesStatus");
+          const listEl = document.getElementById("linkedDevicesList");
+          if (!statusEl || !listEl) return;
 
-          if (!elStatus || !elList) {
-            // Find the "Linked devices" header and attach containers beneath it
-            const header = Array.from(document.querySelectorAll("*"))
-              .find(n => (n.textContent || "").trim() === "Linked devices");
-
-            if (header && header.parentElement) {
-              if (!elStatus) {
-                elStatus = document.createElement("div");
-                elStatus.id = "linkedDevicesStatus";
-                elStatus.style.marginTop = "8px";
-                elStatus.style.fontSize = "13px";
-                elStatus.style.opacity = "0.85";
-                header.parentElement.appendChild(elStatus);
-              }
-              if (!elList) {
-                elList = document.createElement("div");
-                elList.id = "linkedDevicesList";
-                elList.style.marginTop = "8px";
-                header.parentElement.appendChild(elList);
-              }
-            }
+          // If not signed in, clear
+          const sess = await fetch("/auth/session", { credentials: "include" }).then(r => r.json()).catch(() => null);
+          if (!sess || !sess.ok || !sess.userId) {
+            statusEl.textContent = "";
+            listEl.innerHTML = "";
+            return;
           }
 
-          if (!elStatus || !elList) return; // still nowhere to render
+          statusEl.textContent = "Loading linked devices…";
+          listEl.innerHTML = "";
 
-          // Show loading state
-          elStatus.textContent = "Loading linked devices…";
-          elList.innerHTML = "";
+          const resp = await fetch("/auth/devices", { credentials: "include" }).catch(() => null);
+          if (!resp) {
+            statusEl.textContent = "Could not load linked devices. Please try again.";
+            return;
+          }
 
-          try {
-            const resp = await fetch("/auth/devices", withSecretHeaders({ method: "GET" }));
+          const data = await resp.json().catch(() => null);
+          if (!data || !data.ok) {
+            statusEl.textContent = "Could not load linked devices. Please try again.";
+            return;
+          }
 
-            // Handle HTTP errors
-            if (!resp.ok) {
-              let data = null;
-              try {
-                data = await resp.json();
-              } catch {}
-              elStatus.textContent = `Could not load linked devices (${resp.status}). ${data?.error || "Please refresh."}`.trim();
-              return;
-            }
+          const devices = Array.isArray(data.devices) ? data.devices : [];
+          const current = data.currentCredentialId || null;
 
-            const data = await resp.json();
+          if (devices.length === 0) {
+            statusEl.textContent = "No linked devices yet.";
+            return;
+          }
 
-            if (!data.ok || !data.devices) {
-              elStatus.textContent = "Could not load linked devices. Please refresh.";
-              return;
-            }
+          statusEl.textContent = devices.length >= 2
+            ? "Max devices linked (2). Revoke one to link another."
+            : "";
 
-            if (data.devices.length === 0) {
-              elList.innerHTML = '<div class="small" style="color:var(--muted);">No devices linked.</div>';
-              elStatus.textContent = "No linked devices returned. (This should not happen—try Sign Out → Sign In.)";
-              return;
-            }
+          devices.forEach((d, idx) => {
+            const isCurrent = current && d.credentialId === current;
 
-            // Render device list
-            elList.innerHTML = data.devices.map((device, idx) => {
-              const date = device.createdAt !== "Unknown" ? new Date(device.createdAt).toLocaleDateString() : "Unknown";
-              const label = device.isCurrent ? "This device" : `Device ${idx + 1}`;
-              const revokeBtn = device.isCurrent
-                ? ""
-                : `<button class="btn secondary sm" data-credential-id="${device.credentialId}" style="margin-left:auto;">Revoke</button>`;
+            const row = document.createElement("div");
+            row.style.display = "flex";
+            row.style.alignItems = "center";
+            row.style.justifyContent = "space-between";
+            row.style.gap = "10px";
+            row.style.padding = "10px 12px";
+            row.style.border = "1px solid rgba(255,255,255,0.08)";
+            row.style.borderRadius = "14px";
+            row.style.background = "rgba(255,255,255,0.03)";
 
-              return `
-                <div class="linkRow" style="padding:8px 0; border-bottom:1px solid var(--border);">
-                  <div>
-                    <div style="font-weight:500;">${label}</div>
-                    <div class="small" style="color:var(--muted);">Added ${date}</div>
-                  </div>
-                  ${revokeBtn}
-                </div>
-              `;
-            }).join("");
+            const left = document.createElement("div");
+            const created = d.createdAt ? new Date(d.createdAt) : null;
+            const createdStr = created && !isNaN(created.getTime()) ? created.toLocaleString() : "";
 
-            elStatus.textContent = `${data.devices.length} device(s) linked.`;
+            left.innerHTML = `
+              <div style="font-weight:700;">${isCurrent ? "This device" : `Device ${idx + 1}`}</div>
+              <div class="muted" style="margin-top:2px;">
+                ${createdStr ? `Linked ${createdStr}` : ""}
+              </div>
+            `;
 
-            // Wire up revoke buttons
-            const revokeButtons = elList.querySelectorAll("button[data-credential-id]");
-            revokeButtons.forEach((btn) => {
-              btn.addEventListener("click", async () => {
-                const credentialId = btn.getAttribute("data-credential-id");
-                if (!credentialId) return;
+            const right = document.createElement("div");
 
-                if (!confirm("Are you sure? This will remove access on that device.")) {
+            if (!isCurrent) {
+              const btn = document.createElement("button");
+              btn.className = "btn";
+              btn.textContent = "Revoke";
+              btn.onclick = async () => {
+                if (!confirm("Revoke this device? It will be signed out.")) return;
+                const rr = await fetch("/auth/devices/revoke", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  credentials: "include",
+                  body: JSON.stringify({ credentialId: d.credentialId })
+                }).catch(() => null);
+
+                const jj = rr ? await rr.json().catch(() => null) : null;
+                if (!rr || !jj || !jj.ok) {
+                  alert("Failed to revoke device. Please try again.");
                   return;
                 }
+                await refreshLinkedDevices();
+              };
+              right.appendChild(btn);
+            } else {
+              const badge = document.createElement("div");
+              badge.className = "muted";
+              badge.textContent = "Active";
+              right.appendChild(badge);
+            }
 
-                try {
-                  const revokeResp = await fetch("/auth/devices/revoke", withSecretHeaders({
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ credentialId })
-                  }));
-
-                  const revokeData = await revokeResp.json();
-
-                  if (!revokeData.ok) {
-                    alert("Failed to revoke device: " + (revokeData.error || "unknown error"));
-                    return;
-                  }
-
-                  // Refresh the list
-                  await refreshLinkedDevices();
-                  await refreshAuthUI();
-                } catch (err) {
-                  console.error("Failed to revoke device:", err);
-                  alert("Failed to revoke device. Please try again.");
-                }
-              });
-            });
-          } catch (err) {
-            console.error("Failed to load devices:", err);
-            elStatus.textContent = "Could not load linked devices. Please refresh.";
-          }
+            row.appendChild(left);
+            row.appendChild(right);
+            listEl.appendChild(row);
+          });
         }
 
         // Link Code handlers
@@ -5636,6 +5613,7 @@ JANE: Ready?"></textarea>
 
               await startRegisterFlow();
               await refreshAuthUI();
+              await refreshLinkedDevices();
 
               alert("Successfully linked! You can now sign in on this device.");
               linkCodeInput.value = "";

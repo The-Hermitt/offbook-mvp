@@ -426,89 +426,55 @@ router.post("/device-link/start", async (req, res) => {
   }
 });
 
-// --- DEVICE MANAGEMENT: LIST -------------------------------------------------
+// --- DEVICES: LIST ---------------------------------------------------------
 // GET /auth/devices
-// Returns list of linked devices for the current user
 router.get("/devices", async (req, res) => {
   const sess = ensureSessionDefaults(req);
-
-  console.log("[auth] /auth/devices", {
-    loggedIn: !!sess.loggedIn,
-    userId: sess.userId,
-    cred: sess.credentialId ? "yes" : "no",
-  });
-
-  // Require passkey logged in
-  if (!sess.loggedIn || !sess.userId) {
-    return res.status(401).json({ ok: false, error: "not_logged_in" });
-  }
+  if (!sess.userId) return res.status(401).json({ ok: false, error: "not_signed_in" });
 
   try {
-    const rows = await dbAll<{ credential_id: string; created_at: string }>(
-      "SELECT credential_id, created_at FROM webauthn_credentials WHERE user_id = ? ORDER BY created_at ASC",
+    const rows = await dbAll<{ id: string; credential_id: string; created_at: any }>(
+      "SELECT id, credential_id, created_at FROM webauthn_credentials WHERE user_id = ? ORDER BY created_at ASC",
       [sess.userId]
     );
 
-    const devices = rows.map((row) => ({
-      credentialId: row.credential_id,
-      createdAt: row.created_at || "Unknown",
-      isCurrent: row.credential_id === sess.credentialId,
-    }));
-
-    return res.json({ ok: true, devices });
+    return res.json({
+      ok: true,
+      currentCredentialId: sess.credentialId || null,
+      devices: rows.map(r => ({
+        id: r.id,
+        credentialId: r.credential_id,
+        createdAt: r.created_at
+      }))
+    });
   } catch (err) {
-    console.error("[auth] Failed to list devices:", err);
+    console.error("[auth] /devices failed:", err);
     return res.status(500).json({ ok: false, error: "failed_to_list_devices" });
   }
 });
 
-// --- DEVICE MANAGEMENT: REVOKE -----------------------------------------------
-// POST /auth/devices/revoke
-// Revokes a specific device credential
-router.post("/devices/revoke", express.json({ limit: "1mb" }), async (req, res) => {
+// --- DEVICES: REVOKE -------------------------------------------------------
+// POST /auth/devices/revoke  { credentialId }
+router.post("/devices/revoke", async (req, res) => {
   const sess = ensureSessionDefaults(req);
-
-  // Require passkey logged in
-  if (!sess.loggedIn || !sess.userId) {
-    return res.status(401).json({ ok: false, error: "not_logged_in" });
-  }
+  if (!sess.userId) return res.status(401).json({ ok: false, error: "not_signed_in" });
 
   const { credentialId } = (req.body || {}) as { credentialId?: string };
-  if (!credentialId || typeof credentialId !== "string") {
-    return res.status(400).json({ ok: false, error: "missing_credential_id" });
+  if (!credentialId) return res.status(400).json({ ok: false, error: "missing_credential_id" });
+
+  // Don't allow revoking the current device (UI won't show the button for it anyway)
+  if (sess.credentialId && credentialId === sess.credentialId) {
+    return res.status(400).json({ ok: false, error: "cannot_revoke_current_device" });
   }
 
   try {
-    // Verify the credential belongs to this user
-    const credRow = await dbGet<{ user_id: string }>(
-      "SELECT user_id FROM webauthn_credentials WHERE credential_id = ? LIMIT 1",
-      [credentialId]
-    );
-
-    if (!credRow || credRow.user_id !== sess.userId) {
-      return res.status(404).json({ ok: false, error: "credential_not_found" });
-    }
-
-    // Prevent revoking current device
-    if (credentialId === sess.credentialId) {
-      return res.status(400).json({ ok: false, error: "cannot_revoke_current_device" });
-    }
-
-    // Prevent revoking last device
-    const count = await countPasskeysForUser(sess.userId);
-    if (count <= 1) {
-      return res.status(409).json({ ok: false, error: "cannot_revoke_last_device" });
-    }
-
-    // Delete the credential
     await dbRun(
       "DELETE FROM webauthn_credentials WHERE user_id = ? AND credential_id = ?",
       [sess.userId, credentialId]
     );
-
     return res.json({ ok: true });
   } catch (err) {
-    console.error("[auth] Failed to revoke device:", err);
+    console.error("[auth] /devices/revoke failed:", err);
     return res.status(500).json({ ok: false, error: "failed_to_revoke_device" });
   }
 });
