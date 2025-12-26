@@ -432,6 +432,12 @@ router.post("/device-link/start", async (req, res) => {
 router.get("/devices", async (req, res) => {
   const sess = ensureSessionDefaults(req);
 
+  console.log("[auth] /auth/devices", {
+    loggedIn: !!sess.loggedIn,
+    userId: sess.userId,
+    cred: sess.credentialId ? "yes" : "no",
+  });
+
   // Require passkey logged in
   if (!sess.loggedIn || !sess.userId) {
     return res.status(401).json({ ok: false, error: "not_logged_in" });

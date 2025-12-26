@@ -5433,14 +5433,38 @@ JANE: Ready?"></textarea>
 
         // Refresh linked devices list
         async function refreshLinkedDevices() {
-          const listEl = document.getElementById("linkedDevicesList");
-          const statusEl = document.getElementById("linkedDevicesStatus");
+          // Ensure the UI targets exist even if markup moved/changed
+          let elStatus = document.getElementById("linkedDevicesStatus");
+          let elList = document.getElementById("linkedDevicesList");
 
-          if (!listEl) return;
+          if (!elStatus || !elList) {
+            // Find the "Linked devices" header and attach containers beneath it
+            const header = Array.from(document.querySelectorAll("*"))
+              .find(n => (n.textContent || "").trim() === "Linked devices");
+
+            if (header && header.parentElement) {
+              if (!elStatus) {
+                elStatus = document.createElement("div");
+                elStatus.id = "linkedDevicesStatus";
+                elStatus.style.marginTop = "8px";
+                elStatus.style.fontSize = "13px";
+                elStatus.style.opacity = "0.85";
+                header.parentElement.appendChild(elStatus);
+              }
+              if (!elList) {
+                elList = document.createElement("div");
+                elList.id = "linkedDevicesList";
+                elList.style.marginTop = "8px";
+                header.parentElement.appendChild(elList);
+              }
+            }
+          }
+
+          if (!elStatus || !elList) return; // still nowhere to render
 
           // Show loading state
-          if (statusEl) statusEl.textContent = "Loading linked devices…";
-          listEl.innerHTML = "";
+          elStatus.textContent = "Loading linked devices…";
+          elList.innerHTML = "";
 
           try {
             const resp = await fetch("/auth/devices", withSecretHeaders({ method: "GET" }));
@@ -5451,27 +5475,25 @@ JANE: Ready?"></textarea>
               try {
                 data = await resp.json();
               } catch {}
-              if (statusEl) {
-                statusEl.textContent = `Linked devices unavailable (${resp.status}). ${data?.error || ""}`.trim();
-              }
+              elStatus.textContent = `Linked devices unavailable (${resp.status}). ${data?.error || ""}`.trim();
               return;
             }
 
             const data = await resp.json();
 
             if (!data.ok || !data.devices) {
-              if (statusEl) statusEl.textContent = "Failed to load devices.";
+              elStatus.textContent = "Failed to load devices.";
               return;
             }
 
             if (data.devices.length === 0) {
-              listEl.innerHTML = '<div class="small" style="color:var(--muted);">No devices linked.</div>';
-              if (statusEl) statusEl.textContent = "No linked devices returned. (This should not happen—try Sign Out → Sign In.)";
+              elList.innerHTML = '<div class="small" style="color:var(--muted);">No devices linked.</div>';
+              elStatus.textContent = "No linked devices returned. (This should not happen—try Sign Out → Sign In.)";
               return;
             }
 
             // Render device list
-            listEl.innerHTML = data.devices.map((device, idx) => {
+            elList.innerHTML = data.devices.map((device, idx) => {
               const date = device.createdAt !== "Unknown" ? new Date(device.createdAt).toLocaleDateString() : "Unknown";
               const label = device.isCurrent ? "This device" : `Device ${idx + 1}`;
               const revokeBtn = device.isCurrent
@@ -5489,10 +5511,10 @@ JANE: Ready?"></textarea>
               `;
             }).join("");
 
-            if (statusEl) statusEl.textContent = `${data.devices.length} device(s) linked.`;
+            elStatus.textContent = `${data.devices.length} device(s) linked.`;
 
             // Wire up revoke buttons
-            const revokeButtons = listEl.querySelectorAll("button[data-credential-id]");
+            const revokeButtons = elList.querySelectorAll("button[data-credential-id]");
             revokeButtons.forEach((btn) => {
               btn.addEventListener("click", async () => {
                 const credentialId = btn.getAttribute("data-credential-id");
@@ -5527,7 +5549,7 @@ JANE: Ready?"></textarea>
             });
           } catch (err) {
             console.error("Failed to load devices:", err);
-            if (statusEl) statusEl.textContent = "Failed to load devices.";
+            elStatus.textContent = "Failed to load devices.";
           }
         }
 
