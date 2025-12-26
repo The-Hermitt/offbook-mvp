@@ -6,6 +6,7 @@ import db, { dbAll, dbGet, dbRun, USING_POSTGRES } from "../lib/db";
 const INCLUDED_RENDERS_PER_MONTH = Number(process.env.INCLUDED_RENDERS_PER_MONTH || 0);
 const DEV_STARTING_CREDITS = Number(process.env.DEV_STARTING_CREDITS || 0);
 const MAX_PASSKEYS_PER_USER = 2;
+const COOLDOWN_MS = parseInt(process.env.LINK_CODE_COOLDOWN_MS || "120000", 10);
 
 async function countPasskeysForUser(userId: string): Promise<number> {
   const row = await dbGet<{ c: number }>(
@@ -395,6 +396,30 @@ router.post("/device-link/start", async (req, res) => {
   // Require passkey logged in
   if (!sess.loggedIn || !sess.userId) {
     return res.status(401).json({ ok: false, error: "not_logged_in" });
+  }
+
+  // Check cooldown: don't allow creating codes too frequently
+  try {
+    const lastCode = await dbGet<{ created_at: string }>(
+      "SELECT created_at FROM device_link_codes WHERE user_id = ? ORDER BY created_at DESC LIMIT 1",
+      [sess.userId]
+    );
+
+    if (lastCode && lastCode.created_at) {
+      const lastCreatedAt = new Date(lastCode.created_at).getTime();
+      const now = Date.now();
+      const elapsed = now - lastCreatedAt;
+
+      if (elapsed < COOLDOWN_MS) {
+        const retryAfterMs = COOLDOWN_MS - elapsed;
+        const retryAfterS = Math.ceil(retryAfterMs / 1000);
+        console.log("[device-link] cooldown uid=%s retry_after_s=%s", sess.userId, retryAfterS);
+        return res.status(429).json({ ok: false, error: "cooldown", retry_after_s: retryAfterS });
+      }
+    }
+  } catch (err) {
+    console.error("[auth] Failed to check link code cooldown:", err);
+    // Continue anyway - don't block code generation on cooldown check failure
   }
 
   // Generate 8-char code (ABCD-EFGH format, no ambiguous chars)
