@@ -3072,8 +3072,8 @@ JANE: Ready?"></textarea>
           <!-- Linked devices list -->
           <div style="margin-top:16px;">
             <div style="font-weight:600; margin-bottom:8px;">Linked devices</div>
-            <div id="linkedDevicesList"></div>
-            <div id="linkedDevicesStatus" class="small" style="margin-top:6px; color:var(--muted);"></div>
+            <div id="linkedDevicesStatus" style="margin-top:8px;font-size:13px;opacity:.85"></div>
+            <div id="linkedDevicesList" style="margin-top:8px"></div>
           </div>
         </div>
 
@@ -6684,6 +6684,10 @@ JANE: Ready?"></textarea>
         }else if(name==="gallery"){
 
           loadTakes().catch(()=>{});
+
+        }else if(name==="settings"){
+
+          setTimeout(() => { try { refreshLinkedDevices(); } catch (e) {} }, 0);
 
         }
 
