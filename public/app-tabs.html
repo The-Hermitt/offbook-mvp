@@ -5436,8 +5436,15 @@ JANE: Ready?"></textarea>
           if (!statusEl || !listEl) return;
 
           // If not signed in, clear
-          const sess = await fetch("/auth/session", { credentials: "include" }).then(r => r.json()).catch(() => null);
-          if (!sess || !sess.ok || !sess.userId) {
+          const sess = await getSession().catch(() => null);
+          const rawUserId = sess?.userId || sess?.user_id || null;
+          const passkeyLoggedIn = Boolean(
+            sess?.passkey?.loggedIn ??
+            sess?.passkeyLoggedIn ??
+            sess?.loggedIn
+          );
+
+          if (!rawUserId || !passkeyLoggedIn) {
             statusEl.textContent = "";
             listEl.innerHTML = "";
             return;
