@@ -1225,6 +1225,22 @@ export function initHttpRoutes(app: Express) {
   // GET /debug/billing/replay_refund_by_charge
   debug.get("/billing/replay_refund_by_charge", async (req: Request, res: Response) => {
     try {
+      // Production safety gate
+      if (process.env.ENABLE_BILLING_ADMIN_TOOLS !== "1") {
+        return res.status(404).send("Not Found");
+      }
+
+      // Billing admin secret check (separate from SHARED_SECRET)
+      const billingAdminSecret = process.env.BILLING_ADMIN_SECRET;
+      if (!billingAdminSecret || !billingAdminSecret.trim()) {
+        return res.status(404).send("Not Found");
+      }
+
+      const providedSecret = (req.query.admin_secret as string) || req.header("X-Billing-Admin-Secret");
+      if (!providedSecret || providedSecret.trim() !== billingAdminSecret.trim()) {
+        return res.status(401).json({ ok: false, error: "unauthorized" });
+      }
+
       const charge_id = String(req.query.charge_id || "").trim();
 
       if (!charge_id) {
@@ -1235,7 +1251,7 @@ export function initHttpRoutes(app: Express) {
         return res.status(400).json({ ok: false, error: "stripe_not_configured" });
       }
 
-      // Retrieve the charge with expanded payment_intent
+      // Retrieve the charge with expanded payment_intent (supports both py_ and ch_ IDs)
       let charge: Stripe.Charge;
       try {
         charge = await stripe.charges.retrieve(charge_id, {
@@ -1286,6 +1302,35 @@ export function initHttpRoutes(app: Express) {
         });
       }
 
+      // Calculate proportional credit reversal for partial refunds
+      const chargeAmount = charge.amount || 0;
+      const amountRefunded = charge.amount_refunded || 0;
+
+      if (chargeAmount === 0) {
+        return res.json({
+          ok: true,
+          charge_id,
+          userId,
+          creditsDelta: 0,
+          skipped: true,
+          reason: "charge_amount_zero"
+        });
+      }
+
+      const ratio = amountRefunded / chargeAmount;
+      const creditsToReverse = Math.round(credits * ratio);
+
+      if (creditsToReverse <= 0) {
+        return res.json({
+          ok: true,
+          charge_id,
+          userId,
+          creditsDelta: 0,
+          skipped: true,
+          reason: "credits_to_reverse_zero"
+        });
+      }
+
       // Idempotency: use unique key for manual refund replay
       const eventId = `manual_refund:${charge_id}`;
       const eventType = "manual_refund_replay";
@@ -1308,18 +1353,22 @@ export function initHttpRoutes(app: Express) {
           ok: true,
           charge_id,
           userId,
-          creditsDelta: -credits,
+          creditsDelta: -creditsToReverse,
           skippedDuplicate: true,
         });
       }
 
       // Reverse the credits
-      const updated = await addUserCredits(userId, -credits);
+      const updated = await addUserCredits(userId, -creditsToReverse);
 
       console.log("[billing] replay_refund_by_charge reversed credits", {
         charge_id,
         userId,
-        credits,
+        originalCredits: credits,
+        creditsToReverse,
+        ratio,
+        chargeAmount,
+        amountRefunded,
         totalCredits: updated.total_credits,
         usedCredits: updated.used_credits,
         availableCredits: getAvailableCredits(updated),
@@ -1329,7 +1378,7 @@ export function initHttpRoutes(app: Express) {
         ok: true,
         charge_id,
         userId,
-        creditsDelta: -credits,
+        creditsDelta: -creditsToReverse,
         skippedDuplicate: false,
       });
     } catch (e: any) {

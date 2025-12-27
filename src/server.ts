@@ -413,6 +413,36 @@ async function processStripeBillingEvent(event: Stripe.Event): Promise<{ process
       return { processed: false, reason: "missing_metadata" };
     }
 
+    // Calculate proportional credit reversal for partial refunds
+    const chargeAmount = charge.amount || 0;
+    const amountRefunded = charge.amount_refunded || 0;
+
+    if (chargeAmount === 0) {
+      console.log("[billing] refund charge amount is zero", {
+        eventId,
+        chargeId: charge.id,
+        userId,
+      });
+      return { processed: false, reason: "charge_amount_zero" };
+    }
+
+    const ratio = amountRefunded / chargeAmount;
+    const creditsToReverse = Math.round(credits * ratio);
+
+    if (creditsToReverse <= 0) {
+      console.log("[billing] refund credits to reverse is zero or negative", {
+        eventId,
+        chargeId: charge.id,
+        userId,
+        credits,
+        chargeAmount,
+        amountRefunded,
+        ratio,
+        creditsToReverse,
+      });
+      return { processed: false, reason: "credits_to_reverse_zero" };
+    }
+
     // Record billing event first for idempotency
     let isNewEvent = false;
     try {
@@ -432,8 +462,8 @@ async function processStripeBillingEvent(event: Stripe.Event): Promise<{ process
       return { processed: false, reason: "duplicate_event" };
     }
 
-    // Reverse the top-up credits by adding negative credits
-    const updated = await addUserCredits(userId, -credits);
+    // Reverse the top-up credits by adding negative credits (proportional for partial refunds)
+    const updated = await addUserCredits(userId, -creditsToReverse);
 
     const totalCredits = updated.total_credits;
     const usedCredits = updated.used_credits;
@@ -441,7 +471,11 @@ async function processStripeBillingEvent(event: Stripe.Event): Promise<{ process
 
     console.log("[billing] refund reversed credits", {
       userId,
-      credits,
+      originalCredits: credits,
+      creditsReversed: creditsToReverse,
+      chargeAmount,
+      amountRefunded,
+      ratio,
       totalCredits,
       usedCredits,
       availableCredits,
@@ -562,8 +596,24 @@ app.get("/debug/billing/replay_event", requireSecret, async (req: Request, res: 
 });
 
 // Debug endpoint to replay a refund using a Stripe charge ID
-app.get("/debug/billing/replay_refund_by_charge", requireSecret, async (req: Request, res: Response) => {
+app.get("/debug/billing/replay_refund_by_charge", async (req: Request, res: Response) => {
   try {
+    // Production safety gate
+    if (process.env.ENABLE_BILLING_ADMIN_TOOLS !== "1") {
+      return res.status(404).send("Not Found");
+    }
+
+    // Billing admin secret check (separate from SHARED_SECRET)
+    const billingAdminSecret = process.env.BILLING_ADMIN_SECRET;
+    if (!billingAdminSecret || !billingAdminSecret.trim()) {
+      return res.status(404).send("Not Found");
+    }
+
+    const providedSecret = (req.query.admin_secret as string) || req.header("X-Billing-Admin-Secret");
+    if (!providedSecret || providedSecret.trim() !== billingAdminSecret.trim()) {
+      return res.status(401).json({ ok: false, error: "unauthorized" });
+    }
+
     const charge_id = String(req.query.charge_id || "").trim();
 
     if (!charge_id) {
@@ -625,6 +675,35 @@ app.get("/debug/billing/replay_refund_by_charge", requireSecret, async (req: Req
       });
     }
 
+    // Calculate proportional credit reversal for partial refunds
+    const chargeAmount = charge.amount || 0;
+    const amountRefunded = charge.amount_refunded || 0;
+
+    if (chargeAmount === 0) {
+      return res.json({
+        ok: true,
+        charge_id,
+        userId,
+        creditsDelta: 0,
+        skipped: true,
+        reason: "charge_amount_zero"
+      });
+    }
+
+    const ratio = amountRefunded / chargeAmount;
+    const creditsToReverse = Math.round(credits * ratio);
+
+    if (creditsToReverse <= 0) {
+      return res.json({
+        ok: true,
+        charge_id,
+        userId,
+        creditsDelta: 0,
+        skipped: true,
+        reason: "credits_to_reverse_zero"
+      });
+    }
+
     // Idempotency: use unique key for manual refund replay
     const eventId = `manual_refund:${charge_id}`;
     const eventType = "manual_refund_replay";
@@ -647,18 +726,26 @@ app.get("/debug/billing/replay_refund_by_charge", requireSecret, async (req: Req
         ok: true,
         charge_id,
         userId,
-        creditsDelta: -credits,
+        originalCredits: credits,
+        creditsReversed: creditsToReverse,
+        chargeAmount,
+        amountRefunded,
+        ratio,
         skippedDuplicate: true,
       });
     }
 
-    // Reverse the credits
-    const updated = await addUserCredits(userId, -credits);
+    // Reverse the credits proportionally
+    const updated = await addUserCredits(userId, -creditsToReverse);
 
     console.log("[billing] replay_refund_by_charge reversed credits", {
       charge_id,
       userId,
-      credits,
+      originalCredits: credits,
+      creditsReversed: creditsToReverse,
+      chargeAmount,
+      amountRefunded,
+      ratio,
       totalCredits: updated.total_credits,
       usedCredits: updated.used_credits,
       availableCredits: getAvailableCredits(updated),
@@ -668,7 +755,11 @@ app.get("/debug/billing/replay_refund_by_charge", requireSecret, async (req: Req
       ok: true,
       charge_id,
       userId,
-      creditsDelta: -credits,
+      originalCredits: credits,
+      creditsReversed: creditsToReverse,
+      chargeAmount,
+      amountRefunded,
+      ratio,
       skippedDuplicate: false,
     });
   } catch (e: any) {
