@@ -267,37 +267,199 @@ app.post("/billing/create_checkout", express.json(), async (req: Request, res: R
   }
 });
 
+// Helper to record billing events with idempotency
+async function recordBillingEventOnce(
+  eventId: string,
+  eventType: string,
+  userId: string
+): Promise<boolean> {
+  try {
+    if (USING_POSTGRES) {
+      const result = await dbRun(
+        "INSERT INTO billing_events (event_id, event_type, user_id) VALUES ($1, $2, $3) ON CONFLICT (event_id) DO NOTHING",
+        [eventId, eventType, userId]
+      );
+      return (result.rowCount || 0) > 0;
+    } else {
+      const result = await dbRun(
+        "INSERT OR IGNORE INTO billing_events (event_id, event_type, user_id) VALUES (?, ?, ?)",
+        [eventId, eventType, userId]
+      );
+      return (result.changes || 0) > 0;
+    }
+  } catch (err) {
+    console.error("[billing] failed to record billing event", err);
+    throw err;
+  }
+}
+
+// Shared function to process Stripe billing events
+async function processStripeBillingEvent(event: Stripe.Event): Promise<{ processed: boolean; reason?: string }> {
+  if (!stripe) {
+    return { processed: false, reason: "stripe_not_configured" };
+  }
+
+  const eventType = event.type;
+  const eventId = event.id;
+
+  // Handle checkout.session.completed
+  if (eventType === "checkout.session.completed") {
+    const session = event.data.object as Stripe.Checkout.Session;
+
+    // Determine userId from session
+    const userIdFromClientRef = session.client_reference_id;
+    const userIdFromMetadata =
+      (session.metadata && (session.metadata as any).userId) || null;
+    const userId = (userIdFromClientRef || userIdFromMetadata || "").toString().trim();
+
+    if (!userId) {
+      console.warn("[billing] webhook: missing userId on session", session.id);
+      return { processed: false, reason: "missing_userId" };
+    }
+
+    // Read purchaseType and credits from metadata
+    const purchaseType = (session.metadata?.purchaseType || "topup").toString().trim();
+    const creditsStr = (session.metadata?.credits || "100").toString().trim();
+    const credits = parseInt(creditsStr, 10);
+
+    // Record billing event first for idempotency
+    let isNewEvent = false;
+    try {
+      isNewEvent = await recordBillingEventOnce(eventId, eventType, userId);
+    } catch (err) {
+      console.error("[billing] failed to record billing event", err);
+      throw err;
+    }
+
+    // If duplicate event, return success without crediting
+    if (!isNewEvent) {
+      console.log("[billing] webhook duplicate event detected", {
+        eventId,
+        userId,
+      });
+      return { processed: false, reason: "duplicate_event" };
+    }
+
+    // Only credit if purchaseType === "topup" AND credits > 0
+    if (purchaseType === "topup" && credits > 0) {
+      const updated = await addUserCredits(userId, credits);
+
+      const totalCredits = updated.total_credits;
+      const usedCredits = updated.used_credits;
+      const availableCredits = getAvailableCredits(updated);
+
+      console.log("[billing] webhook credited", {
+        userId,
+        creditsAdded: credits,
+        totalCredits,
+        usedCredits,
+        availableCredits,
+        stripeEventId: eventId,
+        purchaseType,
+      });
+      return { processed: true };
+    } else {
+      console.log("[billing] webhook: skipped crediting (not a topup or credits=0)", {
+        userId,
+        purchaseType,
+        credits,
+        eventId,
+      });
+      return { processed: false, reason: "not_topup_or_zero_credits" };
+    }
+  }
+
+  // Handle charge.refunded
+  if (eventType === "charge.refunded") {
+    const charge = event.data.object as Stripe.Charge;
+
+    // Read userId and credits from charge metadata
+    let userId = (charge.metadata?.userId || "").toString().trim();
+    let creditsStr = (charge.metadata?.credits || "").toString().trim();
+
+    // Fallback to PaymentIntent metadata if charge metadata is empty
+    if ((!userId || !creditsStr) && charge.payment_intent && stripe) {
+      try {
+        // Determine piId (can be string or object)
+        const piId = typeof charge.payment_intent === "string"
+          ? charge.payment_intent
+          : (charge.payment_intent as any).id;
+
+        if (piId) {
+          const pi = await stripe.paymentIntents.retrieve(piId);
+          userId = userId || (pi.metadata?.userId || "").toString().trim();
+          creditsStr = creditsStr || (pi.metadata?.credits || "").toString().trim();
+
+          console.log("[billing] refund metadata fallback", {
+            chargeId: charge.id,
+            piId,
+            hasUserId: !!userId,
+            hasCredits: !!creditsStr,
+          });
+        }
+      } catch (err) {
+        console.error("[billing] failed to retrieve payment intent for refund fallback", err);
+      }
+    }
+
+    const credits = parseInt(creditsStr, 10);
+
+    if (!userId || !creditsStr || isNaN(credits)) {
+      console.log("[billing] refund missing metadata", {
+        eventId,
+        chargeId: charge.id,
+        payment_intent: charge.payment_intent,
+      });
+      return { processed: false, reason: "missing_metadata" };
+    }
+
+    // Record billing event first for idempotency
+    let isNewEvent = false;
+    try {
+      isNewEvent = await recordBillingEventOnce(eventId, eventType, userId);
+    } catch (err) {
+      console.error("[billing] failed to record billing event", err);
+      throw err;
+    }
+
+    // If duplicate event, return success without reversing credits
+    if (!isNewEvent) {
+      console.log("[billing] webhook duplicate refund event detected", {
+        eventId,
+        userId,
+        chargeId: charge.id,
+      });
+      return { processed: false, reason: "duplicate_event" };
+    }
+
+    // Reverse the top-up credits by adding negative credits
+    const updated = await addUserCredits(userId, -credits);
+
+    const totalCredits = updated.total_credits;
+    const usedCredits = updated.used_credits;
+    const availableCredits = getAvailableCredits(updated);
+
+    console.log("[billing] refund reversed credits", {
+      userId,
+      credits,
+      totalCredits,
+      usedCredits,
+      availableCredits,
+      eventId,
+      chargeId: charge.id,
+    });
+    return { processed: true };
+  }
+
+  return { processed: false, reason: "unhandled_event_type" };
+}
+
 // Billing — Stripe webhook (test mode, signature-verified)
 app.post(
   "/billing/webhook",
   // Stripe requires the raw request body for signature verification.
   express.raw({ type: "application/json" }),
   async (req: Request, res: Response) => {
-    // Helper to record billing events with idempotency
-    async function recordBillingEventOnce(
-      eventId: string,
-      eventType: string,
-      userId: string
-    ): Promise<boolean> {
-      try {
-        if (USING_POSTGRES) {
-          const result = await dbRun(
-            "INSERT INTO billing_events (event_id, event_type, user_id) VALUES ($1, $2, $3) ON CONFLICT (event_id) DO NOTHING",
-            [eventId, eventType, userId]
-          );
-          return (result.rowCount || 0) > 0;
-        } else {
-          const result = await dbRun(
-            "INSERT OR IGNORE INTO billing_events (event_id, event_type, user_id) VALUES (?, ?, ?)",
-            [eventId, eventType, userId]
-          );
-          return (result.changes || 0) > 0;
-        }
-      } catch (err) {
-        console.error("[billing] failed to record billing event", err);
-        throw err;
-      }
-    }
 
     try {
       if (!stripe || !STRIPE_WEBHOOK_SECRET) {
@@ -340,151 +502,8 @@ app.post(
         eventId,
       });
 
-      // Handle checkout.session.completed
-      if (eventType === "checkout.session.completed") {
-        const session = event.data.object as Stripe.Checkout.Session;
-
-        // Determine userId from session
-        const userIdFromClientRef = session.client_reference_id;
-        const userIdFromMetadata =
-          (session.metadata && (session.metadata as any).userId) || null;
-        const userId = (userIdFromClientRef || userIdFromMetadata || "").toString().trim();
-
-        if (!userId) {
-          console.warn("[billing] webhook: missing userId on session", session.id);
-          return res.json({ received: true });
-        }
-
-        // Read purchaseType and credits from metadata
-        const purchaseType = (session.metadata?.purchaseType || "topup").toString().trim();
-        const creditsStr = (session.metadata?.credits || "100").toString().trim();
-        const credits = parseInt(creditsStr, 10);
-
-        // Record billing event first for idempotency
-        let isNewEvent = false;
-        try {
-          isNewEvent = await recordBillingEventOnce(eventId, eventType, userId);
-        } catch (err) {
-          console.error("[billing] failed to record billing event", err);
-          return res.status(500).json({ ok: false, error: "event_recording_failed" });
-        }
-
-        // If duplicate event, return success without crediting
-        if (!isNewEvent) {
-          console.log("[billing] webhook duplicate event detected", {
-            eventId,
-            userId,
-          });
-          return res.json({ received: true, duplicate: true });
-        }
-
-        // Only credit if purchaseType === "topup" AND credits > 0
-        if (purchaseType === "topup" && credits > 0) {
-          const updated = await addUserCredits(userId, credits);
-
-          const totalCredits = updated.total_credits;
-          const usedCredits = updated.used_credits;
-          const availableCredits = getAvailableCredits(updated);
-
-          console.log("[billing] webhook credited", {
-            userId,
-            creditsAdded: credits,
-            totalCredits,
-            usedCredits,
-            availableCredits,
-            stripeEventId: eventId,
-            purchaseType,
-          });
-        } else {
-          console.log("[billing] webhook: skipped crediting (not a topup or credits=0)", {
-            userId,
-            purchaseType,
-            credits,
-            eventId,
-          });
-        }
-      }
-
-      // Handle charge.refunded
-      if (eventType === "charge.refunded") {
-        const charge = event.data.object as Stripe.Charge;
-
-        // Read userId and credits from charge metadata
-        let userId = (charge.metadata?.userId || "").toString().trim();
-        let creditsStr = (charge.metadata?.credits || "").toString().trim();
-
-        // Fallback to PaymentIntent metadata if charge metadata is empty
-        if ((!userId || !creditsStr) && charge.payment_intent && stripe) {
-          try {
-            // Determine piId (can be string or object)
-            const piId = typeof charge.payment_intent === "string"
-              ? charge.payment_intent
-              : (charge.payment_intent as any).id;
-
-            if (piId) {
-              const pi = await stripe.paymentIntents.retrieve(piId);
-              userId = userId || (pi.metadata?.userId || "").toString().trim();
-              creditsStr = creditsStr || (pi.metadata?.credits || "").toString().trim();
-
-              console.log("[billing] refund metadata fallback", {
-                chargeId: charge.id,
-                piId,
-                hasUserId: !!userId,
-                hasCredits: !!creditsStr,
-              });
-            }
-          } catch (err) {
-            console.error("[billing] failed to retrieve payment intent for refund fallback", err);
-          }
-        }
-
-        const credits = parseInt(creditsStr, 10);
-
-        if (!userId || !creditsStr || isNaN(credits)) {
-          console.log("[billing] refund missing metadata", {
-            eventId,
-            chargeId: charge.id,
-            payment_intent: charge.payment_intent,
-          });
-          return res.json({ received: true });
-        }
-
-        // Record billing event first for idempotency
-        let isNewEvent = false;
-        try {
-          isNewEvent = await recordBillingEventOnce(eventId, eventType, userId);
-        } catch (err) {
-          console.error("[billing] failed to record billing event", err);
-          return res.status(500).json({ ok: false, error: "event_recording_failed" });
-        }
-
-        // If duplicate event, return success without reversing credits
-        if (!isNewEvent) {
-          console.log("[billing] webhook duplicate refund event detected", {
-            eventId,
-            userId,
-            chargeId: charge.id,
-          });
-          return res.json({ received: true, duplicate: true });
-        }
-
-        // Reverse the top-up credits by adding negative credits
-        const updated = await addUserCredits(userId, -credits);
-
-        const totalCredits = updated.total_credits;
-        const usedCredits = updated.used_credits;
-        const availableCredits = getAvailableCredits(updated);
-
-        console.log("[billing] refund reversed credits", {
-          userId,
-          credits,
-          totalCredits,
-          usedCredits,
-          availableCredits,
-          eventId,
-          chargeId: charge.id,
-        });
-      }
+      // Process the event using shared logic
+      await processStripeBillingEvent(event);
 
       return res.json({ received: true });
     } catch (e: any) {
@@ -493,6 +512,54 @@ app.post(
     }
   }
 );
+
+// Debug endpoint to replay a Stripe event by ID
+app.get("/debug/billing/replay_event", requireSecret, async (req: Request, res: Response) => {
+  try {
+    const event_id = String(req.query.event_id || "").trim();
+
+    if (!event_id) {
+      return res.status(400).json({ ok: false, error: "missing_event_id" });
+    }
+
+    if (!stripe) {
+      return res.status(400).json({ ok: false, error: "stripe_not_configured" });
+    }
+
+    // Retrieve the event from Stripe
+    let event: Stripe.Event;
+    try {
+      event = await stripe.events.retrieve(event_id);
+    } catch (err: any) {
+      console.error("[billing] replay_event failed to retrieve event", err);
+      return res.status(404).json({
+        ok: false,
+        error: "event_not_found",
+        message: err?.message || String(err),
+      });
+    }
+
+    console.log("[billing] replay_event", { event_id, type: event.type });
+
+    // Process the event using shared logic (idempotency is handled inside)
+    const result = await processStripeBillingEvent(event);
+
+    return res.json({
+      ok: true,
+      event_id,
+      event_type: event.type,
+      processed: result.processed,
+      reason: result.reason,
+    });
+  } catch (e: any) {
+    console.error("[billing] replay_event error", e);
+    return res.status(500).json({
+      ok: false,
+      error: "replay_failed",
+      message: e?.message || String(e),
+    });
+  }
+});
 
 // ---- In-memory store (fallback + rendered assets)
 type Line = { speaker: string; text: string };
