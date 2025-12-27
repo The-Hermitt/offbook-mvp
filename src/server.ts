@@ -203,14 +203,6 @@ app.post("/billing/create_checkout", express.json(), async (req: Request, res: R
     const body = (req.body || {}) as { planId?: string };
     const planId = body.planId || "credits-100";
 
-    const priceId = process.env.STRIPE_PRICE_TOPUP_100;
-    if (!priceId) {
-      return res.status(500).json({
-        ok: false,
-        error: "missing_price_id",
-      });
-    }
-
     const { passkeyLoggedIn, userId } = getPasskeySession(req);
     if (!passkeyLoggedIn || !userId) {
       return res.status(401).json({
@@ -224,6 +216,57 @@ app.post("/billing/create_checkout", express.json(), async (req: Request, res: R
     const cancelUrl =
       process.env.STRIPE_CANCEL_URL ||
       "https://example.com/offbook-cancel";
+
+    // Handle Pro Monthly subscription
+    if (planId === "pro-monthly") {
+      const priceId = process.env.STRIPE_PRICE_PRO_MONTHLY;
+      if (!priceId) {
+        return res.status(500).json({
+          ok: false,
+          error: "missing_stripe_price_pro_monthly",
+        });
+      }
+
+      const metadata = {
+        userId,
+        planId,
+        purchaseType: "subscription",
+      };
+
+      const session = await stripe.checkout.sessions.create({
+        mode: "subscription",
+        line_items: [
+          {
+            price: priceId,
+            quantity: 1,
+          },
+        ],
+        success_url: successUrl,
+        cancel_url: cancelUrl,
+        client_reference_id: userId,
+        metadata,
+        subscription_data: {
+          metadata,
+        },
+      });
+
+      console.log("[billing] stripe checkout session=%s plan=%s mode=subscription", session.id, planId);
+
+      return res.json({
+        ok: true,
+        checkout_url: session.url,
+        mode: "stripe_subscription",
+      });
+    }
+
+    // Handle top-up credits (existing behavior)
+    const priceId = process.env.STRIPE_PRICE_TOPUP_100;
+    if (!priceId) {
+      return res.status(500).json({
+        ok: false,
+        error: "missing_price_id",
+      });
+    }
 
     const metadata = {
       userId,
@@ -259,6 +302,71 @@ app.post("/billing/create_checkout", express.json(), async (req: Request, res: R
     });
   } catch (e: any) {
     console.error("[billing] create_checkout error", e);
+    const msg = e?.message || String(e);
+    return res.status(500).json({
+      ok: false,
+      error: msg.slice(0, 200),
+    });
+  }
+});
+
+// Customer portal session endpoint
+app.post("/billing/create_portal", express.json(), async (req: Request, res: Response) => {
+  try {
+    if (!stripe) {
+      return res.status(500).json({
+        ok: false,
+        error: "stripe_not_configured",
+      });
+    }
+
+    const { passkeyLoggedIn, userId } = getPasskeySession(req);
+    if (!passkeyLoggedIn || !userId) {
+      return res.status(401).json({
+        error: "Sign in with a passkey to manage your subscription.",
+      });
+    }
+
+    // Load stripe_customer_id from user_billing
+    const userBilling = await dbGet<{
+      stripe_customer_id: string | null;
+    }>(
+      `SELECT stripe_customer_id FROM user_billing WHERE user_id = ?`,
+      [userId]
+    );
+
+    const stripeCustomerId = userBilling?.stripe_customer_id;
+    if (!stripeCustomerId) {
+      return res.status(400).json({
+        ok: false,
+        error: "no_customer_id",
+        message: "No subscription found for this user.",
+      });
+    }
+
+    // Determine return URL
+    const returnUrl = process.env.STRIPE_PORTAL_RETURN_URL ||
+                     process.env.STRIPE_SUCCESS_URL ||
+                     "https://example.com/offbook";
+
+    // Create portal session
+    const portalSession = await stripe.billingPortal.sessions.create({
+      customer: stripeCustomerId,
+      return_url: returnUrl,
+    });
+
+    console.log("[billing] created portal session", {
+      userId,
+      stripeCustomerId,
+      portalSessionId: portalSession.id,
+    });
+
+    return res.json({
+      ok: true,
+      url: portalSession.url,
+    });
+  } catch (e: any) {
+    console.error("[billing] create_portal error", e);
     const msg = e?.message || String(e);
     return res.status(500).json({
       ok: false,
@@ -338,6 +446,83 @@ async function processStripeBillingEvent(event: Stripe.Event): Promise<{ process
         userId,
       });
       return { processed: false, reason: "duplicate_event" };
+    }
+
+    // Handle subscription checkout
+    if (purchaseType === "subscription") {
+      const stripeCustomerId = session.customer ? session.customer.toString() : null;
+      const stripeSubscriptionId = session.subscription ? session.subscription.toString() : null;
+
+      if (!stripeCustomerId || !stripeSubscriptionId) {
+        console.error("[billing] subscription checkout missing customer or subscription", {
+          eventId,
+          userId,
+          stripeCustomerId,
+          stripeSubscriptionId,
+        });
+        return { processed: false, reason: "missing_subscription_data" };
+      }
+
+      // Retrieve subscription to get period info
+      let subscription: Stripe.Subscription | null = null;
+      try {
+        subscription = await stripe.subscriptions.retrieve(stripeSubscriptionId);
+      } catch (err) {
+        console.error("[billing] failed to retrieve subscription", err);
+      }
+
+      const status = subscription?.status || "active";
+      const currentPeriodStart = subscription ? (subscription as any).current_period_start : null;
+      const currentPeriodEnd = subscription ? (subscription as any).current_period_end : null;
+
+      // Upsert user_billing record
+      if (USING_POSTGRES) {
+        await dbRun(
+          `INSERT INTO user_billing
+            (user_id, plan, status, stripe_customer_id, stripe_subscription_id, current_period_start, current_period_end, included_quota, renders_used, updated_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
+           ON CONFLICT (user_id) DO UPDATE SET
+            plan = EXCLUDED.plan,
+            status = EXCLUDED.status,
+            stripe_customer_id = EXCLUDED.stripe_customer_id,
+            stripe_subscription_id = EXCLUDED.stripe_subscription_id,
+            current_period_start = EXCLUDED.current_period_start,
+            current_period_end = EXCLUDED.current_period_end,
+            included_quota = EXCLUDED.included_quota,
+            renders_used = EXCLUDED.renders_used,
+            updated_at = NOW()`,
+          [userId, "pro", status, stripeCustomerId, stripeSubscriptionId, currentPeriodStart, currentPeriodEnd, 120, 0]
+        );
+      } else {
+        await dbRun(
+          `INSERT INTO user_billing
+            (user_id, plan, status, stripe_customer_id, stripe_subscription_id, current_period_start, current_period_end, included_quota, renders_used, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+           ON CONFLICT (user_id) DO UPDATE SET
+            plan = excluded.plan,
+            status = excluded.status,
+            stripe_customer_id = excluded.stripe_customer_id,
+            stripe_subscription_id = excluded.stripe_subscription_id,
+            current_period_start = excluded.current_period_start,
+            current_period_end = excluded.current_period_end,
+            included_quota = excluded.included_quota,
+            renders_used = excluded.renders_used,
+            updated_at = datetime('now')`,
+          [userId, "pro", status, stripeCustomerId, stripeSubscriptionId, currentPeriodStart, currentPeriodEnd, 120, 0]
+        );
+      }
+
+      console.log("[billing] subscription created", {
+        userId,
+        stripeCustomerId,
+        stripeSubscriptionId,
+        status,
+        currentPeriodStart,
+        currentPeriodEnd,
+        eventId,
+      });
+
+      return { processed: true };
     }
 
     // Only credit if purchaseType === "topup" AND credits > 0
@@ -482,6 +667,225 @@ async function processStripeBillingEvent(event: Stripe.Event): Promise<{ process
       eventId,
       chargeId: charge.id,
     });
+    return { processed: true };
+  }
+
+  // Handle invoice.payment_succeeded (subscription renewal)
+  if (eventType === "invoice.payment_succeeded") {
+    const invoice = event.data.object as Stripe.Invoice;
+    const stripeSubscriptionId = (invoice as any).subscription ? (invoice as any).subscription.toString() : null;
+
+    if (!stripeSubscriptionId) {
+      console.log("[billing] invoice.payment_succeeded without subscription", { eventId });
+      return { processed: false, reason: "no_subscription" };
+    }
+
+    // Retrieve subscription to get userId from metadata
+    let subscription: Stripe.Subscription | null = null;
+    try {
+      subscription = await stripe.subscriptions.retrieve(stripeSubscriptionId);
+    } catch (err) {
+      console.error("[billing] failed to retrieve subscription for invoice", err);
+      return { processed: false, reason: "subscription_retrieval_failed" };
+    }
+
+    const userId = (subscription.metadata?.userId || "").toString().trim();
+    if (!userId) {
+      console.error("[billing] subscription missing userId in metadata", {
+        eventId,
+        stripeSubscriptionId,
+      });
+      return { processed: false, reason: "missing_userId" };
+    }
+
+    // Record billing event for idempotency
+    let isNewEvent = false;
+    try {
+      isNewEvent = await recordBillingEventOnce(eventId, eventType, userId);
+    } catch (err) {
+      console.error("[billing] failed to record billing event", err);
+      throw err;
+    }
+
+    if (!isNewEvent) {
+      console.log("[billing] webhook duplicate invoice event detected", {
+        eventId,
+        userId,
+      });
+      return { processed: false, reason: "duplicate_event" };
+    }
+
+    // Update subscription status and reset monthly counter
+    const status = subscription.status || "active";
+    const currentPeriodStart = (subscription as any).current_period_start || null;
+    const currentPeriodEnd = (subscription as any).current_period_end || null;
+
+    if (USING_POSTGRES) {
+      await dbRun(
+        `UPDATE user_billing
+         SET status = $1,
+             current_period_start = $2,
+             current_period_end = $3,
+             renders_used = 0,
+             updated_at = NOW()
+         WHERE user_id = $4`,
+        [status, currentPeriodStart, currentPeriodEnd, userId]
+      );
+    } else {
+      await dbRun(
+        `UPDATE user_billing
+         SET status = ?,
+             current_period_start = ?,
+             current_period_end = ?,
+             renders_used = 0,
+             updated_at = datetime('now')
+         WHERE user_id = ?`,
+        [status, currentPeriodStart, currentPeriodEnd, userId]
+      );
+    }
+
+    console.log("[billing] invoice.payment_succeeded - subscription renewed", {
+      userId,
+      stripeSubscriptionId,
+      status,
+      currentPeriodStart,
+      currentPeriodEnd,
+      eventId,
+    });
+
+    return { processed: true };
+  }
+
+  // Handle invoice.payment_failed
+  if (eventType === "invoice.payment_failed") {
+    const invoice = event.data.object as Stripe.Invoice;
+    const stripeSubscriptionId = (invoice as any).subscription ? (invoice as any).subscription.toString() : null;
+
+    if (!stripeSubscriptionId) {
+      console.log("[billing] invoice.payment_failed without subscription", { eventId });
+      return { processed: false, reason: "no_subscription" };
+    }
+
+    // Retrieve subscription to get userId from metadata
+    let subscription: Stripe.Subscription | null = null;
+    try {
+      subscription = await stripe.subscriptions.retrieve(stripeSubscriptionId);
+    } catch (err) {
+      console.error("[billing] failed to retrieve subscription for failed invoice", err);
+      return { processed: false, reason: "subscription_retrieval_failed" };
+    }
+
+    const userId = (subscription.metadata?.userId || "").toString().trim();
+    if (!userId) {
+      console.error("[billing] subscription missing userId in metadata", {
+        eventId,
+        stripeSubscriptionId,
+      });
+      return { processed: false, reason: "missing_userId" };
+    }
+
+    // Record billing event for idempotency
+    let isNewEvent = false;
+    try {
+      isNewEvent = await recordBillingEventOnce(eventId, eventType, userId);
+    } catch (err) {
+      console.error("[billing] failed to record billing event", err);
+      throw err;
+    }
+
+    if (!isNewEvent) {
+      console.log("[billing] webhook duplicate invoice failed event detected", {
+        eventId,
+        userId,
+      });
+      return { processed: false, reason: "duplicate_event" };
+    }
+
+    // Mark subscription as past_due
+    if (USING_POSTGRES) {
+      await dbRun(
+        `UPDATE user_billing
+         SET status = $1,
+             updated_at = NOW()
+         WHERE user_id = $2`,
+        ["past_due", userId]
+      );
+    } else {
+      await dbRun(
+        `UPDATE user_billing
+         SET status = ?,
+             updated_at = datetime('now')
+         WHERE user_id = ?`,
+        ["past_due", userId]
+      );
+    }
+
+    console.log("[billing] invoice.payment_failed - subscription marked past_due", {
+      userId,
+      stripeSubscriptionId,
+      eventId,
+    });
+
+    return { processed: true };
+  }
+
+  // Handle customer.subscription.deleted
+  if (eventType === "customer.subscription.deleted") {
+    const subscription = event.data.object as Stripe.Subscription;
+    const userId = (subscription.metadata?.userId || "").toString().trim();
+
+    if (!userId) {
+      console.error("[billing] subscription.deleted missing userId in metadata", {
+        eventId,
+        subscriptionId: subscription.id,
+      });
+      return { processed: false, reason: "missing_userId" };
+    }
+
+    // Record billing event for idempotency
+    let isNewEvent = false;
+    try {
+      isNewEvent = await recordBillingEventOnce(eventId, eventType, userId);
+    } catch (err) {
+      console.error("[billing] failed to record billing event", err);
+      throw err;
+    }
+
+    if (!isNewEvent) {
+      console.log("[billing] webhook duplicate subscription.deleted event detected", {
+        eventId,
+        userId,
+      });
+      return { processed: false, reason: "duplicate_event" };
+    }
+
+    // Mark subscription as canceled but keep customer_id
+    if (USING_POSTGRES) {
+      await dbRun(
+        `UPDATE user_billing
+         SET plan = $1,
+             status = $2,
+             updated_at = NOW()
+         WHERE user_id = $3`,
+        ["none", "canceled", userId]
+      );
+    } else {
+      await dbRun(
+        `UPDATE user_billing
+         SET plan = ?,
+             status = ?,
+             updated_at = datetime('now')
+         WHERE user_id = ?`,
+        ["none", "canceled", userId]
+      );
+    }
+
+    console.log("[billing] subscription.deleted - subscription canceled", {
+      userId,
+      subscriptionId: subscription.id,
+      eventId,
+    });
+
     return { processed: true };
   }
 

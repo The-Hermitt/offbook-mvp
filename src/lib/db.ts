@@ -214,6 +214,22 @@ export async function ensureSchema(): Promise<void> {
       )
     `);
 
+    // User billing table (for subscription management)
+    await dbExec(`
+      CREATE TABLE IF NOT EXISTS user_billing (
+        user_id TEXT PRIMARY KEY,
+        plan TEXT NOT NULL DEFAULT 'none',
+        status TEXT NOT NULL DEFAULT 'inactive',
+        stripe_customer_id TEXT,
+        stripe_subscription_id TEXT,
+        current_period_start ${USING_POSTGRES ? 'BIGINT' : 'INTEGER'},
+        current_period_end ${USING_POSTGRES ? 'BIGINT' : 'INTEGER'},
+        included_quota ${USING_POSTGRES ? 'INTEGER' : 'INTEGER'} NOT NULL DEFAULT 0,
+        renders_used ${USING_POSTGRES ? 'INTEGER' : 'INTEGER'} NOT NULL DEFAULT 0,
+        updated_at ${USING_POSTGRES ? 'TIMESTAMP DEFAULT NOW()' : "TEXT NOT NULL DEFAULT (datetime('now'))"}
+      )
+    `);
+
     // Device link codes table (for multi-device passkey linking)
     await dbExec(`
       CREATE TABLE IF NOT EXISTS device_link_codes (

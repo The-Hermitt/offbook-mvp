@@ -121,24 +121,67 @@ export async function noteRenderComplete(req: express.Request) {
     credits
   );
   const userId = deriveUserId(sess) || sess.userId || `anon:${sid}`;
-  try {
-    const beforeDb = await getAvailableCreditsForUser(userId);
-    if (beforeDb > 0) {
-      const updated = await spendUserCredits(userId, 1);
-      const afterDb = updated
-        ? updated.total_credits - updated.used_credits
-        : await getAvailableCreditsForUser(userId);
 
-      console.log("[credits] db spend after render", {
+  // Check if user has Pro subscription and consume included quota first
+  let consumedFromSubscription = false;
+  try {
+    const userBilling = await dbGet<{
+      plan: string;
+      status: string;
+      included_quota: number;
+      renders_used: number;
+    }>(
+      `SELECT plan, status, included_quota, renders_used
+       FROM user_billing
+       WHERE user_id = ?`,
+      [userId]
+    );
+
+    if (userBilling &&
+        userBilling.plan === "pro" &&
+        (userBilling.status === "active" || userBilling.status === "trialing") &&
+        userBilling.renders_used < userBilling.included_quota) {
+      // Increment renders_used in user_billing
+      await dbRun(
+        `UPDATE user_billing
+         SET renders_used = renders_used + 1
+         WHERE user_id = ?`,
+        [userId]
+      );
+
+      consumedFromSubscription = true;
+
+      console.log("[credits] consumed Pro included quota", {
         userId,
-        beforeDb,
-        afterDb,
+        rendersUsed: userBilling.renders_used + 1,
+        includedQuota: userBilling.included_quota,
       });
-    } else {
-      console.log("[credits] db spend after render: no db credits for user", userId);
     }
   } catch (err) {
-    console.error("[credits] db spend after render failed", err);
+    console.error("[credits] failed to check/consume Pro quota", err);
+  }
+
+  // Only spend top-up credits if we didn't consume from subscription
+  if (!consumedFromSubscription) {
+    try {
+      const beforeDb = await getAvailableCreditsForUser(userId);
+      if (beforeDb > 0) {
+        const updated = await spendUserCredits(userId, 1);
+        const afterDb = updated
+          ? updated.total_credits - updated.used_credits
+          : await getAvailableCreditsForUser(userId);
+
+        console.log("[credits] db spend after render", {
+          userId,
+          beforeDb,
+          afterDb,
+        });
+      } else {
+        console.log("[credits] db spend after render: no db credits for user", userId);
+      }
+    } catch (err) {
+      console.error("[credits] db spend after render failed", err);
+    }
   }
 }
 
@@ -296,6 +339,14 @@ router.get("/session", async (req, res) => {
   }
 
   let dbCredits = 0;
+  let userBilling: {
+    plan: string;
+    status: string;
+    included_quota: number;
+    renders_used: number;
+    current_period_start: number | null;
+    current_period_end: number | null;
+  } | null = null;
 
   if (userId) {
     try {
@@ -307,18 +358,51 @@ router.get("/session", async (req, res) => {
         err
       );
     }
+
+    // Load subscription data if user is logged in with passkey
+    if (passkeyLoggedIn) {
+      try {
+        userBilling = await dbGet<{
+          plan: string;
+          status: string;
+          included_quota: number;
+          renders_used: number;
+          current_period_start: number | null;
+          current_period_end: number | null;
+        }>(
+          `SELECT plan, status, included_quota, renders_used, current_period_start, current_period_end
+           FROM user_billing
+           WHERE user_id = ?`,
+          [userId]
+        );
+      } catch (err) {
+        console.error("[auth/session] failed to read user_billing for userId=%s", userId, err);
+      }
+    }
   }
 
   const stripeEnabled = Boolean((process.env.STRIPE_SECRET_KEY || "").trim());
   const sessionCredits = stripeEnabled ? 0 : ((passkeyLoggedIn || allowAnon) ? (sess?.creditsAvailable ?? 0) : 0);
   const combinedCredits = (passkeyLoggedIn || allowAnon) ? (sessionCredits + dbCredits) : 0;
 
+  // Override entitlement fields if user has subscription
+  const plan = userBilling?.plan || sess?.plan || "none";
+  const includedQuota = userBilling?.included_quota ?? INCLUDED_RENDERS_PER_MONTH;
+  const rendersUsed = userBilling?.renders_used ?? sess?.rendersUsed ?? 0;
+  const periodStart = userBilling?.current_period_start ?? sess?.periodStart ?? null;
+  const periodEnd = userBilling?.current_period_end ?? sess?.periodEnd ?? null;
+
   if (passkeyLoggedIn) {
     console.log("[auth/session] entitlement snapshot", {
       userId,
+      plan,
       dbCredits,
       sessionCredits,
       combinedCredits,
+      includedQuota,
+      rendersUsed,
+      periodStart,
+      periodEnd,
     });
   }
 
@@ -334,12 +418,12 @@ router.get("/session", async (req, res) => {
       loggedIn: passkeyLoggedIn,
     },
     entitlement: {
-      plan: sess?.plan || "none",
-      included_quota: INCLUDED_RENDERS_PER_MONTH,
-      renders_used: sess?.rendersUsed ?? 0,
+      plan,
+      included_quota: includedQuota,
+      renders_used: rendersUsed,
       credits_available: combinedCredits,
-      period_start: sess?.periodStart || null,
-      period_end: sess?.periodEnd || null,
+      period_start: periodStart,
+      period_end: periodEnd,
     },
   });
 });
