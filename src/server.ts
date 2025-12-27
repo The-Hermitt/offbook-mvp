@@ -410,16 +410,41 @@ app.post(
         const charge = event.data.object as Stripe.Charge;
 
         // Read userId and credits from charge metadata
-        const userId = (charge.metadata?.userId || "").toString().trim();
-        const creditsStr = (charge.metadata?.credits || "").toString().trim();
+        let userId = (charge.metadata?.userId || "").toString().trim();
+        let creditsStr = (charge.metadata?.credits || "").toString().trim();
+
+        // Fallback to PaymentIntent metadata if charge metadata is empty
+        if ((!userId || !creditsStr) && charge.payment_intent && stripe) {
+          try {
+            // Determine piId (can be string or object)
+            const piId = typeof charge.payment_intent === "string"
+              ? charge.payment_intent
+              : (charge.payment_intent as any).id;
+
+            if (piId) {
+              const pi = await stripe.paymentIntents.retrieve(piId);
+              userId = userId || (pi.metadata?.userId || "").toString().trim();
+              creditsStr = creditsStr || (pi.metadata?.credits || "").toString().trim();
+
+              console.log("[billing] refund metadata fallback", {
+                chargeId: charge.id,
+                piId,
+                hasUserId: !!userId,
+                hasCredits: !!creditsStr,
+              });
+            }
+          } catch (err) {
+            console.error("[billing] failed to retrieve payment intent for refund fallback", err);
+          }
+        }
+
         const credits = parseInt(creditsStr, 10);
 
-        if (!userId || !credits || isNaN(credits)) {
-          console.log("[billing] webhook: skipping refund (missing userId or credits)", {
+        if (!userId || !creditsStr || isNaN(credits)) {
+          console.log("[billing] refund missing metadata", {
             eventId,
             chargeId: charge.id,
-            userId: userId || "(missing)",
-            credits: creditsStr || "(missing)",
+            payment_intent: charge.payment_intent,
           });
           return res.json({ received: true });
         }
