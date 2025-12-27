@@ -225,6 +225,14 @@ app.post("/billing/create_checkout", express.json(), async (req: Request, res: R
       process.env.STRIPE_CANCEL_URL ||
       "https://example.com/offbook-cancel";
 
+    const metadata = {
+      userId,
+      planId,
+      purchaseType: "topup",
+      credits: "100",
+      priceId,
+    };
+
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
       line_items: [
@@ -236,9 +244,9 @@ app.post("/billing/create_checkout", express.json(), async (req: Request, res: R
       success_url: successUrl,
       cancel_url: cancelUrl,
       client_reference_id: userId,
-      metadata: {
-        userId,
-        planId,
+      metadata,
+      payment_intent_data: {
+        metadata,
       },
     });
 
@@ -265,6 +273,32 @@ app.post(
   // Stripe requires the raw request body for signature verification.
   express.raw({ type: "application/json" }),
   async (req: Request, res: Response) => {
+    // Helper to record billing events with idempotency
+    async function recordBillingEventOnce(
+      eventId: string,
+      eventType: string,
+      userId: string
+    ): Promise<boolean> {
+      try {
+        if (USING_POSTGRES) {
+          const result = await dbRun(
+            "INSERT INTO billing_events (event_id, event_type, user_id) VALUES ($1, $2, $3) ON CONFLICT (event_id) DO NOTHING",
+            [eventId, eventType, userId]
+          );
+          return (result.rowCount || 0) > 0;
+        } else {
+          const result = await dbRun(
+            "INSERT OR IGNORE INTO billing_events (event_id, event_type, user_id) VALUES (?, ?, ?)",
+            [eventId, eventType, userId]
+          );
+          return (result.changes || 0) > 0;
+        }
+      } catch (err) {
+        console.error("[billing] failed to record billing event", err);
+        throw err;
+      }
+    }
+
     try {
       if (!stripe || !STRIPE_WEBHOOK_SECRET) {
         console.warn(
@@ -306,42 +340,32 @@ app.post(
         eventId,
       });
 
-      // For now we treat any successful checkout as a 100-credit top-up
-      // for the single dev user. Later this will map to the real user id.
+      // Handle checkout.session.completed
       if (eventType === "checkout.session.completed") {
         const session = event.data.object as Stripe.Checkout.Session;
 
+        // Determine userId from session
         const userIdFromClientRef = session.client_reference_id;
         const userIdFromMetadata =
           (session.metadata && (session.metadata as any).userId) || null;
         const userId = (userIdFromClientRef || userIdFromMetadata || "").toString().trim();
 
         if (!userId) {
-          console.warn("Stripe webhook: missing userId on session", session.id);
+          console.warn("[billing] webhook: missing userId on session", session.id);
           return res.json({ received: true });
         }
 
-        // Idempotency check: attempt to record the event
+        // Read purchaseType and credits from metadata
+        const purchaseType = (session.metadata?.purchaseType || "topup").toString().trim();
+        const creditsStr = (session.metadata?.credits || "100").toString().trim();
+        const credits = parseInt(creditsStr, 10);
+
+        // Record billing event first for idempotency
         let isNewEvent = false;
         try {
-          if (USING_POSTGRES) {
-            // Postgres: INSERT ... ON CONFLICT DO NOTHING
-            const result = await dbRun(
-              "INSERT INTO billing_events (event_id, event_type, user_id) VALUES ($1, $2, $3) ON CONFLICT (event_id) DO NOTHING",
-              [eventId, eventType, userId]
-            );
-            isNewEvent = (result.rowCount || 0) > 0;
-          } else {
-            // SQLite: INSERT OR IGNORE
-            const result = await dbRun(
-              "INSERT OR IGNORE INTO billing_events (event_id, event_type, user_id) VALUES (?, ?, ?)",
-              [eventId, eventType, userId]
-            );
-            isNewEvent = (result.changes || 0) > 0;
-          }
+          isNewEvent = await recordBillingEventOnce(eventId, eventType, userId);
         } catch (err) {
           console.error("[billing] failed to record billing event", err);
-          // If we can't record the event, fail safe and don't credit (to avoid double crediting)
           return res.status(500).json({ ok: false, error: "event_recording_failed" });
         }
 
@@ -354,23 +378,86 @@ app.post(
           return res.json({ received: true, duplicate: true });
         }
 
-        // For now we hard-code the plan → credits mapping.
-        // "credits-100" → 100 credits; adjust later if we add more plans.
-        const creditsToGrant = 100;
+        // Only credit if purchaseType === "topup" AND credits > 0
+        if (purchaseType === "topup" && credits > 0) {
+          const updated = await addUserCredits(userId, credits);
 
-        const updated = await addUserCredits(userId, creditsToGrant);
+          const totalCredits = updated.total_credits;
+          const usedCredits = updated.used_credits;
+          const availableCredits = getAvailableCredits(updated);
+
+          console.log("[billing] webhook credited", {
+            userId,
+            creditsAdded: credits,
+            totalCredits,
+            usedCredits,
+            availableCredits,
+            stripeEventId: eventId,
+            purchaseType,
+          });
+        } else {
+          console.log("[billing] webhook: skipped crediting (not a topup or credits=0)", {
+            userId,
+            purchaseType,
+            credits,
+            eventId,
+          });
+        }
+      }
+
+      // Handle charge.refunded
+      if (eventType === "charge.refunded") {
+        const charge = event.data.object as Stripe.Charge;
+
+        // Read userId and credits from charge metadata
+        const userId = (charge.metadata?.userId || "").toString().trim();
+        const creditsStr = (charge.metadata?.credits || "").toString().trim();
+        const credits = parseInt(creditsStr, 10);
+
+        if (!userId || !credits || isNaN(credits)) {
+          console.log("[billing] webhook: skipping refund (missing userId or credits)", {
+            eventId,
+            chargeId: charge.id,
+            userId: userId || "(missing)",
+            credits: creditsStr || "(missing)",
+          });
+          return res.json({ received: true });
+        }
+
+        // Record billing event first for idempotency
+        let isNewEvent = false;
+        try {
+          isNewEvent = await recordBillingEventOnce(eventId, eventType, userId);
+        } catch (err) {
+          console.error("[billing] failed to record billing event", err);
+          return res.status(500).json({ ok: false, error: "event_recording_failed" });
+        }
+
+        // If duplicate event, return success without reversing credits
+        if (!isNewEvent) {
+          console.log("[billing] webhook duplicate refund event detected", {
+            eventId,
+            userId,
+            chargeId: charge.id,
+          });
+          return res.json({ received: true, duplicate: true });
+        }
+
+        // Reverse the top-up credits by adding negative credits
+        const updated = await addUserCredits(userId, -credits);
 
         const totalCredits = updated.total_credits;
         const usedCredits = updated.used_credits;
         const availableCredits = getAvailableCredits(updated);
 
-        console.log("[billing] webhook credited", {
+        console.log("[billing] refund reversed credits", {
           userId,
-          creditsAdded: creditsToGrant,
+          credits,
           totalCredits,
           usedCredits,
           availableCredits,
-          stripeEventId: eventId,
+          eventId,
+          chargeId: charge.id,
         });
       }
 
