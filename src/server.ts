@@ -561,6 +561,126 @@ app.get("/debug/billing/replay_event", requireSecret, async (req: Request, res: 
   }
 });
 
+// Debug endpoint to replay a refund using a Stripe charge ID
+app.get("/debug/billing/replay_refund_by_charge", requireSecret, async (req: Request, res: Response) => {
+  try {
+    const charge_id = String(req.query.charge_id || "").trim();
+
+    if (!charge_id) {
+      return res.status(400).json({ ok: false, error: "missing_charge_id" });
+    }
+
+    if (!stripe) {
+      return res.status(400).json({ ok: false, error: "stripe_not_configured" });
+    }
+
+    // Retrieve the charge with expanded payment_intent
+    let charge: Stripe.Charge;
+    try {
+      charge = await stripe.charges.retrieve(charge_id, {
+        expand: ['payment_intent']
+      });
+    } catch (err: any) {
+      console.error("[billing] replay_refund_by_charge failed to retrieve charge", err);
+      return res.status(404).json({
+        ok: false,
+        error: "charge_not_found",
+        message: err?.message || String(err),
+      });
+    }
+
+    // Verify the charge is refunded
+    if (!charge.refunded && (!charge.amount_refunded || charge.amount_refunded === 0)) {
+      return res.status(400).json({
+        ok: false,
+        error: "charge_not_refunded",
+        message: "Charge has not been refunded",
+      });
+    }
+
+    // Read metadata from expanded payment_intent first, fallback to charge metadata
+    let userId = "";
+    let creditsStr = "";
+
+    // Try payment_intent metadata first
+    if (charge.payment_intent && typeof charge.payment_intent === 'object') {
+      const pi = charge.payment_intent as Stripe.PaymentIntent;
+      userId = (pi.metadata?.userId || "").toString().trim();
+      creditsStr = (pi.metadata?.credits || "").toString().trim();
+    }
+
+    // Fallback to charge metadata if needed
+    if (!userId || !creditsStr) {
+      userId = userId || (charge.metadata?.userId || "").toString().trim();
+      creditsStr = creditsStr || (charge.metadata?.credits || "").toString().trim();
+    }
+
+    const credits = parseInt(creditsStr, 10);
+
+    if (!userId || !creditsStr || isNaN(credits)) {
+      return res.status(400).json({
+        ok: false,
+        error: "missing_metadata",
+        message: "Missing userId or credits in metadata",
+      });
+    }
+
+    // Idempotency: use unique key for manual refund replay
+    const eventId = `manual_refund:${charge_id}`;
+    const eventType = "manual_refund_replay";
+
+    let isNewEvent = false;
+    try {
+      isNewEvent = await recordBillingEventOnce(eventId, eventType, userId);
+    } catch (err) {
+      console.error("[billing] replay_refund_by_charge failed to record event", err);
+      return res.status(500).json({ ok: false, error: "event_recording_failed" });
+    }
+
+    // If duplicate, return early
+    if (!isNewEvent) {
+      console.log("[billing] replay_refund_by_charge duplicate detected", {
+        charge_id,
+        userId,
+      });
+      return res.json({
+        ok: true,
+        charge_id,
+        userId,
+        creditsDelta: -credits,
+        skippedDuplicate: true,
+      });
+    }
+
+    // Reverse the credits
+    const updated = await addUserCredits(userId, -credits);
+
+    console.log("[billing] replay_refund_by_charge reversed credits", {
+      charge_id,
+      userId,
+      credits,
+      totalCredits: updated.total_credits,
+      usedCredits: updated.used_credits,
+      availableCredits: getAvailableCredits(updated),
+    });
+
+    return res.json({
+      ok: true,
+      charge_id,
+      userId,
+      creditsDelta: -credits,
+      skippedDuplicate: false,
+    });
+  } catch (e: any) {
+    console.error("[billing] replay_refund_by_charge error", e);
+    return res.status(500).json({
+      ok: false,
+      error: "replay_failed",
+      message: e?.message || String(e),
+    });
+  }
+});
+
 // ---- In-memory store (fallback + rendered assets)
 type Line = { speaker: string; text: string };
 type Scene = { id: string; title: string; lines: Line[] };
