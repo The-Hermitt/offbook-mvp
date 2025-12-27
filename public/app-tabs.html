@@ -3048,13 +3048,17 @@ JANE: Ready?"></textarea>
 
           <button id="btnAddCreditsSettings" class="btn secondary" disabled>Add credits</button>
 
+          <button id="btnGoProMonthly" class="btn secondary" disabled>Go Pro Monthly ($14.99/mo)</button>
+
+          <button id="btnManageSubscription" class="btn secondary" disabled style="display:none">Manage subscription</button>
+
         </div>
 
         <div id="addCreditsHintSettings" class="small">Sign in to add credits.</div>
 
         <div id="addCreditsToastSettings" class="small" style="display:none; margin-top:6px">Stripe checkout coming soon.</div>
 
-
+        <div id="proStatusLine" class="small" style="margin-top:6px"></div>
 
         <div class="spacer8"></div>
 
@@ -4473,7 +4477,52 @@ JANE: Ready?"></textarea>
 
           }
 
+          // Settings → Pro subscription buttons and status
+          const btnGoProMonthly = document.getElementById("btnGoProMonthly");
+          const btnManageSubscription = document.getElementById("btnManageSubscription");
+          const proStatusLine = document.getElementById("proStatusLine");
 
+          if (btnGoProMonthly && btnManageSubscription && proStatusLine) {
+            const isSignedIn = Boolean(s?.passkey?.loggedIn);
+            const plan = s?.entitlement?.plan || "none";
+            const includedQuota = s?.entitlement?.included_quota || 0;
+            const rendersUsed = s?.entitlement?.renders_used || 0;
+            const creditsAvailable = s?.entitlement?.credits_available || 0;
+            const periodEnd = s?.entitlement?.period_end;
+
+            if (!isSignedIn) {
+              // Signed out: disable both buttons
+              btnGoProMonthly.disabled = true;
+              btnManageSubscription.disabled = true;
+              btnGoProMonthly.style.display = "";
+              btnManageSubscription.style.display = "none";
+              proStatusLine.textContent = "Sign in to upgrade to Pro.";
+            } else if (plan === "pro") {
+              // Pro user: hide Go Pro, show Manage
+              btnGoProMonthly.style.display = "none";
+              btnManageSubscription.style.display = "";
+              btnManageSubscription.disabled = false;
+
+              // Format renewal date
+              let renewalStr = "";
+              if (periodEnd) {
+                try {
+                  const renewalDate = new Date(periodEnd * 1000);
+                  renewalStr = renewalDate.toISOString().split('T')[0]; // YYYY-MM-DD
+                } catch (e) {
+                  renewalStr = "Unknown";
+                }
+              }
+
+              proStatusLine.textContent = `Pro active • Used ${rendersUsed}/${includedQuota}${renewalStr ? ` • Renews ${renewalStr}` : ""}`;
+            } else {
+              // Free user: show Go Pro, hide Manage
+              btnGoProMonthly.style.display = "";
+              btnManageSubscription.style.display = "none";
+              btnGoProMonthly.disabled = false;
+              proStatusLine.textContent = `Free • Credits: ${creditsAvailable}`;
+            }
+          }
 
           // Link Code sections visibility
           const linkDeviceSection = document.getElementById("linkDeviceSection");
@@ -5768,11 +5817,96 @@ JANE: Ready?"></textarea>
 
       }
 
+      function wireProSubscriptionButtons() {
+        const btnGoProMonthly = document.getElementById("btnGoProMonthly");
+        const btnManageSubscription = document.getElementById("btnManageSubscription");
+        const toast = document.getElementById("addCreditsToastSettings");
+
+        if (btnGoProMonthly) {
+          btnGoProMonthly.addEventListener("click", async function () {
+            if (btnGoProMonthly.disabled) return;
+            if (!toast) return;
+
+            clearTimeout(toast._t);
+            toast.textContent = "Creating Pro subscription checkout...";
+            toast.style.display = "block";
+
+            try {
+              const resp = await fetch("/billing/create_checkout", withSecretHeaders({
+                method: "POST",
+                headers: { ...JSON_HDRS, "Accept": "application/json" },
+                body: JSON.stringify({ planId: "pro-monthly" }),
+              }));
+
+              const data = await resp.json();
+
+              if (data && data.ok && data.checkout_url) {
+                toast.textContent = "Redirecting to Stripe checkout...";
+                setTimeout(() => {
+                  window.location.href = data.checkout_url;
+                }, 500);
+              } else {
+                const errMsg = (data && (data.error || data.message)) || "Billing not configured yet.";
+                toast.textContent = "Billing error: " + errMsg;
+              }
+            } catch (e) {
+              console.warn("billing/create_checkout failed", e);
+              toast.textContent = "Could not contact billing service.";
+            }
+
+            clearTimeout(toast._t);
+            toast._t = setTimeout(() => {
+              toast.style.display = "none";
+            }, 5000);
+          });
+        }
+
+        if (btnManageSubscription) {
+          btnManageSubscription.addEventListener("click", async function () {
+            if (btnManageSubscription.disabled) return;
+            if (!toast) return;
+
+            clearTimeout(toast._t);
+            toast.textContent = "Opening subscription portal...";
+            toast.style.display = "block";
+
+            try {
+              const resp = await fetch("/billing/create_portal", withSecretHeaders({
+                method: "POST",
+                headers: { ...JSON_HDRS, "Accept": "application/json" },
+              }));
+
+              const data = await resp.json();
+
+              if (data && data.ok && data.url) {
+                toast.textContent = "Redirecting to Stripe portal...";
+                setTimeout(() => {
+                  window.location.href = data.url;
+                }, 500);
+              } else {
+                const errMsg = (data && (data.error || data.message)) || "No subscription found.";
+                toast.textContent = "Portal error: " + errMsg;
+              }
+            } catch (e) {
+              console.warn("billing/create_portal failed", e);
+              toast.textContent = "Could not contact billing service.";
+            }
+
+            clearTimeout(toast._t);
+            toast._t = setTimeout(() => {
+              toast.style.display = "none";
+            }, 5000);
+          });
+        }
+      }
+
       wireSettingsPasskeyButtons();
 
       wireProfileSaveButton();
 
       wireAddCreditsButton();
+
+      wireProSubscriptionButtons();
 
       guardMeteredButtons();
 

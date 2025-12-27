@@ -9,7 +9,7 @@ import cookieParser from "cookie-parser";
 import cookieSession from "cookie-session";
 import Stripe from "stripe";
 import authRouter, { getPasskeySession, noteRenderComplete, ensureSid } from "./routes/auth";
-import db, { ensureSchema, dbGet, dbAll, dbRun, USING_POSTGRES } from "./lib/db";
+import db, { ensureSchema, dbGet, dbAll, dbRun, USING_POSTGRES, getUserBilling, upsertUserBilling } from "./lib/db";
 import { addUserCredits, getAvailableCredits } from "./lib/credits";
 import { isSttEnabled, transcribeChunk } from "./lib/stt";
 import { makeAuditMiddleware } from "./lib/audit";
@@ -328,18 +328,13 @@ app.post("/billing/create_portal", express.json(), async (req: Request, res: Res
     }
 
     // Load stripe_customer_id from user_billing
-    const userBilling = await dbGet<{
-      stripe_customer_id: string | null;
-    }>(
-      `SELECT stripe_customer_id FROM user_billing WHERE user_id = ?`,
-      [userId]
-    );
+    const userBilling = await getUserBilling(userId);
 
     const stripeCustomerId = userBilling?.stripe_customer_id;
     if (!stripeCustomerId) {
       return res.status(400).json({
         ok: false,
-        error: "no_customer_id",
+        error: "no_customer",
         message: "No subscription found for this user.",
       });
     }
@@ -448,8 +443,10 @@ async function processStripeBillingEvent(event: Stripe.Event): Promise<{ process
       return { processed: false, reason: "duplicate_event" };
     }
 
-    // Handle subscription checkout
-    if (purchaseType === "subscription") {
+    // Handle subscription checkout (check both mode and purchaseType)
+    const isSubscription = session.mode === "subscription" || purchaseType === "subscription";
+
+    if (isSubscription) {
       const stripeCustomerId = session.customer ? session.customer.toString() : null;
       const stripeSubscriptionId = session.subscription ? session.subscription.toString() : null;
 
@@ -472,45 +469,21 @@ async function processStripeBillingEvent(event: Stripe.Event): Promise<{ process
       }
 
       const status = subscription?.status || "active";
-      const currentPeriodStart = subscription ? (subscription as any).current_period_start : null;
-      const currentPeriodEnd = subscription ? (subscription as any).current_period_end : null;
+      const currentPeriodStart = subscription ? String((subscription as any).current_period_start || "") : null;
+      const currentPeriodEnd = subscription ? String((subscription as any).current_period_end || "") : null;
 
-      // Upsert user_billing record
-      if (USING_POSTGRES) {
-        await dbRun(
-          `INSERT INTO user_billing
-            (user_id, plan, status, stripe_customer_id, stripe_subscription_id, current_period_start, current_period_end, included_quota, renders_used, updated_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
-           ON CONFLICT (user_id) DO UPDATE SET
-            plan = EXCLUDED.plan,
-            status = EXCLUDED.status,
-            stripe_customer_id = EXCLUDED.stripe_customer_id,
-            stripe_subscription_id = EXCLUDED.stripe_subscription_id,
-            current_period_start = EXCLUDED.current_period_start,
-            current_period_end = EXCLUDED.current_period_end,
-            included_quota = EXCLUDED.included_quota,
-            renders_used = EXCLUDED.renders_used,
-            updated_at = NOW()`,
-          [userId, "pro", status, stripeCustomerId, stripeSubscriptionId, currentPeriodStart, currentPeriodEnd, 120, 0]
-        );
-      } else {
-        await dbRun(
-          `INSERT INTO user_billing
-            (user_id, plan, status, stripe_customer_id, stripe_subscription_id, current_period_start, current_period_end, included_quota, renders_used, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
-           ON CONFLICT (user_id) DO UPDATE SET
-            plan = excluded.plan,
-            status = excluded.status,
-            stripe_customer_id = excluded.stripe_customer_id,
-            stripe_subscription_id = excluded.stripe_subscription_id,
-            current_period_start = excluded.current_period_start,
-            current_period_end = excluded.current_period_end,
-            included_quota = excluded.included_quota,
-            renders_used = excluded.renders_used,
-            updated_at = datetime('now')`,
-          [userId, "pro", status, stripeCustomerId, stripeSubscriptionId, currentPeriodStart, currentPeriodEnd, 120, 0]
-        );
-      }
+      // Upsert user_billing record using helper
+      await upsertUserBilling({
+        user_id: userId,
+        plan: "pro",
+        status,
+        stripe_customer_id: stripeCustomerId,
+        stripe_subscription_id: stripeSubscriptionId,
+        current_period_start: currentPeriodStart,
+        current_period_end: currentPeriodEnd,
+        included_quota: 120,
+        renders_used: 0,
+      });
 
       console.log("[billing] subscription created", {
         userId,
@@ -717,32 +690,18 @@ async function processStripeBillingEvent(event: Stripe.Event): Promise<{ process
 
     // Update subscription status and reset monthly counter
     const status = subscription.status || "active";
-    const currentPeriodStart = (subscription as any).current_period_start || null;
-    const currentPeriodEnd = (subscription as any).current_period_end || null;
+    const currentPeriodStart = String((subscription as any).current_period_start || "");
+    const currentPeriodEnd = String((subscription as any).current_period_end || "");
 
-    if (USING_POSTGRES) {
-      await dbRun(
-        `UPDATE user_billing
-         SET status = $1,
-             current_period_start = $2,
-             current_period_end = $3,
-             renders_used = 0,
-             updated_at = NOW()
-         WHERE user_id = $4`,
-        [status, currentPeriodStart, currentPeriodEnd, userId]
-      );
-    } else {
-      await dbRun(
-        `UPDATE user_billing
-         SET status = ?,
-             current_period_start = ?,
-             current_period_end = ?,
-             renders_used = 0,
-             updated_at = datetime('now')
-         WHERE user_id = ?`,
-        [status, currentPeriodStart, currentPeriodEnd, userId]
-      );
-    }
+    await upsertUserBilling({
+      user_id: userId,
+      plan: "pro",
+      status,
+      current_period_start: currentPeriodStart,
+      current_period_end: currentPeriodEnd,
+      included_quota: 120,
+      renders_used: 0,
+    });
 
     console.log("[billing] invoice.payment_succeeded - subscription renewed", {
       userId,
@@ -801,24 +760,12 @@ async function processStripeBillingEvent(event: Stripe.Event): Promise<{ process
       return { processed: false, reason: "duplicate_event" };
     }
 
-    // Mark subscription as past_due
-    if (USING_POSTGRES) {
-      await dbRun(
-        `UPDATE user_billing
-         SET status = $1,
-             updated_at = NOW()
-         WHERE user_id = $2`,
-        ["past_due", userId]
-      );
-    } else {
-      await dbRun(
-        `UPDATE user_billing
-         SET status = ?,
-             updated_at = datetime('now')
-         WHERE user_id = ?`,
-        ["past_due", userId]
-      );
-    }
+    // Mark subscription as past_due using helper
+    await upsertUserBilling({
+      user_id: userId,
+      plan: "pro",
+      status: "past_due",
+    });
 
     console.log("[billing] invoice.payment_failed - subscription marked past_due", {
       userId,
@@ -859,26 +806,12 @@ async function processStripeBillingEvent(event: Stripe.Event): Promise<{ process
       return { processed: false, reason: "duplicate_event" };
     }
 
-    // Mark subscription as canceled but keep customer_id
-    if (USING_POSTGRES) {
-      await dbRun(
-        `UPDATE user_billing
-         SET plan = $1,
-             status = $2,
-             updated_at = NOW()
-         WHERE user_id = $3`,
-        ["none", "canceled", userId]
-      );
-    } else {
-      await dbRun(
-        `UPDATE user_billing
-         SET plan = ?,
-             status = ?,
-             updated_at = datetime('now')
-         WHERE user_id = ?`,
-        ["none", "canceled", userId]
-      );
-    }
+    // Mark subscription as canceled but keep customer_id using helper
+    await upsertUserBilling({
+      user_id: userId,
+      plan: "none",
+      status: "canceled",
+    });
 
     console.log("[billing] subscription.deleted - subscription canceled", {
       userId,

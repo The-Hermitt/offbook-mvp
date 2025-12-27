@@ -1,7 +1,7 @@
 import express from "express";
 import crypto from "node:crypto";
 import { getAvailableCreditsForUser, spendUserCredits } from "../lib/credits";
-import db, { dbAll, dbGet, dbRun, USING_POSTGRES } from "../lib/db";
+import db, { dbAll, dbGet, dbRun, USING_POSTGRES, getUserBilling } from "../lib/db";
 
 const INCLUDED_RENDERS_PER_MONTH = Number(process.env.INCLUDED_RENDERS_PER_MONTH || 0);
 const DEV_STARTING_CREDITS = Number(process.env.DEV_STARTING_CREDITS || 0);
@@ -125,17 +125,7 @@ export async function noteRenderComplete(req: express.Request) {
   // Check if user has Pro subscription and consume included quota first
   let consumedFromSubscription = false;
   try {
-    const userBilling = await dbGet<{
-      plan: string;
-      status: string;
-      included_quota: number;
-      renders_used: number;
-    }>(
-      `SELECT plan, status, included_quota, renders_used
-       FROM user_billing
-       WHERE user_id = ?`,
-      [userId]
-    );
+    const userBilling = await getUserBilling(userId);
 
     if (userBilling &&
         userBilling.plan === "pro" &&
@@ -339,14 +329,7 @@ router.get("/session", async (req, res) => {
   }
 
   let dbCredits = 0;
-  let userBilling: {
-    plan: string;
-    status: string;
-    included_quota: number;
-    renders_used: number;
-    current_period_start: number | null;
-    current_period_end: number | null;
-  } | null = null;
+  let userBilling = null;
 
   if (userId) {
     try {
@@ -362,19 +345,7 @@ router.get("/session", async (req, res) => {
     // Load subscription data if user is logged in with passkey
     if (passkeyLoggedIn) {
       try {
-        userBilling = await dbGet<{
-          plan: string;
-          status: string;
-          included_quota: number;
-          renders_used: number;
-          current_period_start: number | null;
-          current_period_end: number | null;
-        }>(
-          `SELECT plan, status, included_quota, renders_used, current_period_start, current_period_end
-           FROM user_billing
-           WHERE user_id = ?`,
-          [userId]
-        );
+        userBilling = await getUserBilling(userId);
       } catch (err) {
         console.error("[auth/session] failed to read user_billing for userId=%s", userId, err);
       }
@@ -389,8 +360,8 @@ router.get("/session", async (req, res) => {
   const plan = userBilling?.plan || sess?.plan || "none";
   const includedQuota = userBilling?.included_quota ?? INCLUDED_RENDERS_PER_MONTH;
   const rendersUsed = userBilling?.renders_used ?? sess?.rendersUsed ?? 0;
-  const periodStart = userBilling?.current_period_start ?? sess?.periodStart ?? null;
-  const periodEnd = userBilling?.current_period_end ?? sess?.periodEnd ?? null;
+  const periodStart = userBilling?.current_period_start ? parseInt(userBilling.current_period_start, 10) : (sess?.periodStart ?? null);
+  const periodEnd = userBilling?.current_period_end ? parseInt(userBilling.current_period_end, 10) : (sess?.periodEnd ?? null);
 
   if (passkeyLoggedIn) {
     console.log("[auth/session] entitlement snapshot", {

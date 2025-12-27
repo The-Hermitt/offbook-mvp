@@ -538,3 +538,110 @@ export async function updateNotesAsync(id: string, userId: string, notes: string
     [notes, notes, id, userId]
   );
 }
+
+// ---------- User Billing helpers (Postgres-compatible) ----------
+
+export interface UserBilling {
+  user_id: string;
+  plan: string;
+  status: string;
+  stripe_customer_id: string | null;
+  stripe_subscription_id: string | null;
+  current_period_start: string | null;
+  current_period_end: string | null;
+  included_quota: number;
+  renders_used: number;
+  updated_at: string;
+}
+
+export async function getUserBilling(userId: string): Promise<UserBilling | null> {
+  return await dbGet<UserBilling>(
+    `SELECT user_id, plan, status, stripe_customer_id, stripe_subscription_id,
+            current_period_start, current_period_end, included_quota, renders_used, updated_at
+     FROM user_billing
+     WHERE user_id = ?`,
+    [userId]
+  );
+}
+
+export async function upsertUserBilling(data: {
+  user_id: string;
+  plan: string;
+  status: string;
+  stripe_customer_id?: string | null;
+  stripe_subscription_id?: string | null;
+  current_period_start?: string | null;
+  current_period_end?: string | null;
+  included_quota?: number;
+  renders_used?: number;
+}): Promise<void> {
+  const {
+    user_id,
+    plan,
+    status,
+    stripe_customer_id = null,
+    stripe_subscription_id = null,
+    current_period_start = null,
+    current_period_end = null,
+    included_quota = 0,
+    renders_used = 0,
+  } = data;
+
+  if (USING_POSTGRES) {
+    await dbRun(
+      `INSERT INTO user_billing
+        (user_id, plan, status, stripe_customer_id, stripe_subscription_id,
+         current_period_start, current_period_end, included_quota, renders_used, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
+       ON CONFLICT (user_id) DO UPDATE SET
+        plan = EXCLUDED.plan,
+        status = EXCLUDED.status,
+        stripe_customer_id = EXCLUDED.stripe_customer_id,
+        stripe_subscription_id = EXCLUDED.stripe_subscription_id,
+        current_period_start = EXCLUDED.current_period_start,
+        current_period_end = EXCLUDED.current_period_end,
+        included_quota = EXCLUDED.included_quota,
+        renders_used = EXCLUDED.renders_used,
+        updated_at = NOW()`,
+      [
+        user_id,
+        plan,
+        status,
+        stripe_customer_id,
+        stripe_subscription_id,
+        current_period_start,
+        current_period_end,
+        included_quota,
+        renders_used,
+      ]
+    );
+  } else {
+    await dbRun(
+      `INSERT INTO user_billing
+        (user_id, plan, status, stripe_customer_id, stripe_subscription_id,
+         current_period_start, current_period_end, included_quota, renders_used, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+       ON CONFLICT (user_id) DO UPDATE SET
+        plan = excluded.plan,
+        status = excluded.status,
+        stripe_customer_id = excluded.stripe_customer_id,
+        stripe_subscription_id = excluded.stripe_subscription_id,
+        current_period_start = excluded.current_period_start,
+        current_period_end = excluded.current_period_end,
+        included_quota = excluded.included_quota,
+        renders_used = excluded.renders_used,
+        updated_at = datetime('now')`,
+      [
+        user_id,
+        plan,
+        status,
+        stripe_customer_id,
+        stripe_subscription_id,
+        current_period_start,
+        current_period_end,
+        included_quota,
+        renders_used,
+      ]
+    );
+  }
+}
