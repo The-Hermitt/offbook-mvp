@@ -486,6 +486,14 @@ async function processStripeBillingEvent(event: Stripe.Event): Promise<{ process
       let subscription: Stripe.Subscription | null = null;
       try {
         subscription = await stripe.subscriptions.retrieve(stripeSubscriptionId);
+        console.log("[billing] retrieved subscription for checkout", {
+          eventId,
+          userId,
+          stripeSubscriptionId,
+          status: subscription.status,
+          current_period_start: (subscription as any).current_period_start,
+          current_period_end: (subscription as any).current_period_end,
+        });
       } catch (err) {
         console.warn("[billing] failed to retrieve subscription, proceeding with defaults", {
           eventId,
@@ -752,6 +760,16 @@ async function processStripeBillingEvent(event: Stripe.Event): Promise<{ process
     // Use helper to ensure period fields are never empty strings
     const currentPeriodStart = toBigintOrNull((subscription as any)?.current_period_start);
     const currentPeriodEnd = toBigintOrNull((subscription as any)?.current_period_end);
+
+    console.log("[billing] subscription period data for invoice", {
+      eventId,
+      userId,
+      stripeSubscriptionId,
+      current_period_start: (subscription as any)?.current_period_start,
+      current_period_end: (subscription as any)?.current_period_end,
+      currentPeriodStart,
+      currentPeriodEnd,
+    });
 
     await upsertUserBilling({
       user_id: userId,
