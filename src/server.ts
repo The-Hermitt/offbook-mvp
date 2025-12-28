@@ -432,6 +432,95 @@ function stripeId(val: any): string | null {
   return null;
 }
 
+function isActiveishStatus(status: string) {
+  return status === "active" || status === "trialing" || status === "past_due" || status === "unpaid";
+}
+
+async function pickBestSubscription(stripe: Stripe, customerId: string) {
+  const list = await stripe.subscriptions.list({ customer: customerId, status: "all" as any, limit: 10 });
+  const now = Math.floor(Date.now() / 1000);
+
+  // Prefer active-ish subs with a current period that hasn't already ended
+  const preferred =
+    list.data.find((s: any) => isActiveishStatus(s.status) && ((s.current_period_end ?? 0) > now - 3600)) ||
+    list.data.find((s: any) => isActiveishStatus(s.status)) ||
+    list.data[0] ||
+    null;
+
+  return preferred;
+}
+
+async function refreshStripePeriodForUser(opts: {
+  stripe: Stripe;
+  userId: string;
+  stripeCustomerId: string;
+  stripeSubscriptionId: string | null;
+}) {
+  const { stripe, userId, stripeCustomerId } = opts;
+  let subId = opts.stripeSubscriptionId;
+
+  if (!stripe) return null;
+
+  try {
+    let sub: any = null;
+
+    if (!subId) {
+      sub = await pickBestSubscription(stripe, stripeCustomerId);
+      subId = sub?.id || null;
+    } else {
+      sub = await stripe.subscriptions.retrieve(subId);
+    }
+
+    if (!subId || !sub) return null;
+
+    const cps = toBigintOrNull((sub as any).current_period_start);
+    const cpe = toBigintOrNull((sub as any).current_period_end);
+
+    console.log("[billing] stripe period refresh", {
+      userId,
+      subId,
+      status: sub.status,
+      current_period_start: (sub as any).current_period_start,
+      current_period_end: (sub as any).current_period_end,
+      cps,
+      cpe,
+    });
+
+    // Only write if we actually got valid numbers back
+    if (cps && cpe) {
+      if (USING_POSTGRES) {
+        await dbRun(
+          `UPDATE user_billing
+           SET stripe_subscription_id = $2,
+               current_period_start = $3,
+               current_period_end = $4
+           WHERE user_id = $1`,
+          [userId, subId, cps, cpe]
+        );
+      } else {
+        await dbRun(
+          `UPDATE user_billing
+           SET stripe_subscription_id = ?,
+               current_period_start = ?,
+               current_period_end = ?
+           WHERE user_id = ?`,
+          [subId, cps, cpe, userId]
+        );
+      }
+    }
+
+    return { subId, cps, cpe, status: sub.status };
+  } catch (e: any) {
+    console.warn("[billing] stripe period refresh failed", {
+      userId,
+      stripeCustomerId,
+      stripeSubscriptionId: opts.stripeSubscriptionId,
+      msg: e?.message || String(e),
+    });
+    return null;
+  }
+}
+
 // Shared function to process Stripe billing events
 async function processStripeBillingEvent(event: Stripe.Event): Promise<{ processed: boolean; reason?: string }> {
   if (!stripe) {
@@ -1226,6 +1315,42 @@ app.get("/debug/billing/replay_refund_by_charge", async (req: Request, res: Resp
     return res.status(500).json({
       ok: false,
       error: "replay_failed",
+      message: e?.message || String(e),
+    });
+  }
+});
+
+// Debug endpoint to repair subscription period dates
+app.get("/debug/billing/repair_period", requireSecret, async (req: Request, res: Response) => {
+  try {
+    const { userId: sessionUserId } = getPasskeySession(req);
+    if (!sessionUserId) {
+      return res.status(401).json({ ok: false, error: "not_authenticated" });
+    }
+
+    const billing = await getUserBilling(sessionUserId);
+    if (!billing?.stripe_customer_id) {
+      return res.json({ ok: true, repaired: false, reason: "missing_stripe_customer_id" });
+    }
+
+    if (!stripe) {
+      return res.status(500).json({ ok: false, error: "stripe_not_configured" });
+    }
+
+    const out = await refreshStripePeriodForUser({
+      stripe,
+      userId: sessionUserId,
+      stripeCustomerId: billing.stripe_customer_id,
+      stripeSubscriptionId: billing.stripe_subscription_id || null,
+    });
+
+    const billing2 = await getUserBilling(sessionUserId);
+    return res.json({ ok: true, repaired: true, out, billing: billing2 });
+  } catch (e: any) {
+    console.error("[billing] repair_period error", e);
+    return res.status(500).json({
+      ok: false,
+      error: "repair_failed",
       message: e?.message || String(e),
     });
   }
