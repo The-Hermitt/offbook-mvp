@@ -409,43 +409,26 @@ async function processStripeBillingEvent(event: Stripe.Event): Promise<{ process
   if (eventType === "checkout.session.completed") {
     const session = event.data.object as Stripe.Checkout.Session;
 
-    // Determine userId from session
-    const userIdFromClientRef = session.client_reference_id;
+    // Determine userId from session (prefer metadata first)
     const userIdFromMetadata =
       (session.metadata && (session.metadata as any).userId) || null;
-    const userId = (userIdFromClientRef || userIdFromMetadata || "").toString().trim();
+    const userIdFromClientRef = session.client_reference_id;
+    const userId = (userIdFromMetadata || userIdFromClientRef || "").toString().trim();
 
     if (!userId) {
       console.warn("[billing] webhook: missing userId on session", session.id);
       return { processed: false, reason: "missing_userId" };
     }
 
-    // Read purchaseType and credits from metadata
+    // Read purchaseType and credits from metadata early
     const purchaseType = (session.metadata?.purchaseType || "topup").toString().trim();
     const creditsStr = (session.metadata?.credits || "100").toString().trim();
     const credits = parseInt(creditsStr, 10);
 
-    // Record billing event first for idempotency
-    let isNewEvent = false;
-    try {
-      isNewEvent = await recordBillingEventOnce(eventId, eventType, userId);
-    } catch (err) {
-      console.error("[billing] failed to record billing event", err);
-      throw err;
-    }
-
-    // If duplicate event, return success without crediting
-    if (!isNewEvent) {
-      console.log("[billing] webhook duplicate event detected", {
-        eventId,
-        userId,
-      });
-      return { processed: false, reason: "duplicate_event" };
-    }
-
-    // Handle subscription checkout (check both mode and purchaseType)
+    // Determine if this is a subscription checkout
     const isSubscription = session.mode === "subscription" || purchaseType === "subscription";
 
+    // Handle subscription checkout (idempotent upsert first, then record event)
     if (isSubscription) {
       const stripeCustomerId = session.customer ? session.customer.toString() : null;
       const stripeSubscriptionId = session.subscription ? session.subscription.toString() : null;
@@ -472,7 +455,7 @@ async function processStripeBillingEvent(event: Stripe.Event): Promise<{ process
       const currentPeriodStart = subscription ? String((subscription as any).current_period_start || "") : null;
       const currentPeriodEnd = subscription ? String((subscription as any).current_period_end || "") : null;
 
-      // Upsert user_billing record using helper
+      // Always upsert user_billing record (idempotent)
       await upsertUserBilling({
         user_id: userId,
         plan: "pro",
@@ -485,6 +468,19 @@ async function processStripeBillingEvent(event: Stripe.Event): Promise<{ process
         renders_used: 0,
       });
 
+      // After successful upsert, record billing event for duplicate tracking
+      try {
+        const isNewEvent = await recordBillingEventOnce(eventId, eventType, userId);
+        if (!isNewEvent) {
+          console.log("[billing] subscription duplicate event detected (state already applied)", {
+            eventId,
+            userId,
+          });
+        }
+      } catch (err) {
+        console.error("[billing] failed to record billing event (state already applied)", err);
+      }
+
       console.log("[billing] subscription created", {
         userId,
         stripeCustomerId,
@@ -496,6 +492,24 @@ async function processStripeBillingEvent(event: Stripe.Event): Promise<{ process
       });
 
       return { processed: true };
+    }
+
+    // For topup checkouts: check idempotency BEFORE crediting
+    let isNewEvent = false;
+    try {
+      isNewEvent = await recordBillingEventOnce(eventId, eventType, userId);
+    } catch (err) {
+      console.error("[billing] failed to record billing event", err);
+      throw err;
+    }
+
+    // If duplicate event, return success without crediting
+    if (!isNewEvent) {
+      console.log("[billing] webhook duplicate topup event detected", {
+        eventId,
+        userId,
+      });
+      return { processed: true, reason: "duplicate_event" };
     }
 
     // Only credit if purchaseType === "topup" AND credits > 0
@@ -874,9 +888,13 @@ app.post(
       });
 
       // Process the event using shared logic
-      await processStripeBillingEvent(event);
+      const result = await processStripeBillingEvent(event);
 
-      return res.json({ received: true });
+      return res.json({
+        received: true,
+        processed: result.processed,
+        reason: result.reason || null,
+      });
     } catch (e: any) {
       console.error("[billing] webhook error", e);
       return res.status(500).json({ ok: false, error: "webhook_error" });
