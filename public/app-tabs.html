@@ -4503,12 +4503,22 @@ JANE: Ready?"></textarea>
               btnManageSubscription.style.display = "";
               btnManageSubscription.disabled = false;
 
-              // Format renewal date
+              // Format renewal date (handle both unix seconds and ISO string)
               let renewalStr = "";
               if (periodEnd) {
                 try {
-                  const renewalDate = new Date(periodEnd * 1000);
-                  renewalStr = renewalDate.toISOString().split('T')[0]; // YYYY-MM-DD
+                  let renewalDate;
+                  if (typeof periodEnd === "number") {
+                    renewalDate = new Date(periodEnd * 1000);
+                  } else if (typeof periodEnd === "string") {
+                    renewalDate = new Date(periodEnd);
+                  }
+
+                  if (renewalDate && !isNaN(renewalDate.getTime())) {
+                    renewalStr = renewalDate.toISOString().split('T')[0]; // YYYY-MM-DD
+                  } else {
+                    renewalStr = "Unknown";
+                  }
                 } catch (e) {
                   renewalStr = "Unknown";
                 }

@@ -1,13 +1,28 @@
 import express from "express";
 import crypto from "node:crypto";
+import Stripe from "stripe";
 import { getAvailableCreditsForUser, spendUserCredits } from "../lib/credits";
-import db, { dbAll, dbGet, dbRun, USING_POSTGRES, getUserBilling } from "../lib/db";
+import db, { dbAll, dbGet, dbRun, USING_POSTGRES, getUserBilling, upsertUserBilling } from "../lib/db";
 
 const INCLUDED_RENDERS_PER_MONTH = Number(process.env.INCLUDED_RENDERS_PER_MONTH || 0);
 const DEV_STARTING_CREDITS = Number(process.env.DEV_STARTING_CREDITS || 0);
 const MAX_PASSKEYS_PER_USER = 2;
 const COOLDOWN_MS = parseInt(process.env.LINK_CODE_COOLDOWN_MS || "120000", 10);
 const REAUTH_WINDOW_MS = parseInt(process.env.LINK_CODE_REAUTH_WINDOW_MS || "300000", 10); // default 5 min
+
+const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY || "";
+const stripe = STRIPE_SECRET_KEY ? new Stripe(STRIPE_SECRET_KEY) : null;
+
+// Helper to safely convert to bigint or null
+function toBigintOrNull(value: any): string | null {
+  if (value == null) return null;
+  if (typeof value === "number") return String(value);
+  if (typeof value === "string") {
+    const parsed = parseInt(value, 10);
+    return isNaN(parsed) ? null : String(parsed);
+  }
+  return null;
+}
 
 async function countPasskeysForUser(userId: string): Promise<number> {
   const row = await dbGet<{ c: number }>(
@@ -346,6 +361,47 @@ router.get("/session", async (req, res) => {
     if (passkeyLoggedIn) {
       try {
         userBilling = await getUserBilling(userId);
+
+        // If user has Pro plan with stripe subscription, refresh period data from Stripe
+        if (userBilling?.plan === "pro" && userBilling?.stripe_subscription_id && stripe) {
+          try {
+            const subscription = await stripe.subscriptions.retrieve(userBilling.stripe_subscription_id);
+            const currentPeriodStart = toBigintOrNull((subscription as any)?.current_period_start);
+            const currentPeriodEnd = toBigintOrNull((subscription as any)?.current_period_end);
+
+            // Update DB with fresh Stripe cycle dates
+            if (currentPeriodStart || currentPeriodEnd) {
+              await upsertUserBilling({
+                user_id: userId,
+                plan: "pro",
+                status: subscription.status || "active",
+                current_period_start: currentPeriodStart,
+                current_period_end: currentPeriodEnd,
+                included_quota: 120,
+                renders_used: userBilling.renders_used,
+              });
+
+              // Update local userBilling object with fresh values
+              userBilling.current_period_start = currentPeriodStart;
+              userBilling.current_period_end = currentPeriodEnd;
+              userBilling.status = subscription.status || "active";
+
+              console.log("[auth/session] refreshed subscription periods from Stripe", {
+                userId,
+                subscriptionId: userBilling.stripe_subscription_id,
+                currentPeriodStart,
+                currentPeriodEnd,
+              });
+            }
+          } catch (err) {
+            console.error("[auth/session] failed to refresh Stripe subscription periods (falling back to DB)", {
+              userId,
+              subscriptionId: userBilling?.stripe_subscription_id,
+              error: (err as any)?.message || String(err),
+            });
+            // Fall back to DB values - don't crash
+          }
+        }
       } catch (err) {
         console.error("[auth/session] failed to read user_billing for userId=%s", userId, err);
       }
