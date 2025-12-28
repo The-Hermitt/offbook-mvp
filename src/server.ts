@@ -470,19 +470,29 @@ async function processStripeBillingEvent(event: Stripe.Event): Promise<{ process
         return { processed: false, reason: "missing_subscription_data" };
       }
 
-      // Retrieve subscription to get period info
+      // Retrieve subscription to get period info (optional - proceed even if fails)
       let subscription: Stripe.Subscription | null = null;
       try {
         subscription = await stripe.subscriptions.retrieve(stripeSubscriptionId);
       } catch (err) {
-        console.error("[billing] failed to retrieve subscription", err);
+        console.warn("[billing] failed to retrieve subscription, proceeding with defaults", {
+          eventId,
+          userId,
+          stripeSubscriptionId,
+          error: (err as any)?.message || String(err),
+        });
       }
 
       const status = subscription?.status || "active";
-      const currentPeriodStart = subscription ? String((subscription as any).current_period_start || "") : null;
-      const currentPeriodEnd = subscription ? String((subscription as any).current_period_end || "") : null;
+      // Never pass empty string to BIGINT fields - use null if unknown
+      const currentPeriodStart = subscription && (subscription as any).current_period_start
+        ? String((subscription as any).current_period_start)
+        : null;
+      const currentPeriodEnd = subscription && (subscription as any).current_period_end
+        ? String((subscription as any).current_period_end)
+        : null;
 
-      // Always upsert user_billing record (idempotent)
+      // Always upsert user_billing record (idempotent - runs even on retries)
       await upsertUserBilling({
         user_id: userId,
         plan: "pro",
@@ -915,7 +925,23 @@ app.post(
       });
 
       // Process the event using shared logic
-      const result = await processStripeBillingEvent(event);
+      let result;
+      try {
+        result = await processStripeBillingEvent(event);
+      } catch (err: any) {
+        console.error("[billing] webhook processing error", {
+          eventId,
+          eventType,
+          error: err?.message || String(err),
+        });
+        return res.status(500).json({
+          ok: false,
+          error: "webhook_error",
+          eventId,
+          eventType,
+          message: (err?.message || String(err)).slice(0, 200),
+        });
+      }
 
       return res.json({
         received: true,
