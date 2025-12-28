@@ -3125,7 +3125,15 @@ JANE: Ready?"></textarea>
 
         </div>
 
-
+        <div id="billingAdminPanel" style="display:none; margin-top:12px; padding:12px; border:1px solid #444; border-radius:4px;">
+          <div style="font-weight:600; margin-bottom:8px;">Billing Admin</div>
+          <input id="billingReplayEventId" type="text" placeholder="evt_..." style="width:100%; margin-bottom:8px; font-family:monospace;" />
+          <div style="display:flex; gap:8px; margin-bottom:8px;">
+            <button id="btnBillingReplayEvent" class="btn secondary">Replay Stripe event</button>
+            <button id="btnBillingRefreshSession" class="btn secondary">Refresh session</button>
+          </div>
+          <pre id="billingAdminOut" class="status" style="font-size:11px; max-height:200px; overflow:auto;"></pre>
+        </div>
 
         <div class="spacer8"></div>
 
@@ -4440,6 +4448,10 @@ JANE: Ready?"></textarea>
           const devBtns = document.getElementById("devEntButtons");
 
           if (devBtns) devBtns.style.display = isDev ? "" : "none";
+
+          // Billing Admin panel (dev only)
+          const billingAdminPanel = document.getElementById("billingAdminPanel");
+          if (billingAdminPanel) billingAdminPanel.style.display = isDev ? "" : "none";
 
 
 
@@ -5956,6 +5968,43 @@ JANE: Ready?"></textarea>
 
         });
 
+      })();
+
+      // Wire Billing Admin panel buttons
+      (function wireBillingAdmin(){
+        const btnReplay = document.getElementById("btnBillingReplayEvent");
+        const btnRefresh = document.getElementById("btnBillingRefreshSession");
+        const inputEventId = document.getElementById("billingReplayEventId");
+        const output = document.getElementById("billingAdminOut");
+
+        if (!btnReplay || !btnRefresh || !inputEventId || !output) return;
+
+        btnReplay.addEventListener("click", async () => {
+          const eventId = inputEventId.value.trim();
+          if (!eventId) {
+            output.textContent = "Error: Please enter an event ID (evt_...)";
+            return;
+          }
+
+          try {
+            const url = `/debug/billing/replay_event?event_id=${encodeURIComponent(eventId)}`;
+            const res = await fetch(url, withSecretHeaders({ method: "GET" }));
+            const data = await res.json().catch(() => ({}));
+
+            output.textContent = JSON.stringify({ status: res.status, ...data }, null, 2);
+          } catch (e) {
+            output.textContent = `Error: ${e.message}`;
+          }
+        });
+
+        btnRefresh.addEventListener("click", async () => {
+          try {
+            await refreshAuthUI();
+            output.textContent = "Session refreshed";
+          } catch (e) {
+            output.textContent = `Error refreshing session: ${e.message}`;
+          }
+        });
       })();
 
     const $ = (s,r=document)=>r.querySelector(s);
