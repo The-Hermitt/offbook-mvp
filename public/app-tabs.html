@@ -11465,20 +11465,22 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
         RR.rendering = false; stopDots();
         ReaderCache.set(RR.map);
-        // Spend 1 credit per successful Rehearse render (server logs should show [credits] dev use-credit...)
+        // Count rehearse render once completed successfully
         try {
-          // Only debit if we actually rendered without failures
+          // Only count if we actually rendered without failures
           if ((RR.failures || 0) === 0 && RR.map && RR.map.size) {
-            const resp = await fetch("/auth/dev/use-credit?dev=1", withSecretHeaders({
+            const idempotencyKey = crypto.randomUUID();
+            const resp = await fetch("/auth/billing/note_render_complete", withSecretHeaders({
               method: "POST",
               headers: { ...JSON_HDRS, "Accept": "application/json" },
+              body: JSON.stringify({ source: "rehearse", idempotencyKey }),
             }));
             if (resp.ok && typeof refreshAuthUI === "function") {
               await refreshAuthUI();
             }
           }
         } catch (e) {
-          console.warn("dev/use-credit failed", e);
+          console.warn("note_render_complete failed", e);
         }
 
 

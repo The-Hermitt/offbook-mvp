@@ -1145,6 +1145,64 @@ router.post("/dev/use-credit", express.json(), async (req, res) => {
   });
 });
 
+// --- POST /billing/note_render_complete -----------------------------------------
+// Count a render with idempotency protection
+router.post("/billing/note_render_complete", express.json(), async (req, res) => {
+  const { passkeyLoggedIn, userId } = getPasskeySession(req as any);
+
+  if (!passkeyLoggedIn || !userId) {
+    return res.status(401).json({ ok: false, error: "not_authenticated" });
+  }
+
+  const { source, idempotencyKey } = req.body || {};
+
+  if (!source || !idempotencyKey) {
+    return res.status(400).json({ ok: false, error: "missing_source_or_idempotency_key" });
+  }
+
+  if (typeof idempotencyKey !== "string" || idempotencyKey.length === 0) {
+    return res.status(400).json({ ok: false, error: "invalid_idempotency_key" });
+  }
+
+  try {
+    // Check if this idempotency key was already processed
+    const existing = await dbGet<{ idempotency_key: string }>(
+      "SELECT idempotency_key FROM render_idempotency WHERE idempotency_key = ? AND user_id = ?",
+      [idempotencyKey, userId]
+    );
+
+    if (existing) {
+      console.log("[billing/note_render_complete] duplicate idempotency key, skipping", {
+        userId,
+        source,
+        idempotencyKey,
+      });
+      return res.json({ ok: true, duplicate: true });
+    }
+
+    // Record the idempotency key
+    await dbRun(
+      `INSERT INTO render_idempotency (idempotency_key, user_id, source, created_at)
+       VALUES (?, ?, ?, ${USING_POSTGRES ? 'NOW()' : "datetime('now')"})`,
+      [idempotencyKey, userId, source]
+    );
+
+    // Call the existing noteRenderComplete logic
+    await noteRenderComplete(req);
+
+    console.log("[billing/note_render_complete] render counted", {
+      userId,
+      source,
+      idempotencyKey,
+    });
+
+    return res.json({ ok: true });
+  } catch (err: any) {
+    console.error("[billing/note_render_complete] error", err);
+    return res.status(500).json({ ok: false, error: err?.message || "internal_error" });
+  }
+});
+
 
 
 export default router;

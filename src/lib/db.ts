@@ -230,6 +230,16 @@ export async function ensureSchema(): Promise<void> {
       )
     `);
 
+    // Render idempotency table (prevent double-counting renders)
+    await dbExec(`
+      CREATE TABLE IF NOT EXISTS render_idempotency (
+        idempotency_key TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        source TEXT NOT NULL,
+        created_at ${USING_POSTGRES ? 'TIMESTAMP DEFAULT NOW()' : "TEXT NOT NULL DEFAULT (datetime('now'))"}
+      )
+    `);
+
     // Device link codes table (for multi-device passkey linking)
     await dbExec(`
       CREATE TABLE IF NOT EXISTS device_link_codes (
