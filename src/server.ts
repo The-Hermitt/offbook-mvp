@@ -430,11 +430,38 @@ async function processStripeBillingEvent(event: Stripe.Event): Promise<{ process
 
     // Handle subscription checkout (idempotent upsert first, then record event)
     if (isSubscription) {
-      const stripeCustomerId = session.customer ? session.customer.toString() : null;
-      const stripeSubscriptionId = session.subscription ? session.subscription.toString() : null;
+      let stripeCustomerId = session.customer ? session.customer.toString() : null;
+      let stripeSubscriptionId = session.subscription ? session.subscription.toString() : null;
+
+      // Fallback: if customer or subscription is missing, retrieve session with expand
+      if (!stripeCustomerId || !stripeSubscriptionId) {
+        console.log("[billing] subscription checkout missing customer or subscription, retrieving with expand", {
+          eventId,
+          userId,
+          sessionId: session.id,
+        });
+
+        try {
+          const expandedSession = await stripe.checkout.sessions.retrieve(session.id, {
+            expand: ['subscription', 'customer']
+          });
+
+          stripeCustomerId = stripeCustomerId || (expandedSession.customer ? expandedSession.customer.toString() : null);
+          stripeSubscriptionId = stripeSubscriptionId || (expandedSession.subscription ? expandedSession.subscription.toString() : null);
+
+          console.log("[billing] retrieved expanded session", {
+            eventId,
+            userId,
+            stripeCustomerId,
+            stripeSubscriptionId,
+          });
+        } catch (err) {
+          console.error("[billing] failed to retrieve expanded session", err);
+        }
+      }
 
       if (!stripeCustomerId || !stripeSubscriptionId) {
-        console.error("[billing] subscription checkout missing customer or subscription", {
+        console.error("[billing] subscription checkout still missing customer or subscription after expand", {
           eventId,
           userId,
           stripeCustomerId,
