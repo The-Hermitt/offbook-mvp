@@ -396,6 +396,18 @@ async function recordBillingEventOnce(
   }
 }
 
+// Helper to safely convert period timestamps to string or null for BIGINT columns
+// NEVER returns empty string - only valid string number or null
+function toBigintOrNull(value: any): string | null {
+  if (value == null) return null;
+  if (typeof value === "number") return String(value);
+  if (typeof value === "string") {
+    const parsed = parseInt(value, 10);
+    return isNaN(parsed) ? null : String(parsed);
+  }
+  return null;
+}
+
 // Shared function to process Stripe billing events
 async function processStripeBillingEvent(event: Stripe.Event): Promise<{ processed: boolean; reason?: string }> {
   if (!stripe) {
@@ -484,13 +496,9 @@ async function processStripeBillingEvent(event: Stripe.Event): Promise<{ process
       }
 
       const status = subscription?.status || "active";
-      // Never pass empty string to BIGINT fields - use null if unknown
-      const currentPeriodStart = subscription && (subscription as any).current_period_start
-        ? String((subscription as any).current_period_start)
-        : null;
-      const currentPeriodEnd = subscription && (subscription as any).current_period_end
-        ? String((subscription as any).current_period_end)
-        : null;
+      // Use helper to ensure period fields are never empty strings
+      const currentPeriodStart = toBigintOrNull((subscription as any)?.current_period_start);
+      const currentPeriodEnd = toBigintOrNull((subscription as any)?.current_period_end);
 
       // Always upsert user_billing record (idempotent - runs even on retries)
       await upsertUserBilling({
@@ -741,8 +749,9 @@ async function processStripeBillingEvent(event: Stripe.Event): Promise<{ process
 
     // Update subscription status and reset monthly counter
     const status = subscription.status || "active";
-    const currentPeriodStart = String((subscription as any).current_period_start || "");
-    const currentPeriodEnd = String((subscription as any).current_period_end || "");
+    // Use helper to ensure period fields are never empty strings
+    const currentPeriodStart = toBigintOrNull((subscription as any)?.current_period_start);
+    const currentPeriodEnd = toBigintOrNull((subscription as any)?.current_period_end);
 
     await upsertUserBilling({
       user_id: userId,
