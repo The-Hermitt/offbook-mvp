@@ -2499,7 +2499,56 @@
 
       #devEntButtons .btn { min-height: 40px; font-size: 14px; }
 
+      /* Credit card styles */
+      .creditCard {
+        margin-top: 12px;
+        padding: 16px;
+        border: 1px solid #444;
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.02);
+      }
 
+      .creditRow {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 16px;
+      }
+
+      .creditLabel {
+        font-weight: 600;
+        font-size: 14px;
+        margin-bottom: 4px;
+      }
+
+      .creditSub {
+        font-size: 12px;
+        color: var(--muted);
+        line-height: 1.4;
+      }
+
+      .creditValue {
+        text-align: right;
+        flex-shrink: 0;
+      }
+
+      .creditBig {
+        font-size: 26px;
+        font-weight: 700;
+        line-height: 1;
+      }
+
+      .creditTiny {
+        font-size: 11px;
+        color: var(--muted);
+        margin-top: 2px;
+      }
+
+      .creditDivider {
+        height: 1px;
+        background: #444;
+        margin: 12px 0;
+      }
 
       /* Rehearse: make Count-in pill compact instead of full-width */
 
@@ -3057,6 +3106,32 @@ JANE: Ready?"></textarea>
         <div id="addCreditsHintSettings" class="small">Sign in to add credits.</div>
 
         <div id="addCreditsToastSettings" class="small" style="display:none; margin-top:6px">Stripe checkout coming soon.</div>
+
+        <div id="proCreditCard" class="creditCard" style="display:none;">
+          <div class="creditRow">
+            <div>
+              <div class="creditLabel">Pro monthly credits</div>
+              <div class="creditSub" id="proMonthlySub">Used 0/120 • Renews 2025-01-15</div>
+            </div>
+            <div class="creditValue">
+              <div class="creditBig" id="proMonthlyRemaining">120</div>
+              <div class="creditTiny">remaining</div>
+            </div>
+          </div>
+
+          <div class="creditDivider"></div>
+
+          <div class="creditRow">
+            <div>
+              <div class="creditLabel">Top-up credits</div>
+              <div class="creditSub">Used after monthly credits run out. Roll over while Pro is active. If you cancel, they expire at the end of this paid period.</div>
+            </div>
+            <div class="creditValue">
+              <div class="creditBig" id="topupBalance">0</div>
+              <div class="creditTiny">top-ups</div>
+            </div>
+          </div>
+        </div>
 
         <div id="proStatusLine" class="small" style="margin-top:6px"></div>
 
@@ -4493,6 +4568,10 @@ JANE: Ready?"></textarea>
           const btnGoProMonthly = document.getElementById("btnGoProMonthly");
           const btnManageSubscription = document.getElementById("btnManageSubscription");
           const proStatusLine = document.getElementById("proStatusLine");
+          const proCreditCard = document.getElementById("proCreditCard");
+          const proMonthlyRemaining = document.getElementById("proMonthlyRemaining");
+          const proMonthlySub = document.getElementById("proMonthlySub");
+          const topupBalance = document.getElementById("topupBalance");
 
           if (btnGoProMonthly && btnManageSubscription && proStatusLine) {
             const isSignedIn = Boolean(s?.passkey?.loggedIn);
@@ -4501,16 +4580,20 @@ JANE: Ready?"></textarea>
             const rendersUsed = s?.entitlement?.renders_used || 0;
             const creditsAvailable = s?.entitlement?.credits_available || 0;
             const periodEnd = s?.entitlement?.period_end;
+            const subscriptionRemaining = s?.entitlement?.subscription_remaining ?? Math.max(0, includedQuota - rendersUsed);
+            const topups = s?.entitlement?.topup_balance ?? creditsAvailable;
 
             if (!isSignedIn) {
-              // Signed out: disable both buttons
+              // Signed out: disable both buttons, hide card
               btnGoProMonthly.disabled = true;
               btnManageSubscription.disabled = true;
               btnGoProMonthly.style.display = "";
               btnManageSubscription.style.display = "none";
+              if (proCreditCard) proCreditCard.style.display = "none";
+              proStatusLine.style.display = "";
               proStatusLine.textContent = "Sign in to upgrade to Pro.";
             } else if (plan === "pro") {
-              // Pro user: hide Go Pro, show Manage
+              // Pro user: hide Go Pro, show Manage, show credit card
               btnGoProMonthly.style.display = "none";
               btnManageSubscription.style.display = "";
               btnManageSubscription.disabled = false;
@@ -4536,12 +4619,20 @@ JANE: Ready?"></textarea>
                 }
               }
 
-              proStatusLine.textContent = `Pro active • Used ${rendersUsed}/${includedQuota}${renewalStr ? ` • Renews ${renewalStr}` : ""}`;
+              // Show credit card with details
+              if (proCreditCard) proCreditCard.style.display = "";
+              proStatusLine.style.display = "none";
+
+              if (proMonthlyRemaining) proMonthlyRemaining.textContent = String(subscriptionRemaining);
+              if (proMonthlySub) proMonthlySub.textContent = `Used ${rendersUsed}/${includedQuota}${renewalStr ? ` • Renews ${renewalStr}` : ""}`;
+              if (topupBalance) topupBalance.textContent = String(topups);
             } else {
-              // Free user: show Go Pro, hide Manage
+              // Free user: show Go Pro, hide Manage, hide card
               btnGoProMonthly.style.display = "";
               btnManageSubscription.style.display = "none";
               btnGoProMonthly.disabled = false;
+              if (proCreditCard) proCreditCard.style.display = "none";
+              proStatusLine.style.display = "";
               proStatusLine.textContent = `Free • Credits: ${creditsAvailable}`;
             }
           }

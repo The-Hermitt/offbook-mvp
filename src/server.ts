@@ -260,6 +260,23 @@ app.post("/billing/create_checkout", express.json(), async (req: Request, res: R
     }
 
     // Handle top-up credits (existing behavior)
+    // Rule B: Top-ups only available while Pro is active
+    const userBilling = await getUserBilling(userId);
+    const plan = userBilling?.plan || "none";
+    const periodEnd = userBilling?.current_period_end ? parseInt(userBilling.current_period_end, 10) : null;
+
+    const periodEndMs = periodEnd ? periodEnd * 1000 : NaN;
+    const nowMs = Date.now();
+    const proActiveNow = plan === "pro" && (Number.isNaN(periodEndMs) || nowMs < periodEndMs);
+
+    if (!proActiveNow) {
+      return res.status(403).json({
+        ok: false,
+        error: "subscription_required",
+        message: "Top-ups are only available while Pro is active.",
+      });
+    }
+
     const priceId = process.env.STRIPE_PRICE_TOPUP_100;
     if (!priceId) {
       return res.status(500).json({

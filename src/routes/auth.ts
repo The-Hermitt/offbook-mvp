@@ -168,7 +168,25 @@ export async function noteRenderComplete(req: express.Request) {
 
   // Only spend top-up credits if we didn't consume from subscription
   if (!consumedFromSubscription) {
+    // Rule B: Top-ups can only be spent while Pro is active
     try {
+      const userBilling = await getUserBilling(userId);
+      const periodEnd = userBilling?.current_period_end ? parseInt(userBilling.current_period_end, 10) : null;
+      const periodEndMs = periodEnd ? periodEnd * 1000 : NaN;
+      const nowMs = Date.now();
+      const proActiveNow = userBilling?.plan === "pro" && (Number.isNaN(periodEndMs) || nowMs < periodEndMs);
+
+      if (!proActiveNow) {
+        console.log("[credits] cannot spend top-ups: Pro not active", {
+          userId,
+          plan: userBilling?.plan,
+          periodEnd,
+          proActiveNow,
+        });
+        // Don't throw - just skip spending top-ups
+        return;
+      }
+
       const beforeDb = await getAvailableCreditsForUser(userId);
       if (beforeDb > 0) {
         const updated = await spendUserCredits(userId, 1);
@@ -419,6 +437,18 @@ router.get("/session", async (req, res) => {
   const periodStart = userBilling?.current_period_start ? parseInt(userBilling.current_period_start, 10) : (sess?.periodStart ?? null);
   const periodEnd = userBilling?.current_period_end ? parseInt(userBilling.current_period_end, 10) : (sess?.periodEnd ?? null);
 
+  // Compute derived fields
+  const subscriptionRemaining = Math.max(0, includedQuota - rendersUsed);
+
+  // Rule B: Pro active means user is in a paid period (or period end is unknown/future)
+  const periodEndMs = (periodEnd && typeof periodEnd === "number") ? periodEnd * 1000 : NaN;
+  const nowMs = Date.now();
+  const proActiveNow = plan === "pro" && (Number.isNaN(periodEndMs) || nowMs < periodEndMs);
+
+  // Top-ups are only usable while Pro is active
+  const effectiveTopups = proActiveNow ? combinedCredits : 0;
+  const topupsExpireAt = periodEnd;
+
   if (passkeyLoggedIn) {
     console.log("[auth/session] entitlement snapshot", {
       userId,
@@ -430,6 +460,9 @@ router.get("/session", async (req, res) => {
       rendersUsed,
       periodStart,
       periodEnd,
+      proActiveNow,
+      subscriptionRemaining,
+      effectiveTopups,
     });
   }
 
@@ -451,6 +484,9 @@ router.get("/session", async (req, res) => {
       credits_available: combinedCredits,
       period_start: periodStart,
       period_end: periodEnd,
+      subscription_remaining: subscriptionRemaining,
+      topup_balance: effectiveTopups,
+      topups_expire_at: topupsExpireAt,
     },
   });
 });
