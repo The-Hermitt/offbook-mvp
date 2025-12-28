@@ -425,6 +425,13 @@ function toBigintOrNull(value: any): string | null {
   return null;
 }
 
+function stripeId(val: any): string | null {
+  if (!val) return null;
+  if (typeof val === "string") return val;
+  if (typeof val === "object" && typeof val.id === "string") return val.id;
+  return null;
+}
+
 // Shared function to process Stripe billing events
 async function processStripeBillingEvent(event: Stripe.Event): Promise<{ processed: boolean; reason?: string }> {
   if (!stripe) {

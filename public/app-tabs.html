@@ -4276,6 +4276,30 @@ JANE: Ready?"></textarea>
 
       }
 
+      // Hide legacy inline "Used: X • Credits: Y" line (old build).
+      function hideLegacyCreditsInlineSummary() {
+        const creditsCard = document.getElementById("proCreditCard");
+
+        // Most robust: hide any element in Settings that *looks like* the old inline summary,
+        // but isn't inside the new credits card.
+        const settingsRoot =
+          document.getElementById("tab-settings") ||
+          document.getElementById("settings") ||
+          document.body;
+
+        const nodes = settingsRoot.querySelectorAll("div, p, span");
+        for (const el of nodes) {
+          if (creditsCard && creditsCard.contains(el)) continue;
+
+          const t = (el.textContent || "").trim();
+          // Matches: "Used: 5 • Credits: 100"
+          if (/^Used:\s*\d+\s*[•·]\s*Credits:\s*\d+/i.test(t)) {
+            el.style.display = "none";
+            el.setAttribute("data-hidden-legacy-credits", "true");
+          }
+        }
+      }
+
       async function refreshAuthUI() {
 
         try {
@@ -4693,6 +4717,9 @@ JANE: Ready?"></textarea>
           // soft-fail; keep UI as-is
 
         }
+
+        // Hide legacy credits line after updating entitlement UI
+        hideLegacyCreditsInlineSummary();
 
       }
 

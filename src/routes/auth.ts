@@ -380,7 +380,59 @@ router.get("/session", async (req, res) => {
       try {
         userBilling = await getUserBilling(userId);
 
-        // If user has Pro plan with stripe subscription, refresh period data from Stripe
+        // Backfill missing subscription_id for existing Pro users
+        if (userBilling?.plan === "pro" && userBilling?.stripe_customer_id && !userBilling?.stripe_subscription_id && stripe) {
+          try {
+            console.log("[auth/session] backfilling missing subscription_id for Pro user", {
+              userId,
+              customerId: userBilling.stripe_customer_id,
+            });
+
+            const subs = await stripe.subscriptions.list({
+              customer: userBilling.stripe_customer_id,
+              limit: 1,
+              status: "all" as any,
+            });
+
+            const sub = subs.data?.[0];
+            if (sub) {
+              const currentPeriodStart = toBigintOrNull((sub as any)?.current_period_start);
+              const currentPeriodEnd = toBigintOrNull((sub as any)?.current_period_end);
+
+              await upsertUserBilling({
+                user_id: userId,
+                plan: "pro",
+                stripe_customer_id: userBilling.stripe_customer_id,
+                stripe_subscription_id: sub.id,
+                status: sub.status || "active",
+                current_period_start: currentPeriodStart,
+                current_period_end: currentPeriodEnd,
+                included_quota: 120,
+                renders_used: userBilling.renders_used,
+              });
+
+              // Update local userBilling object
+              userBilling.stripe_subscription_id = sub.id;
+              userBilling.current_period_start = currentPeriodStart;
+              userBilling.current_period_end = currentPeriodEnd;
+              userBilling.status = sub.status || "active";
+
+              console.log("[auth/session] backfilled subscription data", {
+                userId,
+                subscriptionId: sub.id,
+                currentPeriodStart,
+                currentPeriodEnd,
+              });
+            }
+          } catch (err) {
+            console.error("[auth/session] failed to backfill subscription_id", {
+              userId,
+              error: (err as any)?.message || String(err),
+            });
+          }
+        }
+
+        // If user has Pro plan with stripe subscription, refresh period data from Stripe (source of truth)
         if (userBilling?.plan === "pro" && userBilling?.stripe_subscription_id && stripe) {
           try {
             const subscription = await stripe.subscriptions.retrieve(userBilling.stripe_subscription_id);
@@ -388,29 +440,27 @@ router.get("/session", async (req, res) => {
             const currentPeriodEnd = toBigintOrNull((subscription as any)?.current_period_end);
 
             // Update DB with fresh Stripe cycle dates
-            if (currentPeriodStart || currentPeriodEnd) {
-              await upsertUserBilling({
-                user_id: userId,
-                plan: "pro",
-                status: subscription.status || "active",
-                current_period_start: currentPeriodStart,
-                current_period_end: currentPeriodEnd,
-                included_quota: 120,
-                renders_used: userBilling.renders_used,
-              });
+            await upsertUserBilling({
+              user_id: userId,
+              plan: "pro",
+              status: subscription.status || "active",
+              current_period_start: currentPeriodStart,
+              current_period_end: currentPeriodEnd,
+              included_quota: 120,
+              renders_used: userBilling.renders_used,
+            });
 
-              // Update local userBilling object with fresh values
-              userBilling.current_period_start = currentPeriodStart;
-              userBilling.current_period_end = currentPeriodEnd;
-              userBilling.status = subscription.status || "active";
+            // Update local userBilling object with fresh values
+            userBilling.current_period_start = currentPeriodStart;
+            userBilling.current_period_end = currentPeriodEnd;
+            userBilling.status = subscription.status || "active";
 
-              console.log("[auth/session] refreshed subscription periods from Stripe", {
-                userId,
-                subscriptionId: userBilling.stripe_subscription_id,
-                currentPeriodStart,
-                currentPeriodEnd,
-              });
-            }
+            console.log("[auth/session] refreshed subscription periods from Stripe", {
+              userId,
+              subscriptionId: userBilling.stripe_subscription_id,
+              currentPeriodStart,
+              currentPeriodEnd,
+            });
           } catch (err) {
             console.error("[auth/session] failed to refresh Stripe subscription periods (falling back to DB)", {
               userId,
