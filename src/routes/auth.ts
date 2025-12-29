@@ -34,19 +34,24 @@ async function resolveBestSubscription(
   preferredSubscriptionId?: string | null
 ): Promise<Stripe.Subscription | null> {
   try {
-    // If we have a preferred subscription ID, try to retrieve and validate it
+    let preferredSub: Stripe.Subscription | null = null;
+
+    // If we have a preferred subscription ID, try to retrieve it as a candidate
     if (preferredSubscriptionId) {
       try {
         const sub = await stripe.subscriptions.retrieve(preferredSubscriptionId);
         if (isActiveishStatus(sub.status)) {
-          return sub;
+          preferredSub = sub;
         }
       } catch (err) {
-        // Continue to search for alternatives
+        console.warn("[auth/session] failed to retrieve preferred subscription", {
+          preferredSubscriptionId,
+          error: (err as any)?.message,
+        });
       }
     }
 
-    // List all subscriptions for this customer
+    // Always list all subscriptions for this customer
     const list = await stripe.subscriptions.list({
       customer: stripeCustomerId,
       status: "all" as any,
@@ -55,18 +60,22 @@ async function resolveBestSubscription(
     });
 
     // Filter to active-ish statuses only
-    const activeish = list.data.filter((s) => isActiveishStatus(s.status));
+    let candidates = list.data.filter((s) => isActiveishStatus(s.status));
 
-    if (activeish.length === 0) {
+    // If preferredSub exists and is not already in the list, append it
+    if (preferredSub && !candidates.some((s) => s.id === preferredSub!.id)) {
+      candidates.push(preferredSub);
+    }
+
+    if (candidates.length === 0) {
       return null;
     }
 
     // Try to identify Pro Monthly subscriptions by price ID or lookup key
     const proMonthlyPriceId = process.env.STRIPE_PRICE_PRO_MONTHLY;
-    let proMonthlySubs = activeish;
 
     if (proMonthlyPriceId) {
-      const matchingPrice = activeish.filter((s) =>
+      const matchingPrice = candidates.filter((s) =>
         s.items.data.some(
           (item) =>
             item.price.id === proMonthlyPriceId ||
@@ -75,15 +84,23 @@ async function resolveBestSubscription(
       );
 
       if (matchingPrice.length > 0) {
-        proMonthlySubs = matchingPrice;
+        candidates = matchingPrice;
       }
     }
 
     // Select the one with the greatest current_period_end (most recent/future billing)
-    const best = proMonthlySubs.reduce((prev, curr) => {
+    const best = candidates.reduce((prev, curr) => {
       const prevEnd = (prev as any).current_period_end ?? 0;
       const currEnd = (curr as any).current_period_end ?? 0;
       return currEnd > prevEnd ? curr : prev;
+    });
+
+    console.log("[billing] resolveBestSubscription", {
+      stripeCustomerId,
+      preferredSubscriptionId,
+      chosenId: best?.id,
+      chosenEnd: (best as any)?.current_period_end,
+      candidateCount: candidates.length,
     });
 
     return best;
