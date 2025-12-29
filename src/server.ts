@@ -425,6 +425,24 @@ function toBigintOrNull(value: any): string | null {
   return null;
 }
 
+function getSubscriptionPeriodFromItems(sub: any): { start: number | null; end: number | null } {
+  const items = (sub as any)?.items?.data || [];
+  const starts: number[] = [];
+  const ends: number[] = [];
+
+  for (const item of items) {
+    const s = item.current_period_start;
+    const e = item.current_period_end;
+    if (typeof s === "number") starts.push(s);
+    if (typeof e === "number") ends.push(e);
+  }
+
+  const start = starts.length > 0 ? Math.min(...starts) : null;
+  const end = ends.length > 0 ? Math.max(...ends) : null;
+
+  return { start, end };
+}
+
 function stripeId(val: any): string | null {
   if (!val) return null;
   if (typeof val === "string") return val;
@@ -499,16 +517,19 @@ async function resolveBestSubscription(
 
     // Select the one with the greatest current_period_end (most recent/future billing)
     const best = candidates.reduce((prev, curr) => {
-      const prevEnd = (prev as any).current_period_end ?? 0;
-      const currEnd = (curr as any).current_period_end ?? 0;
+      const prevPeriod = getSubscriptionPeriodFromItems(prev);
+      const currPeriod = getSubscriptionPeriodFromItems(curr);
+      const prevEnd = prevPeriod.end ?? 0;
+      const currEnd = currPeriod.end ?? 0;
       return currEnd > prevEnd ? curr : prev;
     });
 
+    const bestPeriod = getSubscriptionPeriodFromItems(best);
     console.log("[billing] resolveBestSubscription", {
       stripeCustomerId,
       preferredSubscriptionId,
       chosenId: best?.id,
-      chosenEnd: (best as any)?.current_period_end,
+      chosenEnd: bestPeriod.end,
       candidateCount: candidates.length,
     });
 
@@ -543,8 +564,9 @@ async function refreshStripePeriodForUser(opts: {
     }
 
     const subId = sub.id;
-    const cps = toBigintOrNull((sub as any).current_period_start);
-    const cpe = toBigintOrNull((sub as any).current_period_end);
+    const { start, end } = getSubscriptionPeriodFromItems(sub);
+    const cps = toBigintOrNull(start);
+    const cpe = toBigintOrNull(end);
 
     // Required clear log line
     const startISO = cps ? new Date(parseInt(cps, 10) * 1000).toISOString() : null;
@@ -664,13 +686,14 @@ async function processStripeBillingEvent(event: Stripe.Event): Promise<{ process
       let subscription: Stripe.Subscription | null = null;
       try {
         subscription = await stripe.subscriptions.retrieve(stripeSubscriptionId);
+        const { start, end } = getSubscriptionPeriodFromItems(subscription);
         console.log("[billing] retrieved subscription for checkout", {
           eventId,
           userId,
           stripeSubscriptionId,
           status: subscription.status,
-          current_period_start: (subscription as any).current_period_start,
-          current_period_end: (subscription as any).current_period_end,
+          current_period_start: start,
+          current_period_end: end,
         });
       } catch (err) {
         console.warn("[billing] failed to retrieve subscription, proceeding with defaults", {
@@ -683,8 +706,9 @@ async function processStripeBillingEvent(event: Stripe.Event): Promise<{ process
 
       const status = subscription?.status || "active";
       // Use helper to ensure period fields are never empty strings
-      const currentPeriodStart = toBigintOrNull((subscription as any)?.current_period_start);
-      const currentPeriodEnd = toBigintOrNull((subscription as any)?.current_period_end);
+      const { start, end } = getSubscriptionPeriodFromItems(subscription);
+      const currentPeriodStart = toBigintOrNull(start);
+      const currentPeriodEnd = toBigintOrNull(end);
 
       // Always upsert user_billing record (idempotent - runs even on retries)
       await upsertUserBilling({
@@ -1447,9 +1471,10 @@ app.get("/debug/billing/attach_subscription", requireSecret, async (req: Request
       return res.status(400).json({ ok: false, error: "missing_customer_id" });
     }
 
-    // Extract period dates
-    const cps = toBigintOrNull((sub as any).current_period_start);
-    const cpe = toBigintOrNull((sub as any).current_period_end);
+    // Extract period dates from subscription items
+    const { start, end } = getSubscriptionPeriodFromItems(sub);
+    const cps = toBigintOrNull(start);
+    const cpe = toBigintOrNull(end);
 
     // Best-effort: update customer metadata with userId
     try {

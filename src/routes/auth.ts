@@ -24,6 +24,24 @@ function toBigintOrNull(value: any): string | null {
   return null;
 }
 
+function getSubscriptionPeriodFromItems(sub: any): { start: number | null; end: number | null } {
+  const items = (sub as any)?.items?.data || [];
+  const starts: number[] = [];
+  const ends: number[] = [];
+
+  for (const item of items) {
+    const s = item.current_period_start;
+    const e = item.current_period_end;
+    if (typeof s === "number") starts.push(s);
+    if (typeof e === "number") ends.push(e);
+  }
+
+  const start = starts.length > 0 ? Math.min(...starts) : null;
+  const end = ends.length > 0 ? Math.max(...ends) : null;
+
+  return { start, end };
+}
+
 function isActiveishStatus(status: string) {
   return status === "active" || status === "trialing" || status === "past_due" || status === "unpaid";
 }
@@ -90,16 +108,19 @@ async function resolveBestSubscription(
 
     // Select the one with the greatest current_period_end (most recent/future billing)
     const best = candidates.reduce((prev, curr) => {
-      const prevEnd = (prev as any).current_period_end ?? 0;
-      const currEnd = (curr as any).current_period_end ?? 0;
+      const prevPeriod = getSubscriptionPeriodFromItems(prev);
+      const currPeriod = getSubscriptionPeriodFromItems(curr);
+      const prevEnd = prevPeriod.end ?? 0;
+      const currEnd = currPeriod.end ?? 0;
       return currEnd > prevEnd ? curr : prev;
     });
 
+    const bestPeriod = getSubscriptionPeriodFromItems(best);
     console.log("[billing] resolveBestSubscription", {
       stripeCustomerId,
       preferredSubscriptionId,
       chosenId: best?.id,
-      chosenEnd: (best as any)?.current_period_end,
+      chosenEnd: bestPeriod.end,
       candidateCount: candidates.length,
     });
 
@@ -482,8 +503,9 @@ router.get("/session", async (req, res) => {
 
             if (sub) {
               const subId = sub.id;
-              const cps = toBigintOrNull((sub as any).current_period_start);
-              const cpe = toBigintOrNull((sub as any).current_period_end);
+              const { start, end } = getSubscriptionPeriodFromItems(sub);
+              const cps = toBigintOrNull(start);
+              const cpe = toBigintOrNull(end);
 
               // Required clear log line
               const startISO = cps ? new Date(parseInt(cps, 10) * 1000).toISOString() : null;
