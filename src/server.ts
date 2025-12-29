@@ -1421,6 +1421,90 @@ app.get("/debug/billing/repair_period", requireSecret, async (req: Request, res:
   }
 });
 
+// Debug endpoint to attach a Stripe subscription to current user
+app.get("/debug/billing/attach_subscription", requireSecret, async (req: Request, res: Response) => {
+  try {
+    const { userId } = getPasskeySession(req);
+    if (!userId) {
+      return res.status(401).json({ ok: false, error: "not_authenticated" });
+    }
+
+    if (!stripe) {
+      return res.status(500).json({ ok: false, error: "stripe_not_configured" });
+    }
+
+    const sub_id = String(req.query.sub_id || "").trim();
+    if (!sub_id) {
+      return res.status(400).json({ ok: false, error: "missing_sub_id" });
+    }
+
+    // Retrieve the subscription
+    const sub = await stripe.subscriptions.retrieve(sub_id);
+
+    // Extract customer ID (handle both string and object)
+    const customerId = stripeId(sub.customer);
+    if (!customerId) {
+      return res.status(400).json({ ok: false, error: "missing_customer_id" });
+    }
+
+    // Extract period dates
+    const cps = toBigintOrNull((sub as any).current_period_start);
+    const cpe = toBigintOrNull((sub as any).current_period_end);
+
+    // Best-effort: update customer metadata with userId
+    try {
+      await stripe.customers.update(customerId, {
+        metadata: { userId },
+      });
+    } catch (err) {
+      console.warn("[billing] attach_subscription: failed to update customer metadata", {
+        customerId,
+        userId,
+        error: (err as any)?.message,
+      });
+      // Don't fail - continue
+    }
+
+    // Upsert user billing (omit renders_used to preserve existing value)
+    await upsertUserBilling({
+      user_id: userId,
+      plan: "pro",
+      status: sub.status || "active",
+      stripe_customer_id: customerId,
+      stripe_subscription_id: sub.id,
+      current_period_start: cps,
+      current_period_end: cpe,
+      included_quota: 120,
+    });
+
+    console.log("[billing] attach_subscription: linked subscription to user", {
+      userId,
+      customerId,
+      subscriptionId: sub.id,
+      status: sub.status,
+      cps,
+      cpe,
+    });
+
+    return res.json({
+      ok: true,
+      userId,
+      customerId,
+      subscriptionId: sub.id,
+      status: sub.status,
+      current_period_start: cps,
+      current_period_end: cpe,
+    });
+  } catch (e: any) {
+    console.error("[billing] attach_subscription error", e);
+    return res.status(500).json({
+      ok: false,
+      error: "attach_failed",
+      message: e?.message || String(e),
+    });
+  }
+});
+
 // ---- In-memory store (fallback + rendered assets)
 type Line = { speaker: string; text: string };
 type Scene = { id: string; title: string; lines: Line[] };

@@ -585,17 +585,34 @@ export async function upsertUserBilling(data: {
   included_quota?: number;
   renders_used?: number;
 }): Promise<void> {
-  const {
-    user_id,
-    plan,
-    status,
-    stripe_customer_id = null,
-    stripe_subscription_id = null,
-    current_period_start = null,
-    current_period_end = null,
-    included_quota = 0,
-    renders_used = 0,
-  } = data;
+  const { user_id, plan, status } = data;
+
+  // Preserve existing values when fields are omitted (undefined)
+  const existing = await getUserBilling(user_id);
+
+  const stripe_customer_id = data.stripe_customer_id !== undefined
+    ? data.stripe_customer_id
+    : (existing?.stripe_customer_id ?? null);
+
+  const stripe_subscription_id = data.stripe_subscription_id !== undefined
+    ? data.stripe_subscription_id
+    : (existing?.stripe_subscription_id ?? null);
+
+  const current_period_start = data.current_period_start !== undefined
+    ? data.current_period_start
+    : (existing?.current_period_start ?? null);
+
+  const current_period_end = data.current_period_end !== undefined
+    ? data.current_period_end
+    : (existing?.current_period_end ?? null);
+
+  const included_quota = data.included_quota !== undefined
+    ? data.included_quota
+    : (existing?.included_quota ?? 0);
+
+  const renders_used = data.renders_used !== undefined
+    ? data.renders_used
+    : (existing?.renders_used ?? 0);
 
   if (USING_POSTGRES) {
     await dbRun(
