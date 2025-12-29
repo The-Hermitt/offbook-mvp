@@ -436,18 +436,97 @@ function isActiveishStatus(status: string) {
   return status === "active" || status === "trialing" || status === "past_due" || status === "unpaid";
 }
 
-async function pickBestSubscription(stripe: Stripe, customerId: string) {
-  const list = await stripe.subscriptions.list({ customer: customerId, status: "all" as any, limit: 10 });
-  const now = Math.floor(Date.now() / 1000);
+async function resolveBestSubscription(
+  stripe: Stripe,
+  stripeCustomerId: string,
+  preferredSubscriptionId?: string | null
+): Promise<Stripe.Subscription | null> {
+  try {
+    // If we have a preferred subscription ID, try to retrieve and validate it
+    if (preferredSubscriptionId) {
+      try {
+        const sub = await stripe.subscriptions.retrieve(preferredSubscriptionId);
+        if (isActiveishStatus(sub.status)) {
+          console.log("[billing] using preferred subscription", {
+            subId: sub.id,
+            status: sub.status,
+            currentPeriodEnd: (sub as any).current_period_end,
+          });
+          return sub;
+        }
+        console.log("[billing] preferred subscription not active-ish, searching for alternatives", {
+          subId: sub.id,
+          status: sub.status,
+        });
+      } catch (err) {
+        console.warn("[billing] failed to retrieve preferred subscription, searching for alternatives", {
+          preferredSubscriptionId,
+          error: (err as any)?.message,
+        });
+      }
+    }
 
-  // Prefer active-ish subs with a current period that hasn't already ended
-  const preferred =
-    list.data.find((s: any) => isActiveishStatus(s.status) && ((s.current_period_end ?? 0) > now - 3600)) ||
-    list.data.find((s: any) => isActiveishStatus(s.status)) ||
-    list.data[0] ||
-    null;
+    // List all subscriptions for this customer
+    const list = await stripe.subscriptions.list({
+      customer: stripeCustomerId,
+      status: "all" as any,
+      limit: 100,
+      expand: ["data.items.data.price.product"],
+    });
 
-  return preferred;
+    // Filter to active-ish statuses only
+    const activeish = list.data.filter((s) => isActiveishStatus(s.status));
+
+    if (activeish.length === 0) {
+      console.log("[billing] no active-ish subscriptions found", { stripeCustomerId });
+      return null;
+    }
+
+    // Try to identify Pro Monthly subscriptions by price ID or lookup key
+    const proMonthlyPriceId = process.env.STRIPE_PRICE_PRO_MONTHLY;
+    let proMonthlySubs = activeish;
+
+    if (proMonthlyPriceId) {
+      const matchingPrice = activeish.filter((s) =>
+        s.items.data.some(
+          (item) =>
+            item.price.id === proMonthlyPriceId ||
+            (item.price as any).lookup_key === "pro-monthly"
+        )
+      );
+
+      if (matchingPrice.length > 0) {
+        proMonthlySubs = matchingPrice;
+        console.log("[billing] found Pro Monthly subscriptions", {
+          count: proMonthlySubs.length,
+          priceId: proMonthlyPriceId,
+        });
+      }
+    }
+
+    // Select the one with the greatest current_period_end (most recent/future billing)
+    const best = proMonthlySubs.reduce((prev, curr) => {
+      const prevEnd = (prev as any).current_period_end ?? 0;
+      const currEnd = (curr as any).current_period_end ?? 0;
+      return currEnd > prevEnd ? curr : prev;
+    });
+
+    console.log("[billing] resolved best subscription", {
+      subId: best.id,
+      status: best.status,
+      currentPeriodStart: (best as any).current_period_start,
+      currentPeriodEnd: (best as any).current_period_end,
+    });
+
+    return best;
+  } catch (err) {
+    console.error("[billing] resolveBestSubscription failed", {
+      stripeCustomerId,
+      preferredSubscriptionId,
+      error: (err as any)?.message || String(err),
+    });
+    return null;
+  }
 }
 
 async function refreshStripePeriodForUser(opts: {
@@ -456,35 +535,27 @@ async function refreshStripePeriodForUser(opts: {
   stripeCustomerId: string;
   stripeSubscriptionId: string | null;
 }) {
-  const { stripe, userId, stripeCustomerId } = opts;
-  let subId = opts.stripeSubscriptionId;
+  const { stripe, userId, stripeCustomerId, stripeSubscriptionId } = opts;
 
   if (!stripe) return null;
 
   try {
-    let sub: any = null;
+    // Use resolveBestSubscription to get the correct active subscription
+    const sub = await resolveBestSubscription(stripe, stripeCustomerId, stripeSubscriptionId);
 
-    if (!subId) {
-      sub = await pickBestSubscription(stripe, stripeCustomerId);
-      subId = sub?.id || null;
-    } else {
-      sub = await stripe.subscriptions.retrieve(subId);
+    if (!sub) {
+      console.log("[billing] no active subscription found", { userId, stripeCustomerId });
+      return null;
     }
 
-    if (!subId || !sub) return null;
-
+    const subId = sub.id;
     const cps = toBigintOrNull((sub as any).current_period_start);
     const cpe = toBigintOrNull((sub as any).current_period_end);
 
-    console.log("[billing] stripe period refresh", {
-      userId,
-      subId,
-      status: sub.status,
-      current_period_start: (sub as any).current_period_start,
-      current_period_end: (sub as any).current_period_end,
-      cps,
-      cpe,
-    });
+    // Required clear log line
+    const startISO = cps ? new Date(parseInt(cps, 10) * 1000).toISOString() : null;
+    const endISO = cpe ? new Date(parseInt(cpe, 10) * 1000).toISOString() : null;
+    console.log(`[billing] resolved stripe sub=${subId} status=${sub.status} period=${startISO}..${endISO}`);
 
     // Only write if we actually got valid numbers back
     if (cps && cpe) {

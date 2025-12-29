@@ -28,18 +28,73 @@ function isActiveishStatus(status: string) {
   return status === "active" || status === "trialing" || status === "past_due" || status === "unpaid";
 }
 
-async function pickBestSubscription(stripe: Stripe, customerId: string) {
-  const list = await stripe.subscriptions.list({ customer: customerId, status: "all" as any, limit: 10 });
-  const now = Math.floor(Date.now() / 1000);
+async function resolveBestSubscription(
+  stripe: Stripe,
+  stripeCustomerId: string,
+  preferredSubscriptionId?: string | null
+): Promise<Stripe.Subscription | null> {
+  try {
+    // If we have a preferred subscription ID, try to retrieve and validate it
+    if (preferredSubscriptionId) {
+      try {
+        const sub = await stripe.subscriptions.retrieve(preferredSubscriptionId);
+        if (isActiveishStatus(sub.status)) {
+          return sub;
+        }
+      } catch (err) {
+        // Continue to search for alternatives
+      }
+    }
 
-  // Prefer active-ish subs with a current period that hasn't already ended
-  const preferred =
-    list.data.find((s: any) => isActiveishStatus(s.status) && ((s.current_period_end ?? 0) > now - 3600)) ||
-    list.data.find((s: any) => isActiveishStatus(s.status)) ||
-    list.data[0] ||
-    null;
+    // List all subscriptions for this customer
+    const list = await stripe.subscriptions.list({
+      customer: stripeCustomerId,
+      status: "all" as any,
+      limit: 100,
+      expand: ["data.items.data.price.product"],
+    });
 
-  return preferred;
+    // Filter to active-ish statuses only
+    const activeish = list.data.filter((s) => isActiveishStatus(s.status));
+
+    if (activeish.length === 0) {
+      return null;
+    }
+
+    // Try to identify Pro Monthly subscriptions by price ID or lookup key
+    const proMonthlyPriceId = process.env.STRIPE_PRICE_PRO_MONTHLY;
+    let proMonthlySubs = activeish;
+
+    if (proMonthlyPriceId) {
+      const matchingPrice = activeish.filter((s) =>
+        s.items.data.some(
+          (item) =>
+            item.price.id === proMonthlyPriceId ||
+            (item.price as any).lookup_key === "pro-monthly"
+        )
+      );
+
+      if (matchingPrice.length > 0) {
+        proMonthlySubs = matchingPrice;
+      }
+    }
+
+    // Select the one with the greatest current_period_end (most recent/future billing)
+    const best = proMonthlySubs.reduce((prev, curr) => {
+      const prevEnd = (prev as any).current_period_end ?? 0;
+      const currEnd = (curr as any).current_period_end ?? 0;
+      return currEnd > prevEnd ? curr : prev;
+    });
+
+    return best;
+  } catch (err) {
+    console.error("[auth/session] resolveBestSubscription failed", {
+      stripeCustomerId,
+      preferredSubscriptionId,
+      error: (err as any)?.message || String(err),
+    });
+    return null;
+  }
 }
 
 async function countPasskeysForUser(userId: string): Promise<number> {
@@ -401,35 +456,22 @@ router.get("/session", async (req, res) => {
         // Refresh Stripe period for Pro users
         if (userBilling?.plan === "pro" && userBilling?.stripe_customer_id && stripe) {
           try {
-            let sub: any = null;
-            let subId = userBilling.stripe_subscription_id;
+            // Use resolveBestSubscription to get the correct active subscription
+            const sub = await resolveBestSubscription(
+              stripe,
+              userBilling.stripe_customer_id,
+              userBilling.stripe_subscription_id
+            );
 
-            // If missing subscription_id, use pickBestSubscription to find it
-            if (!subId) {
-              console.log("[auth/session] backfilling missing subscription_id for Pro user", {
-                userId,
-                customerId: userBilling.stripe_customer_id,
-              });
-              sub = await pickBestSubscription(stripe, userBilling.stripe_customer_id);
-              subId = sub?.id || null;
-            } else {
-              // Otherwise retrieve the known subscription
-              sub = await stripe.subscriptions.retrieve(subId);
-            }
-
-            if (sub && subId) {
+            if (sub) {
+              const subId = sub.id;
               const cps = toBigintOrNull((sub as any).current_period_start);
               const cpe = toBigintOrNull((sub as any).current_period_end);
 
-              console.log("[auth/session] stripe period refresh", {
-                userId,
-                subId,
-                status: sub.status,
-                current_period_start: (sub as any).current_period_start,
-                current_period_end: (sub as any).current_period_end,
-                cps,
-                cpe,
-              });
+              // Required clear log line
+              const startISO = cps ? new Date(parseInt(cps, 10) * 1000).toISOString() : null;
+              const endISO = cpe ? new Date(parseInt(cpe, 10) * 1000).toISOString() : null;
+              console.log(`[billing] resolved stripe sub=${subId} status=${sub.status} period=${startISO}..${endISO}`);
 
               // Only update if we got valid period values
               if (cps && cpe) {
@@ -450,13 +492,6 @@ router.get("/session", async (req, res) => {
                 userBilling.current_period_start = cps;
                 userBilling.current_period_end = cpe;
                 userBilling.status = sub.status || "active";
-
-                console.log("[auth/session] refreshed subscription periods from Stripe", {
-                  userId,
-                  subscriptionId: subId,
-                  cps,
-                  cpe,
-                });
               }
             }
           } catch (err) {
@@ -517,7 +552,16 @@ router.get("/session", async (req, res) => {
 
   res.setHeader("Cache-Control", "no-store");
 
-  res.json({
+  // Check if dev debug mode is enabled
+  const devToolsOn =
+    /^true$/i.test(process.env.DEV_TOOLS || "") ||
+    /(^|[?&])dev(=1|&|$)/.test(req.url);
+  const sharedSecret = process.env.SHARED_SECRET || "";
+  const providedSecret = (req.query.secret as string) || req.header("X-Shared-Secret") || "";
+  const isDevDebug = devToolsOn && sharedSecret && providedSecret === sharedSecret;
+
+  // Build base response
+  const response: any = {
     invited,
     hasInviteCode: Boolean((process.env.INVITE_CODE || "").trim()),
     enforceAuthGate: /^true$/i.test(process.env.ENFORCE_AUTH_GATE || ""),
@@ -537,7 +581,23 @@ router.get("/session", async (req, res) => {
       topup_balance: effectiveTopups,
       topups_expire_at: topupsExpireAt,
     },
-  });
+  };
+
+  // Add dev debug fields if authorized
+  if (isDevDebug && userBilling) {
+    const periodEndISO = userBilling.current_period_end
+      ? new Date(parseInt(userBilling.current_period_end, 10) * 1000).toISOString()
+      : null;
+
+    response.debug = {
+      stripe_customer_id: userBilling.stripe_customer_id,
+      stripe_subscription_id: userBilling.stripe_subscription_id,
+      stripe_sub_status: userBilling.status,
+      stripe_current_period_end: periodEndISO,
+    };
+  }
+
+  res.json(response);
 });
 
 // --- POST /auth/enter-code ---------------------------------------------------
