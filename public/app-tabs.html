@@ -1712,13 +1712,23 @@
 
       body.record-active #screen-record .control-rail{
 
-        position:sticky;
+        /* iOS Safari: use relative positioning to avoid clipping */
 
-        top:calc(env(safe-area-inset-top,0px) + 8px);
+        position:relative;
+
+        top:auto;
 
         align-self:start;
 
         gap:8px;
+
+        min-height:0;
+
+        max-height:100%;
+
+        overflow-y:auto;
+
+        -webkit-overflow-scrolling:touch;
 
       }
 
@@ -1858,7 +1868,9 @@
 
         flex-direction:column;
 
-        justify-content:space-between;
+        justify-content:flex-start;
+
+        align-content:start;
 
         gap:10px;
 
@@ -1874,11 +1886,19 @@
 
         align-self:stretch;
 
-        position:sticky;
+        /* iOS Safari: use relative positioning to avoid clipping */
 
-        /* tuck the rail a bit higher */
+        position:relative;
 
-        top:calc(env(safe-area-inset-top,0px) + 4px);
+        top:auto;
+
+        min-height:0;
+
+        max-height:100%;
+
+        overflow-y:auto;
+
+        -webkit-overflow-scrolling:touch;
 
       }
 
