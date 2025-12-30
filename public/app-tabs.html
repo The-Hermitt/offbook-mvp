@@ -13419,6 +13419,12 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
       async function startRecording(){
 
+        // Guard: prevent concurrent starts or starting during finalize
+        if (R._recStarting || R._finalizingTake || R.recording) return;
+        R._recStarting = true;
+
+        try {
+
         // Guard: Ensure render_id exists for Room export
         if (!R.render_id && !localStorage.getItem("offbook:last_render_id")) {
           setStatusRec("Room needs a reader render. Go to Rehearse and tap Render before recording.");
@@ -13637,6 +13643,12 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
         R.rec.onstop = async ()=>{
 
+          // Guard: prevent double-execution of onstop handler
+          if (R._stopHandled) return;
+          R._stopHandled = true;
+
+          try {
+
           setStatus("Recorder stopped; length (ms) = " + (Date.now() - (R.recordStartMs || Date.now())));
 
           if(typeof window !== "undefined"){
@@ -13676,6 +13688,13 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
           setRailStates();
 
+          } finally {
+            // Clear transition flags after finalize completes
+            R._recStopping = false;
+            R._finalizingTake = false;
+            R._stopHandled = false;
+          }
+
         };
 
 
@@ -13704,8 +13723,14 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
         R.recordStartMs = Date.now();
 
+        // Reset stop handler for new recording session
+        R._stopHandled = false;
+
         try{
           R.rec.start();
+
+          // Successfully started - clear starting flag
+          R._recStarting = false;
 
           // Start stem recorders at the same moment as the main recorder (Room stems)
           // Use timeslice to force chunk emission on iOS
@@ -13835,11 +13860,19 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
         }
 
+        } finally {
+          // Ensure _recStarting is cleared if recording didn't start
+          if (!R.recording) R._recStarting = false;
+        }
+
       }
 
 
 
       function stopRecording(){
+
+        // Guard: prevent concurrent stops or stopping during finalize
+        if (R._recStopping || R._finalizingTake) return;
 
         if(!R.recording){
 
@@ -13849,9 +13882,17 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
           restoreReaderDirectMonitor();
 
+          // Reset flags when not actually recording
+          R._recStopping = false;
+          R._finalizingTake = false;
+
           return;
 
         }
+
+        // Initiate stopping and finalize flags
+        R._recStopping = true;
+        R._finalizingTake = true;
 
         // Flush final chunks from stem recorders before stopping
         try { R.recMic?.requestData?.(); } catch {}
@@ -15862,6 +15903,9 @@ const savedStrip = document.getElementById("savedScriptsStrip");
 
 
       R.btnRec?.addEventListener("click", ()=>{
+
+        // Guard: prevent double-clicks during transitions
+        if (R._recStarting || R._recStopping || R._finalizingTake) return;
 
         if(R.recording) { stopRecording(); }
 
