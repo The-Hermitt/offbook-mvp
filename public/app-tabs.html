@@ -1910,7 +1910,49 @@
 
     }
 
+    /* ============================================================
+       iOS Safari (26+) landscape Record rail fix:
+       - Forces a stable 2-column grid so buttons don't disappear or stack
+       - Keeps existing layout by only overriding in iOS + landscape
+       ============================================================ */
+    @supports (-webkit-touch-callout: none) {
+      @media (orientation: landscape) and (max-width: 1024px) {
+        body.record-active #screen-record .control-rail {
+          display: grid !important;
+          grid-template-columns: 1fr 1fr;
+          grid-template-areas:
+            "note note"
+            "render render"
+            "rec rec"
+            "grid camera"
+            "countin headphones";
+          gap: 14px;
+          align-content: start;
+          min-height: 0;
+          overflow-y: auto;
+        }
 
+        /* Optional note banner (if present) */
+        body.record-active #screen-record #recordNote,
+        body.record-active #screen-record .record-note {
+          grid-area: note;
+        }
+
+        /* Button placement (matches existing class names in your HTML) */
+        body.record-active #screen-record .control-rail .pos-render { grid-area: render; }
+        body.record-active #screen-record .control-rail .pos-rec { grid-area: rec; }
+        body.record-active #screen-record .control-rail .pos-grid { grid-area: grid; }
+        body.record-active #screen-record .control-rail .pos-camera { grid-area: camera; }
+        body.record-active #screen-record .control-rail .pos-countin { grid-area: countin; }
+        body.record-active #screen-record .control-rail .pos-headphones { grid-area: headphones; }
+
+        /* Prevent "zoomed/cropped" camera feel in landscape only (portrait unchanged) */
+        body.record-active #screen-record #preview {
+          object-fit: contain !important;
+          object-position: center center;
+        }
+      }
+    }
 
     /* REC visual states */
 
