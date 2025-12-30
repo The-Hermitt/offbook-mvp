@@ -362,10 +362,45 @@ app.post("/billing/create_portal", express.json(), async (req: Request, res: Res
                      "https://example.com/offbook";
 
     // Create portal session
-    const portalSession = await stripe.billingPortal.sessions.create({
-      customer: stripeCustomerId,
-      return_url: returnUrl,
-    });
+    let portalSession;
+    try {
+      portalSession = await stripe.billingPortal.sessions.create({
+        customer: stripeCustomerId,
+        return_url: returnUrl,
+      });
+    } catch (err: any) {
+      // Handle stale customer ID (test→live cutover)
+      const errType = err?.type || "";
+      const errCode = err?.code || "";
+      if (errType === "invalid_request_error" && errCode === "resource_missing") {
+        console.log(`[billing] stale customer id, clearing mapping userId=${userId} customerId=${stripeCustomerId}`);
+
+        // Clear stripe IDs while preserving plan/status
+        const existing = await getUserBilling(userId);
+        if (existing) {
+          await upsertUserBilling({
+            user_id: userId,
+            plan: existing.plan,
+            status: existing.status,
+            stripe_customer_id: null,
+            stripe_subscription_id: null,
+            current_period_start: existing.current_period_start,
+            current_period_end: existing.current_period_end,
+            included_quota: existing.included_quota,
+            renders_used: existing.renders_used,
+          });
+        }
+
+        return res.status(409).json({
+          ok: false,
+          error: "relink_required",
+          message: "This account was linked to a Stripe Test subscription. Please subscribe again to create a Live subscription.",
+        });
+      }
+
+      // Re-throw other errors
+      throw err;
+    }
 
     console.log("[billing] created portal session", {
       userId,

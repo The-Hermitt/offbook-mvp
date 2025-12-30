@@ -6024,7 +6024,7 @@ JANE: Ready?"></textarea>
                   window.location.href = data.url;
                 }, 500);
               } else {
-                const errMsg = (data && (data.error || data.message)) || "No subscription found.";
+                const errMsg = (data && (data.message || data.error)) || "No subscription found.";
                 toast.textContent = "Portal error: " + errMsg;
               }
             } catch (e) {
