@@ -1802,7 +1802,9 @@
 
         gap:8px;
 
-        height:calc(100vh - calc(env(safe-area-inset-bottom,0px) + 64px));
+        height:calc(100dvh - calc(env(safe-area-inset-bottom,0px) + 64px));
+
+        min-height:0;
 
       }
 
@@ -1814,6 +1816,8 @@
 
         height:100%;
 
+        min-height:0;
+
       }
 
       body.record-active #screen-record #preview{
@@ -1822,9 +1826,11 @@
 
         width:100%;
 
-        aspect-ratio:auto;
+        aspect-ratio:var(--preview-ar, 16/9);
 
         object-fit:cover;
+
+        object-position:50% 50%;
 
       }
 
@@ -1854,25 +1860,27 @@
 
       }
 
-      #screen-record .record-grid{ gap:10px; }
+      #screen-record .record-grid{ gap:10px; min-height:0; }
 
       body.record-active #screen-record .record-grid{
 
         align-items:stretch;
 
+        min-height:0;
+
       }
 
       body.record-active #screen-record .control-rail{
 
-        display:flex;
+        display:grid;
 
-        flex-direction:column;
+        grid-template-columns:1fr 1fr;
 
-        justify-content:flex-start;
+        grid-auto-rows:var(--btn-h, 64px);
+
+        gap:14px;
 
         align-content:start;
-
-        gap:10px;
 
         padding-block:0;
 
@@ -1885,8 +1893,6 @@
         margin:0;
 
         align-self:stretch;
-
-        /* iOS Safari: use relative positioning to avoid clipping */
 
         position:relative;
 
@@ -1907,6 +1913,28 @@
         margin:0;
 
       }
+
+      /* Full-width buttons */
+
+      body.record-active #screen-record .control-rail .note,
+
+      body.record-active #screen-record #btnRender,
+
+      body.record-active #screen-record #btnRec{
+
+        grid-column:1 / -1;
+
+      }
+
+      /* 2x2 grid for toggle buttons */
+
+      body.record-active #screen-record #btnGrid{ grid-column:1; }
+
+      body.record-active #screen-record #btnCamera{ grid-column:2; }
+
+      body.record-active #screen-record #btnCountIn{ grid-column:1; }
+
+      body.record-active #screen-record #btnHeadphones{ grid-column:2; }
 
     }
 
@@ -1938,12 +1966,18 @@
           grid-area: note;
         }
 
-        /* Button placement (matches existing class names in your HTML) */
+        /* Button placement (using both IDs and classes for compatibility) */
+        body.record-active #screen-record #btnRender,
         body.record-active #screen-record .control-rail .pos-render { grid-area: render; }
+        body.record-active #screen-record #btnRec,
         body.record-active #screen-record .control-rail .pos-rec { grid-area: rec; }
+        body.record-active #screen-record #btnGrid,
         body.record-active #screen-record .control-rail .pos-grid { grid-area: grid; }
+        body.record-active #screen-record #btnCamera,
         body.record-active #screen-record .control-rail .pos-camera { grid-area: camera; }
+        body.record-active #screen-record #btnCountIn,
         body.record-active #screen-record .control-rail .pos-countin { grid-area: countin; }
+        body.record-active #screen-record #btnHeadphones,
         body.record-active #screen-record .control-rail .pos-headphones { grid-area: headphones; }
 
         /* Prevent "zoomed/cropped" camera feel in landscape only (portrait unchanged) */
