@@ -1606,7 +1606,24 @@
 
       }
 
+      /* Landscape: explicit grid areas for all buttons (fixes iOS Safari missing buttons) */
+      @media (orientation: landscape) {
+        #screen-record .control-rail {
+          grid-template-areas:
+            "render render"
+            "grid countin"
+            "camera headphones"
+            "rec rec";
+        }
+      }
+
       .record-card .controls-stack{ gap:8px; }
+
+      body.record-active #screen-record .pos-render{ grid-area:render; }
+
+      body.record-active #screen-record .pos-grid{ grid-area:grid; }
+
+      body.record-active #screen-record .pos-countin{ grid-area:countin; }
 
       body.record-active #screen-record .pos-camera{ grid-area:camera; }
 
