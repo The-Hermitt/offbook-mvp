@@ -1729,15 +1729,25 @@
 
       body.record-active #screen-record .control-rail{
 
-        position:sticky;
+        position:relative;
 
-        top:calc(env(safe-area-inset-top,0px) + 8px);
+        top:auto;
 
         align-self:start;
 
         gap:8px;
 
+        min-height:0;
+
+        max-height:100%;
+
+        overflow-y:auto;
+
+        -webkit-overflow-scrolling:touch;
+
       }
+
+      body.record-active #screen-record .record-card.rail-card{ min-height:0; }
 
       body.record-active #screen-record .control-rail .btn{
 
@@ -1875,7 +1885,9 @@
 
         flex-direction:column;
 
-        justify-content:space-between;
+        justify-content:flex-start;
+
+        align-content:start;
 
         gap:10px;
 
@@ -1891,13 +1903,21 @@
 
         align-self:stretch;
 
-        position:sticky;
+        position:relative;
 
-        /* tuck the rail a bit higher */
+        top:auto;
 
-        top:calc(env(safe-area-inset-top,0px) + 4px);
+        min-height:0;
+
+        max-height:100%;
+
+        overflow-y:auto;
+
+        -webkit-overflow-scrolling:touch;
 
       }
+
+      body.record-active #screen-record .record-card.rail-card{ min-height:0; }
 
       body.record-active #screen-record .control-rail .btn{
 
