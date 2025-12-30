@@ -1804,7 +1804,7 @@
 
         gap:8px;
 
-        height:calc(100dvh - (env(safe-area-inset-bottom, 0px) + var(--tabbarH, 96px)));
+        height:calc(100dvh - (env(safe-area-inset-bottom,0px) + var(--tabsH)));
 
         min-height:0;
 
@@ -1856,7 +1856,7 @@
 
         /* lift content slightly to free space near the tabbar */
 
-        padding-bottom:calc(env(safe-area-inset-bottom,0px) + 92px);
+        padding-bottom:calc(env(safe-area-inset-bottom,0px) + var(--tabsH) + 12px);
 
         padding-top:calc(env(safe-area-inset-top,0px) + 2px);
 
@@ -1874,25 +1874,15 @@
 
       body.record-active #screen-record .control-rail{
 
-        display:grid;
+        display:flex;
 
-        grid-template-columns:1fr;
+        flex-direction:column;
 
-        grid-auto-rows:var(--btn-h, 64px);
+        justify-content:space-between;
 
-        gap:14px;
-
-        align-content:start;
-
-        padding-block:0;
-
-        padding-top:0;
-
-        padding-bottom:0;
+        gap:10px;
 
         height:100%;
-
-        margin:0;
 
         align-self:stretch;
 
@@ -1908,39 +1898,18 @@
 
         -webkit-overflow-scrolling:touch;
 
+        padding-bottom:calc(env(safe-area-inset-bottom,0px) + 12px);
+
       }
 
       body.record-active #screen-record .control-rail .btn{
+
+        width:100%;
 
         margin:0;
 
       }
 
-      /* Full-width buttons */
-
-      body.record-active #screen-record .control-rail .note,
-
-      body.record-active #screen-record #btnRender,
-
-      body.record-active #screen-record #btnRec{
-
-        grid-column:1 / -1;
-
-      }
-
-      /* Single-column toggles (original layout) */
-
-      body.record-active #screen-record #btnGrid,
-
-      body.record-active #screen-record #btnCamera,
-
-      body.record-active #screen-record #btnCountIn,
-
-      body.record-active #screen-record #btnHeadphones{
-
-        grid-column:1 / -1;
-
-      }
 
     }
 
