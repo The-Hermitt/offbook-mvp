@@ -1486,7 +1486,7 @@
 
       #btnRender, #btnRec{ grid-column: 1 / -1; }
 
-      #btnHeadphones{ grid-column: 1 / -1; }
+      #btnHeadphones{ grid-column: auto; }
 
     }
 
@@ -1980,10 +1980,19 @@
         body.record-active #screen-record #btnHeadphones,
         body.record-active #screen-record .control-rail .pos-headphones { grid-area: headphones; }
 
-        /* Prevent "zoomed/cropped" camera feel in landscape only (portrait unchanged) */
+        /* Override safety: ensure 2×2 buttons don't accidentally span both columns */
+        body.record-active #screen-record #btnGrid,
+        body.record-active #screen-record #btnCamera,
+        body.record-active #screen-record #btnCountIn,
+        body.record-active #screen-record #btnHeadphones {
+          grid-column: auto !important;
+        }
+
+        /* Preview fills wide 16:9 in landscape (no letterboxing) */
         body.record-active #screen-record #preview {
-          object-fit: contain !important;
+          object-fit: cover !important;
           object-position: center center;
+          aspect-ratio: 16/9 !important;
         }
       }
     }
