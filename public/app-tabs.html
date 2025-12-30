@@ -1450,23 +1450,35 @@
 
       height:auto;
 
+      max-height:calc(100vh - (env(safe-area-inset-bottom, 0px) + 84px));
+
+      max-height:calc(100dvh - (env(safe-area-inset-bottom, 0px) + 84px));
+
       overflow:visible;
+
+      align-items:start;
 
     }
 
     body.record-active #screen-record .preview-wrap{
 
-      height:auto !important;
+      height:auto;
 
-      align-self:start !important;
+      align-self:start;
 
     }
 
     body.record-active #screen-record .control-rail{
 
-      height:auto !important;
+      height:auto;
 
-      align-self:start !important;
+      align-self:start;
+
+      justify-content:flex-start;
+
+      gap:14px;
+
+      padding-bottom:calc(env(safe-area-inset-bottom, 0px) + 12px);
 
     }
 
@@ -1584,13 +1596,17 @@
 
 
 
-      /* ensure preview area expands to fill remaining height exactly */
+      /* ensure preview area doesn't exceed viewport (use max-height, not height) */
 
       body.record-active #screen-record .record-grid{
 
-        height:calc(100dvh - env(safe-area-inset-bottom,0px) - var(--tabsH)) !important;
+        height:auto;
 
-        grid-template-rows:1fr auto !important;
+        max-height:calc(100vh - (env(safe-area-inset-bottom, 0px) + 84px));
+
+        max-height:calc(100dvh - (env(safe-area-inset-bottom, 0px) + 84px));
+
+        align-items:start;
 
       }
 
@@ -1786,11 +1802,13 @@
 
         height:auto;
 
+        align-self:start;
+
         align-content:start;
 
-        gap:12px;
+        gap:14px;
 
-        padding-bottom:12px;
+        padding-bottom:calc(env(safe-area-inset-bottom, 0px) + 12px);
 
       }
 
@@ -1832,6 +1850,10 @@
 
         min-height:0;
 
+        height:auto;
+
+        align-self:start;
+
       }
 
       body.record-active #screen-record #preview{
@@ -1852,11 +1874,13 @@
 
         height:auto;
 
+        align-self:start;
+
         align-content:start;
 
-        gap:12px;
+        gap:14px;
 
-        padding-bottom:12px;
+        padding-bottom:calc(env(safe-area-inset-bottom, 0px) + 12px);
 
       }
 
@@ -1892,13 +1916,13 @@
 
         flex-direction:column;
 
-        justify-content:space-between;
+        justify-content:flex-start;
 
-        gap:10px;
+        gap:14px;
 
         height:auto;
 
-        align-self:stretch;
+        align-self:start;
 
         position:relative;
 
@@ -1912,7 +1936,7 @@
 
         -webkit-overflow-scrolling:touch;
 
-        padding-bottom:calc(env(safe-area-inset-bottom,0px) + 12px);
+        padding-bottom:calc(env(safe-area-inset-bottom, 0px) + 12px);
 
       }
 
@@ -2175,9 +2199,13 @@
 
       body.record-active #screen-record .record-grid{
 
-        height:calc(100dvh - var(--tabsH)) !important;
+        height:auto;
 
-        grid-template-rows:1fr auto !important; /* preview grows, controls stick */
+        max-height:calc(100vh - (env(safe-area-inset-bottom, 0px) + 84px));
+
+        max-height:calc(100dvh - (env(safe-area-inset-bottom, 0px) + 84px));
+
+        align-items:start;
 
       }
 
