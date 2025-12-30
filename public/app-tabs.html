@@ -1450,9 +1450,29 @@
 
     body.record-active #screen-record .record-grid{
 
-      height:100%;
+      height:auto !important;
 
-      overflow:hidden;
+      max-height:calc(100dvh - var(--tabsH, 92px) - env(safe-area-inset-bottom,0px) - 12px) !important;
+
+      overflow:visible !important;
+
+      align-items:start !important;
+
+    }
+
+    body.record-active #screen-record .preview-wrap{
+
+      height:auto !important;
+
+      align-self:start !important;
+
+    }
+
+    body.record-active #screen-record .control-rail{
+
+      height:auto !important;
+
+      align-self:start !important;
 
     }
 
