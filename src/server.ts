@@ -349,10 +349,20 @@ app.post("/billing/create_portal", express.json(), async (req: Request, res: Res
 
     const stripeCustomerId = userBilling?.stripe_customer_id;
     if (!stripeCustomerId) {
+      // If user is marked Pro/active but missing stripe_customer_id, likely post test→live cleanup
+      if (userBilling?.plan === "pro" || userBilling?.status === "active") {
+        return res.status(409).json({
+          ok: false,
+          error: "relink_required",
+          message: "This account was linked to a Stripe Test subscription. Please subscribe again to create a Live subscription.",
+        });
+      }
+
+      // Otherwise, user has no subscription at all
       return res.status(400).json({
         ok: false,
         error: "no_customer",
-        message: "No subscription found for this user.",
+        message: "No active subscription found. Tap Go Pro monthly to subscribe.",
       });
     }
 

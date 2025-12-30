@@ -6025,8 +6025,10 @@ JANE: Ready?"></textarea>
                 }, 500);
               } else {
                 let errMsg = (data && (data.message || data.error)) || "No subscription found.";
-                // Frontend safety net: if raw "No such customer" error leaks through, override with friendly message
-                if (/no such customer/i.test(errMsg || "")) {
+                // Frontend safety net: ensure relink_required and "No such customer" always show friendly message
+                if (data && data.error === "relink_required" && data.message) {
+                  errMsg = data.message;
+                } else if (/no such customer/i.test(errMsg || "")) {
                   errMsg = "This account was linked to a Stripe Test subscription. Please subscribe again to create a Live subscription.";
                 }
                 toast.textContent = "Portal error: " + errMsg;
