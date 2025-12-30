@@ -1874,7 +1874,7 @@
 
         display:grid;
 
-        grid-template-columns:1fr 1fr;
+        grid-template-columns:1fr;
 
         grid-auto-rows:var(--btn-h, 64px);
 
@@ -1926,34 +1926,40 @@
 
       }
 
-      /* 2x2 grid for toggle buttons */
+      /* Single-column toggles (original layout) */
 
-      body.record-active #screen-record #btnGrid{ grid-column:1; }
+      body.record-active #screen-record #btnGrid,
 
-      body.record-active #screen-record #btnCamera{ grid-column:2; }
+      body.record-active #screen-record #btnCamera,
 
-      body.record-active #screen-record #btnCountIn{ grid-column:1; }
+      body.record-active #screen-record #btnCountIn,
 
-      body.record-active #screen-record #btnHeadphones{ grid-column:2; }
+      body.record-active #screen-record #btnHeadphones{
+
+        grid-column:1 / -1;
+
+      }
 
     }
 
     /* ============================================================
        iOS Safari (26+) landscape Record rail fix:
-       - Forces a stable 2-column grid so buttons don't disappear or stack
+       - Forces a stable single-column layout so buttons don't disappear
        - Keeps existing layout by only overriding in iOS + landscape
        ============================================================ */
     @supports (-webkit-touch-callout: none) {
       @media (orientation: landscape) and (max-width: 1024px) {
         body.record-active #screen-record .control-rail {
           display: grid !important;
-          grid-template-columns: 1fr 1fr;
+          grid-template-columns: 1fr !important;
           grid-template-areas:
-            "note note"
-            "render render"
-            "rec rec"
-            "grid camera"
-            "countin headphones";
+            "note"
+            "render"
+            "rec"
+            "grid"
+            "camera"
+            "countin"
+            "headphones";
           gap: 14px;
           align-content: start;
           min-height: 0;
@@ -1980,12 +1986,12 @@
         body.record-active #screen-record #btnHeadphones,
         body.record-active #screen-record .control-rail .pos-headphones { grid-area: headphones; }
 
-        /* Override safety: ensure 2×2 buttons don't accidentally span both columns */
+        /* Override safety: ensure buttons stack vertically in single column */
         body.record-active #screen-record #btnGrid,
         body.record-active #screen-record #btnCamera,
         body.record-active #screen-record #btnCountIn,
         body.record-active #screen-record #btnHeadphones {
-          grid-column: auto !important;
+          grid-column: 1 / -1 !important;
         }
 
         /* Preview fills wide 16:9 in landscape (no letterboxing) */
