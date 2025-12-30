@@ -6024,7 +6024,11 @@ JANE: Ready?"></textarea>
                   window.location.href = data.url;
                 }, 500);
               } else {
-                const errMsg = (data && (data.message || data.error)) || "No subscription found.";
+                let errMsg = (data && (data.message || data.error)) || "No subscription found.";
+                // Frontend safety net: if raw "No such customer" error leaks through, override with friendly message
+                if (/no such customer/i.test(errMsg || "")) {
+                  errMsg = "This account was linked to a Stripe Test subscription. Please subscribe again to create a Live subscription.";
+                }
                 toast.textContent = "Portal error: " + errMsg;
               }
             } catch (e) {

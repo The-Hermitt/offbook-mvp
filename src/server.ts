@@ -368,28 +368,27 @@ app.post("/billing/create_portal", express.json(), async (req: Request, res: Res
         customer: stripeCustomerId,
         return_url: returnUrl,
       });
-    } catch (err: any) {
-      // Handle stale customer ID (test→live cutover)
-      const errType = err?.type || "";
-      const errCode = err?.code || "";
-      if (errType === "invalid_request_error" && errCode === "resource_missing") {
-        console.log(`[billing] stale customer id, clearing mapping userId=${userId} customerId=${stripeCustomerId}`);
+    } catch (e: any) {
+      // Detect stale customer ID (test→live cutover) broadly
+      const errMsg = (e?.raw?.message || e?.message || String(e));
+      const errCode = (e?.raw?.code || e?.code);
+      const errParam = (e?.raw?.param || e?.param);
 
-        // Clear stripe IDs while preserving plan/status
-        const existing = await getUserBilling(userId);
-        if (existing) {
-          await upsertUserBilling({
-            user_id: userId,
-            plan: existing.plan,
-            status: existing.status,
-            stripe_customer_id: null,
-            stripe_subscription_id: null,
-            current_period_start: existing.current_period_start,
-            current_period_end: existing.current_period_end,
-            included_quota: existing.included_quota,
-            renders_used: existing.renders_used,
-          });
-        }
+      const isStaleCustomer =
+        /no such customer/i.test(errMsg) ||
+        (errCode === "resource_missing" && errParam === "customer");
+
+      if (isStaleCustomer) {
+        console.log("[billing] stale customer id, clearing mapping", { userId, stripeCustomerId });
+
+        // Clear stripe IDs (use defaults for missing values)
+        await upsertUserBilling({
+          user_id: userId,
+          plan: userBilling?.plan ?? "free",
+          status: userBilling?.status ?? "inactive",
+          stripe_customer_id: null,
+          stripe_subscription_id: null,
+        });
 
         return res.status(409).json({
           ok: false,
@@ -398,8 +397,8 @@ app.post("/billing/create_portal", express.json(), async (req: Request, res: Res
         });
       }
 
-      // Re-throw other errors
-      throw err;
+      // Re-throw other errors to outer catch
+      throw e;
     }
 
     console.log("[billing] created portal session", {
