@@ -1434,29 +1434,35 @@
 
     body.record-active{
 
+      /* Don't force fullscreen height on desktop: it makes Record frames stretch */
+
       overflow:hidden;
 
     }
 
-    /* don't force height:100% chains (this creates the giant "frame" + clips controls) */
-
     body.record-active main{
 
+      /* Keep page from scrolling while recording (without stretching panels) */
+
       overflow:hidden;
+
+    }
+
+    /* Remove the extra giant glass frame behind Record */
+
+    body.record-active main::before{
+
+      display:none !important;
 
     }
 
     body.record-active #screen-record .record-grid{
 
+      /* Let the Record card size to its contents */
+
       height:auto;
 
-      max-height:calc(100vh - (env(safe-area-inset-bottom, 0px) + 84px));
-
-      max-height:calc(100dvh - (env(safe-area-inset-bottom, 0px) + 84px));
-
-      overflow:visible;
-
-      align-items:start;
+      overflow:hidden;
 
     }
 
