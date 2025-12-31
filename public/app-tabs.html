@@ -1378,6 +1378,14 @@
 
       grid-auto-flow:row;
 
+      align-self:stretch;
+
+      height:100%;
+
+      box-sizing:border-box;
+
+      padding:6px 0 10px;
+
     }
 
 
@@ -1566,7 +1574,7 @@
 
         padding-top:calc(env(safe-area-inset-top,0px) + 2px) !important;
 
-        padding-bottom:calc(env(safe-area-inset-bottom,0px) + var(--tabsH) + 8px) !important;
+        padding-bottom:calc(env(safe-area-inset-bottom,0px) + var(--tabsH) + 24px) !important;
 
       }
 
@@ -1619,6 +1627,32 @@
       /* compact buttons remain */
 
       body.record-active.is-portrait{ --btn-h:40px; --btn-fs:13px; }
+
+      #screen-record .controls-stack{
+
+        gap:14px;
+
+      }
+
+      #screen-record .control-rail .btn{
+
+        min-height:48px;
+
+        padding:10px 14px;
+
+        font-size:15px;
+
+      }
+
+      #screen-record .record-note{
+
+        padding:12px 14px;
+
+        font-size:15px;
+
+        line-height:1.25;
+
+      }
 
       #screen-record .control-rail{
 
