@@ -2755,6 +2755,46 @@
         color: #999;
       }
 
+/* === Record (LANDSCAPE) final override: tighten frames / stop stretch === */
+@media (orientation: landscape){
+  /* Stop the 100vh -> 100% chain from making the record card/frame huge */
+  body.record-active{
+    height:auto !important;
+    overflow:auto !important;
+  }
+  body.record-active main{
+    height:auto !important;
+    overflow:visible !important;
+  }
+  body.record-active #screen-record{
+    max-height:none !important;
+    overflow:visible !important;
+  }
+
+  /* The actual record card/grid should hug content, not fill the screen */
+  body.record-active #screen-record .record-grid{
+    height:auto !important;
+    max-height:calc(100dvh - var(--tabsH) - env(safe-area-inset-bottom,0px) - 12px) !important;
+    grid-template-rows:auto !important;
+    align-items:flex-start !important;
+    overflow:visible !important;
+  }
+
+  /* Don't allow preview/rail to stretch the grid taller than needed */
+  body.record-active #screen-record .preview-wrap{
+    align-self:flex-start !important;
+    height:auto !important;
+  }
+
+  body.record-active #screen-record .control-rail{
+    align-self:flex-start !important;
+    height:auto !important;
+    overflow:auto !important;
+    max-height:calc(100dvh - var(--tabsH) - env(safe-area-inset-bottom,0px) - 12px) !important;
+    padding-bottom:calc(env(safe-area-inset-bottom,0px) + 12px) !important;
+  }
+}
+
   </style>
 
 </head>
