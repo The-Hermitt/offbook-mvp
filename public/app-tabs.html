@@ -1702,6 +1702,30 @@
 
   #screen-record{ max-height:100dvh; overflow:hidden; }
 
+/* === Record Tab: tighten rail so it doesn't force extra frame height === */
+body.record-active #screen-record{
+  /* make buttons slimmer ONLY in Record tab */
+  --btn-h: 34px;
+  --btn-pad-v: 6px;
+  --btn-pad-h: 10px;
+  --btn-fs: 12px;
+}
+
+/* reduce vertical spacing between rail buttons in Record tab */
+body.record-active #screen-record .control-rail{
+  gap: 6px !important;
+}
+
+/* ensure Render + REC ALSO obey the slimmer sizing */
+body.record-active #screen-record .control-rail .btn,
+body.record-active #screen-record #btnRender,
+body.record-active #screen-record #btnRec{
+  min-height: var(--btn-h) !important;
+  padding: var(--btn-pad-v) var(--btn-pad-h) !important;
+  font-size: var(--btn-fs) !important;
+  line-height: 1.1 !important;
+}
+
 
 
     @media (orientation: landscape) and (max-width: 1024px){
