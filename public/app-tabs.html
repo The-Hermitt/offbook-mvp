@@ -1946,27 +1946,21 @@ body.record-active #screen-record #btnRec{
 
         flex-direction:column;
 
-        justify-content:flex-start;
+        justify-content:space-between;
 
-        gap:14px;
+        gap:12px;
 
-        height:auto;
+        padding-block:6px;
 
-        align-self:start;
+        margin:0;
 
-        position:relative;
+        align-self:stretch;
 
-        top:auto;
+        position:sticky;
 
-        min-height:0;
+        /* tuck the rail a bit higher */
 
-        max-height:100%;
-
-        overflow-y:auto;
-
-        -webkit-overflow-scrolling:touch;
-
-        padding-bottom:calc(env(safe-area-inset-bottom, 0px) + 12px);
+        top:calc(env(safe-area-inset-top,0px) + 4px);
 
       }
 
