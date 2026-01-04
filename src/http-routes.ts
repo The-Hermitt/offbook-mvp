@@ -2502,7 +2502,7 @@ export function initHttpRoutes(app: Express) {
     }
   });
 
-  api.get("/assets/:render_id", async (req: Request, res: Response) => {
+  api.get("/assets/:render_id", secretGuard, async (req: Request, res: Response) => {
     try {
       const renderId = String(req.params.render_id);
       const file = path.join(ASSETS_DIR, `${renderId}.mp3`);
@@ -2519,26 +2519,31 @@ export function initHttpRoutes(app: Express) {
         const r2Key = `renders/${renderId}.mp3`;
         const rangeHeader = req.headers.range;
 
-        const { stream, contentType, contentLength, contentRange, statusCode } =
-          await r2GetObjectStream(r2Key, rangeHeader);
+        try {
+          const { stream, contentType, contentLength, contentRange, statusCode } =
+            await r2GetObjectStream(r2Key, rangeHeader);
 
-        res.setHeader("Accept-Ranges", "bytes");
-        res.setHeader("Content-Type", contentType || "audio/mpeg");
+          res.setHeader("Accept-Ranges", "bytes");
+          res.setHeader("Content-Type", contentType || "audio/mpeg");
 
-        if (contentLength !== undefined) {
-          res.setHeader("Content-Length", contentLength);
+          if (contentLength !== undefined) {
+            res.setHeader("Content-Length", contentLength);
+          }
+
+          if (contentRange) {
+            res.setHeader("Content-Range", contentRange);
+          }
+
+          res.status(statusCode);
+          return stream.pipe(res);
+        } catch (r2Err: any) {
+          // R2 object not found - fall through to 404
+          console.error(`[assets] R2 fetch failed for ${r2Key}: ${r2Err.message || r2Err}`);
         }
-
-        if (contentRange) {
-          res.setHeader("Content-Range", contentRange);
-        }
-
-        res.status(statusCode);
-        return stream.pipe(res);
       }
 
       // Not found
-      return res.status(404).send("Not Found");
+      return res.status(404).json({ error: "asset not found" });
     } catch (err) {
       console.error("Error in GET /api/assets/:render_id", err);
       return res.status(500).send("Internal Server Error");
