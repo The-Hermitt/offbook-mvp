@@ -14,7 +14,7 @@ import { addUserCredits, getAvailableCredits } from "./lib/credits";
 import { isSttEnabled, transcribeChunk } from "./lib/stt";
 import { makeAuditMiddleware } from "./lib/audit";
 import { makeRateLimiters } from "./middleware/rateLimit";
-import { r2Enabled, r2GetObjectStream } from "./lib/r2";
+import { r2Enabled, r2GetObjectStream, r2PutFile } from "./lib/r2";
 
 const app = express();
 const PORT = Number(process.env.PORT || 3010);
@@ -2709,6 +2709,112 @@ function mountFallbackDebugRoutes() {
     })();
 
     res.json({ render_id: rid, status: "queued" });
+  });
+
+  // NEW: Render individual MP3 segments for each partner line
+  app.post("/debug/render_segments", requireSecret, renderLimiter, audit("/debug/render_segments"), async (req: Request, res: Response) => {
+    try {
+      const userId = getUserIdForRequest(req);
+      if (!userId) {
+        return res.status(401).json({ error: "unauthorized" });
+      }
+
+      const script_id = String((req.body as any)?.script_id || "");
+      const scene_id = String((req.body as any)?.scene_id || "");
+      const role = String((req.body as any)?.role || "").toUpperCase();
+      const pace = String((req.body as any)?.pace || "normal");
+
+      if (!script_id || !scene_id || !role) {
+        return res.status(400).json({ error: "script_id, scene_id, and role are required" });
+      }
+
+      const s = await getOwnedScriptOrNull(userId, script_id);
+      if (!s) return res.status(404).json({ error: "script not found" });
+      if (!OPENAI_API_KEY) return res.status(500).json({ error: "OPENAI_API_KEY not set" });
+
+      // Find the scene
+      const scene = s.scenes.find(sc => sc.id === scene_id) || s.scenes[0];
+      if (!scene) {
+        return res.status(404).json({ error: "scene not found" });
+      }
+
+      // Build partner lines (lines where speaker !== role)
+      const partnerLines = scene.lines
+        .filter(ln => ln && ln.speaker && ln.speaker !== "NARRATOR" && ln.speaker !== "SYSTEM")
+        .filter(ln => ln.speaker.toUpperCase() !== role)
+        .filter(ln => !isBoilerplate(ln.text));
+
+      // Hard cap: max 30 segments
+      if (partnerLines.length > 30) {
+        return res.status(400).json({
+          error: `Too many partner lines (${partnerLines.length}). Maximum 30 segments allowed.`
+        });
+      }
+
+      const voiceFor = (name: string) => (s.voices[name] || "alloy");
+      const segments: Array<{
+        index: number;
+        speaker: string;
+        text: string;
+        render_id: string;
+        url: string;
+      }> = [];
+
+      // Generate each segment
+      for (let i = 0; i < partnerLines.length; i++) {
+        const ln = partnerLines[i];
+        const segmentRenderId = genId("seg");
+        const voice = voiceFor(ln.speaker);
+
+        console.log(`[render_segments] Generating segment ${i + 1}/${partnerLines.length}: speaker=${ln.speaker}, render_id=${segmentRenderId}`);
+
+        // Generate TTS for this line
+        const audioBuffer = await openaiTts(ln.text, voice, "tts-1");
+
+        // Upload to R2 if enabled
+        if (r2Enabled()) {
+          // Write to temp file first
+          const tmpDir = path.join(process.cwd(), "tmp");
+          if (!fs.existsSync(tmpDir)) {
+            fs.mkdirSync(tmpDir, { recursive: true });
+          }
+          const tmpPath = path.join(tmpDir, `${segmentRenderId}.mp3`);
+          fs.writeFileSync(tmpPath, audioBuffer);
+
+          try {
+            const r2Key = `renders/${segmentRenderId}.mp3`;
+            await r2PutFile(r2Key, tmpPath, "audio/mpeg");
+            console.log(`[render_segments] Uploaded to R2: ${r2Key}`);
+
+            // Clean up temp file
+            fs.unlinkSync(tmpPath);
+          } catch (r2Err: any) {
+            console.error(`[render_segments] R2 upload failed: ${r2Err.message || r2Err}`);
+            // Clean up temp file even on error
+            if (fs.existsSync(tmpPath)) {
+              fs.unlinkSync(tmpPath);
+            }
+            return res.status(500).json({ error: "r2_upload_failed" });
+          }
+        } else {
+          // Store in memory if R2 not enabled
+          mem.assets.set(segmentRenderId, audioBuffer);
+        }
+
+        segments.push({
+          index: i,
+          speaker: ln.speaker,
+          text: ln.text,
+          render_id: segmentRenderId,
+          url: `/api/assets/${segmentRenderId}`
+        });
+      }
+
+      res.json({ ok: true, segments });
+    } catch (err: any) {
+      console.error("[render_segments] Error:", err);
+      return res.status(500).json({ error: err?.message || "internal_error" });
+    }
   });
 
   app.get("/debug/render_status", requireSecret, audit("/debug/render_status"), async (req: Request, res: Response) => {
