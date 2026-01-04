@@ -28,7 +28,7 @@ export function ttsProvider() {
 // simple per-pace “gap repeats”
 const GAP_REPEATS: Record<Pace, number> = { slow: 2, normal: 1, fast: 0 };
 
-async function ttsToBuffer(text: string, voice: string): Promise<Buffer> {
+export async function ttsToBuffer(text: string, voice: string): Promise<Buffer> {
   const client = getClient();
   if (!client) throw new Error("OPENAI_API_KEY not set");
   const resp = await client.audio.speech.create({
