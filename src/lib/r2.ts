@@ -12,18 +12,66 @@ const R2_ACCESS_KEY_ID = process.env.R2_ACCESS_KEY_ID;
 const R2_SECRET_ACCESS_KEY = process.env.R2_SECRET_ACCESS_KEY;
 const R2_BUCKET = process.env.R2_BUCKET;
 
+// Storage mode configuration
+const STORAGE_MODE = process.env.STORAGE_MODE; // "local" | "r2" | undefined (auto)
+
 let s3Client: S3Client | null = null;
 
 /**
- * Check if R2 is enabled and properly configured
+ * Check if all required R2 environment variables are present
  */
-export function r2Enabled(): boolean {
+function hasR2Vars(): boolean {
   return Boolean(
     R2_ENDPOINT &&
     R2_ACCESS_KEY_ID &&
     R2_SECRET_ACCESS_KEY &&
     R2_BUCKET
   );
+}
+
+/**
+ * Determine and log the storage mode on first call
+ */
+let storageMode: "local" | "r2" | null = null;
+
+function determineStorageMode(): "local" | "r2" {
+  if (storageMode) return storageMode;
+
+  if (STORAGE_MODE === "local") {
+    storageMode = "local";
+    console.log("[storage] mode=local (forced by STORAGE_MODE)");
+  } else if (STORAGE_MODE === "r2") {
+    if (!hasR2Vars()) {
+      const missing: string[] = [];
+      if (!R2_ENDPOINT) missing.push("R2_ENDPOINT");
+      if (!R2_ACCESS_KEY_ID) missing.push("R2_ACCESS_KEY_ID");
+      if (!R2_SECRET_ACCESS_KEY) missing.push("R2_SECRET_ACCESS_KEY");
+      if (!R2_BUCKET) missing.push("R2_BUCKET");
+      throw new Error(
+        `STORAGE_MODE=r2 but missing required env vars: ${missing.join(", ")}`
+      );
+    }
+    storageMode = "r2";
+    console.log("[storage] mode=r2");
+  } else {
+    // Auto-select based on R2 vars
+    if (hasR2Vars()) {
+      storageMode = "r2";
+      console.log("[storage] mode=r2");
+    } else {
+      storageMode = "local";
+      console.log("[storage] mode=local (R2 not configured)");
+    }
+  }
+
+  return storageMode;
+}
+
+/**
+ * Check if R2 is enabled and properly configured
+ */
+export function r2Enabled(): boolean {
+  return determineStorageMode() === "r2";
 }
 
 /**

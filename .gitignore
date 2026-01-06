@@ -24,3 +24,6 @@ public/.backup/
 
 
 .claude/
+
+# local secrets
+.env.local

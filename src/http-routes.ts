@@ -29,17 +29,25 @@ type TesseractWorker = {
 };
 
 // ---------- Optional shared-secret guard ----------
+function hasValidSharedSecret(req: Request, required?: string): boolean {
+  if (!required) return false;
+
+  // Check header first
+  const providedHeader = req.header("X-Shared-Secret");
+  if (providedHeader && providedHeader === required) return true;
+
+  // Check query param (for Safari/browser convenience)
+  const providedQuery = req.query.secret;
+  if (providedQuery && providedQuery === required) return true;
+
+  return false;
+}
+
 function secretGuard(req: Request, res: Response, next: NextFunction) {
   const required = process.env.SHARED_SECRET;
   if (!required) return next();
 
-  // Check header first
-  const providedHeader = req.header("X-Shared-Secret");
-  if (providedHeader && providedHeader === required) return next();
-
-  // Check query param (for Safari/browser convenience)
-  const providedQuery = req.query.secret;
-  if (providedQuery && providedQuery === required) return next();
+  if (hasValidSharedSecret(req, required)) return next();
 
   return res.status(404).send("Not Found");
 }
@@ -543,6 +551,12 @@ export function initHttpRoutes(app: Express) {
   debug.use(secretGuard);
   debug.use((req: Request, res: Response, next: NextFunction) => {
     ensureSid(req, res);
+    if (hasValidSharedSecret(req, process.env.SHARED_SECRET)) {
+      const sess = (req as any).session || ((req as any).session = {});
+      sess.userId = "shared:secret";
+      sess.loggedIn = true;
+      console.log("[debug] shared-secret mode: ignoring session for debug routes");
+    }
     next();
   });
 
@@ -1264,7 +1278,7 @@ export function initHttpRoutes(app: Express) {
         // Generate TTS for this line
         const audioBuffer = await ttsToBuffer(ln.text, voice);
 
-        // Upload to R2 if enabled
+        // Store segment (R2 or local disk)
         if (r2Enabled()) {
           // Write to temp file first
           const tmpDir = path.join(process.cwd(), "tmp");
@@ -1290,8 +1304,14 @@ export function initHttpRoutes(app: Express) {
             return res.status(500).json({ error: "r2_upload_failed" });
           }
         } else {
-          // R2 not enabled - return error since we can't store in memory in http-routes
-          return res.status(500).json({ error: "R2 storage required for render_segments" });
+          // Local storage mode - write to data/renders/
+          const rendersDir = path.join(process.cwd(), "data", "renders");
+          if (!fs.existsSync(rendersDir)) {
+            fs.mkdirSync(rendersDir, { recursive: true });
+          }
+          const localPath = path.join(rendersDir, `${segmentRenderId}.mp3`);
+          fs.writeFileSync(localPath, audioBuffer);
+          console.log(`[render_segments] Saved to local disk: ${localPath}`);
         }
 
         segments.push({

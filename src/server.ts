@@ -1,8 +1,14 @@
-import "dotenv/config";
+// Load environment variables from .env.local (preferred) or .env
+import * as fs from "fs";
+import * as path from "path";
+import * as dotenv from "dotenv";
+
+const envPath = fs.existsSync(".env.local") ? ".env.local" : ".env";
+dotenv.config({ path: envPath });
+console.log("[env] OPENAI_API_KEY present?", !!process.env.OPENAI_API_KEY);
+
 import express, { Request, Response } from "express";
 import cors from "cors";
-import path from "path";
-import * as fs from "fs";
 import multer from "multer";
 import { createRequire } from "module";
 import cookieParser from "cookie-parser";
@@ -2771,7 +2777,7 @@ function mountFallbackDebugRoutes() {
         // Generate TTS for this line
         const audioBuffer = await openaiTts(ln.text, voice, "tts-1");
 
-        // Upload to R2 if enabled
+        // Store segment (R2 or local disk)
         if (r2Enabled()) {
           // Write to temp file first
           const tmpDir = path.join(process.cwd(), "tmp");
@@ -2797,8 +2803,14 @@ function mountFallbackDebugRoutes() {
             return res.status(500).json({ error: "r2_upload_failed" });
           }
         } else {
-          // Store in memory if R2 not enabled
-          mem.assets.set(segmentRenderId, audioBuffer);
+          // Local storage mode - write to data/renders/
+          const rendersDir = path.join(process.cwd(), "data", "renders");
+          if (!fs.existsSync(rendersDir)) {
+            fs.mkdirSync(rendersDir, { recursive: true });
+          }
+          const localPath = path.join(rendersDir, `${segmentRenderId}.mp3`);
+          fs.writeFileSync(localPath, audioBuffer);
+          console.log(`[render_segments] Saved to local disk: ${localPath}`);
         }
 
         segments.push({
@@ -2925,6 +2937,7 @@ app.get("/api/assets/:render_id", async (req: Request, res: Response) => {
     const inMem = mem.assets.get(rid);
     if (inMem) return sendBuffer(inMem);
 
+    // Check ASSETS_DIR
     const filePath = path.join(ASSETS_DIR, `${rid}.mp3`);
     if (fs.existsSync(filePath)) {
       const stat = fs.statSync(filePath);
@@ -2948,6 +2961,32 @@ app.get("/api/assets/:render_id", async (req: Request, res: Response) => {
       }
       res.setHeader("Content-Length", total);
       return fs.createReadStream(filePath).pipe(res);
+    }
+
+    // Check data/renders/ (local storage fallback)
+    const localPath = path.join(process.cwd(), "data", "renders", `${rid}.mp3`);
+    if (fs.existsSync(localPath)) {
+      const stat = fs.statSync(localPath);
+      const total = stat.size;
+      res.setHeader("Content-Type", "audio/mpeg");
+      res.setHeader("Cache-Control", "no-store");
+      if (range && range.startsWith("bytes=")) {
+        const parts = range.replace(/bytes=/, "").split("-");
+        const start = Number(parts[0]) || 0;
+        const end = parts[1] ? Number(parts[1]) : total - 1;
+        if (start >= total || start < 0 || start > end) {
+          res.status(416).set("Content-Range", `bytes */${total}`).end();
+          return;
+        }
+        const clampedEnd = Math.min(end, total - 1);
+        res.status(206);
+        res.setHeader("Content-Range", `bytes ${start}-${clampedEnd}/${total}`);
+        res.setHeader("Accept-Ranges", "bytes");
+        res.setHeader("Content-Length", clampedEnd - start + 1);
+        return fs.createReadStream(localPath, { start, end: clampedEnd }).pipe(res);
+      }
+      res.setHeader("Content-Length", total);
+      return fs.createReadStream(localPath).pipe(res);
     }
 
     // Try R2 if enabled
