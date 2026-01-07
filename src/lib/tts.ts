@@ -84,19 +84,37 @@ export async function generateReaderMp3(
   const chunks: Buffer[] = [];
   const repeats = GAP_REPEATS[pace] ?? 1;
 
-  for (const ln of lines) {
+  console.log(`[tts] generateReaderMp3 starting: ${lines.length} lines, role=${role}`);
+
+  // Prepend a small gap at the very beginning to ensure proper MP3 decoder initialization
+  // This prevents the first audio chunk from being skipped or corrupted
+  const initialGap = await getGapBuffer(voiceMap["UNKNOWN"] || "alloy");
+  chunks.push(initialGap);
+  console.log(`[tts] Prepended initial gap buffer (size=${initialGap.length})`);
+
+  let partnerIndex = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const ln = lines[i];
     if (ln.character.toUpperCase() === role.toUpperCase()) {
       const gap = await getGapBuffer(voiceMap["UNKNOWN"] || "alloy");
-      for (let i = 0; i < repeats; i++) chunks.push(gap);
+      for (let j = 0; j < repeats; j++) chunks.push(gap);
       continue;
     }
+
+    // This is a partner line - log it
+    console.log(`[tts] Partner line ${partnerIndex} (scene line ${i}): ${ln.character} - "${ln.text.slice(0, 40)}..."`);
+
     const v = voiceMap[ln.character] || voiceMap["UNKNOWN"] || "alloy";
     const audio = await ttsToBuffer(ln.text, v);
     chunks.push(audio);
+    console.log(`[tts] Partner line ${partnerIndex}: TTS buffer size=${audio.length}, total chunks=${chunks.length}`);
+
     const gap = await getGapBuffer(v);
-    for (let i = 0; i < repeats; i++) chunks.push(gap);
+    for (let j = 0; j < repeats; j++) chunks.push(gap);
+    partnerIndex++;
   }
 
+  console.log(`[tts] Concatenating ${chunks.length} chunks (${partnerIndex} partner lines)`);
   fs.writeFileSync(outPath, Buffer.concat(chunks));
   return outPath;
 }

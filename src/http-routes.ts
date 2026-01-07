@@ -17,6 +17,8 @@ import { r2Enabled, r2PutFile, r2GetObjectStream, r2Head, r2Delete } from "./lib
 import { addUserCredits, getAvailableCredits } from "./lib/credits";
 import Stripe from "stripe";
 
+console.log("[http_routes] loaded (underscore file)");
+
 // ---------- Types ----------
 type SceneLine = { speaker: string; text: string };
 type Scene = { id: string; title: string; lines: SceneLine[] };
@@ -1169,6 +1171,19 @@ export function initHttpRoutes(app: Express) {
       voiceMap.UNKNOWN = "alloy";
     }
 
+    // Debug log: show what we're about to render
+    const partnerLines = lines.filter(l => l.character.toUpperCase() !== role.toUpperCase());
+    const first3 = partnerLines.slice(0, 3).map(l => ({
+      speaker: l.character,
+      text: l.text.slice(0, 60) + (l.text.length > 60 ? "..." : "")
+    }));
+    console.log("[debug/render] About to render:", {
+      role,
+      totalSceneLines: scene.lines.length,
+      partnerLinesCount: partnerLines.length,
+      first3PartnerLines: first3
+    });
+
     // Generate reader MP3
     let file: string;
     try {
@@ -1185,11 +1200,15 @@ export function initHttpRoutes(app: Express) {
       try {
         await r2PutFile(r2Key, file, "audio/mpeg");
         console.log("[debug/render] Uploaded to R2: key=%s", r2Key);
+        console.log(`[debug/render] render_id=${renderId} saved to R2 key=${r2Key}`);
       } catch (err) {
         console.error("[debug/render] R2 upload failed:", err);
         renders.set(renderId, { status: "error", err: "r2_upload_failed", accounted: false });
         return res.status(500).json({ error: "r2_upload_failed" });
       }
+    } else {
+      // Local mode - log where file was saved
+      console.log(`[debug/render] render_id=${renderId} saved to local path=${file}`);
     }
 
     const job = { status: "complete" as const, file, accounted: false };
@@ -1357,6 +1376,46 @@ export function initHttpRoutes(app: Express) {
       payload.download_url = `${base}/api/assets/${id}`;
     }
     res.json(payload);
+  });
+
+  // GET /debug/asset_probe/:render_id
+  debug.get("/asset_probe/:render_id", audit("/debug/asset_probe"), async (req: Request, res: Response) => {
+    try {
+      const renderId = String(req.params.render_id);
+      const repoRoot = path.resolve(process.cwd());
+      const storageMode = r2Enabled() ? "r2" : "local";
+
+      // Build candidate paths (same as /api/assets/:render_id)
+      const candidatePaths = [
+        path.join(repoRoot, "assets", "renders", `${renderId}.mp3`),
+        path.join(repoRoot, "data", "renders", `${renderId}.mp3`),
+        path.join(repoRoot, "data", "renders", "renders", `${renderId}.mp3`),
+      ];
+
+      // Check which files exist
+      const probeResults = candidatePaths.map(filePath => ({
+        path: filePath,
+        exists: fs.existsSync(filePath),
+      }));
+
+      const response: any = {
+        render_id: renderId,
+        storage_mode: storageMode,
+        cwd: process.cwd(),
+        repo_root: repoRoot,
+        probe_results: probeResults,
+      };
+
+      // If local mode, add the expected primary path
+      if (storageMode === "local") {
+        response.expected_local_path = candidatePaths[0];
+      }
+
+      res.json(response);
+    } catch (err) {
+      console.error("[asset_probe] Error:", err);
+      res.status(500).json({ error: "internal_error", render_id: req.params.render_id });
+    }
   });
 
   // GET /debug/billing/replay_refund_by_charge
@@ -2639,51 +2698,51 @@ export function initHttpRoutes(app: Express) {
     }
   });
 
-  api.get("/assets/:render_id", secretGuard, async (req: Request, res: Response) => {
+  api.get("/assets/:render_id", async (req: Request, res: Response) => {
     try {
       const renderId = String(req.params.render_id);
-      const file = path.join(ASSETS_DIR, `${renderId}.mp3`);
+      const range = req.headers.range;
+      const filePath = path.join(process.cwd(), "assets", "renders", `${renderId}.mp3`);
 
-      // If local file exists, stream it
-      if (fs.existsSync(file)) {
-        res.setHeader("Content-Type", "audio/mpeg");
-        res.setHeader("Accept-Ranges", "bytes");
-        return fs.createReadStream(file).pipe(res);
+      console.log("[api/assets]", { renderId, filePath, hasRange: !!range });
+
+      // Check if file exists
+      if (!fs.existsSync(filePath)) {
+        return res.status(404).json({ error: "asset_not_found" });
       }
 
-      // Otherwise, try R2 if enabled
-      if (r2Enabled()) {
-        const r2Key = `renders/${renderId}.mp3`;
-        const rangeHeader = req.headers.range;
+      const stat = fs.statSync(filePath);
+      const total = stat.size;
 
-        try {
-          const { stream, contentType, contentLength, contentRange, statusCode } =
-            await r2GetObjectStream(r2Key, rangeHeader);
+      res.setHeader("Content-Type", "audio/mpeg");
+      res.setHeader("Accept-Ranges", "bytes");
 
-          res.setHeader("Accept-Ranges", "bytes");
-          res.setHeader("Content-Type", contentType || "audio/mpeg");
+      // Handle Range requests
+      if (range && range.startsWith("bytes=")) {
+        const parts = range.replace(/bytes=/, "").split("-");
+        const start = Number(parts[0]) || 0;
+        const end = parts[1] ? Number(parts[1]) : total - 1;
 
-          if (contentLength !== undefined) {
-            res.setHeader("Content-Length", contentLength);
-          }
-
-          if (contentRange) {
-            res.setHeader("Content-Range", contentRange);
-          }
-
-          res.status(statusCode);
-          return stream.pipe(res);
-        } catch (r2Err: any) {
-          // R2 object not found - fall through to 404
-          console.error(`[assets] R2 fetch failed for ${r2Key}: ${r2Err.message || r2Err}`);
+        // Invalid range
+        if (start >= total || start < 0 || start > end) {
+          res.status(416).set("Content-Range", `bytes */${total}`).end();
+          return;
         }
+
+        const clampedEnd = Math.min(end, total - 1);
+        res.status(206);
+        res.setHeader("Content-Range", `bytes ${start}-${clampedEnd}/${total}`);
+        res.setHeader("Content-Length", clampedEnd - start + 1);
+        return fs.createReadStream(filePath, { start, end: clampedEnd }).pipe(res);
       }
 
-      // Not found
-      return res.status(404).json({ error: "asset not found" });
+      // No range - send full file
+      res.status(200);
+      res.setHeader("Content-Length", total);
+      return fs.createReadStream(filePath).pipe(res);
     } catch (err) {
-      console.error("Error in GET /api/assets/:render_id", err);
-      return res.status(500).send("Internal Server Error");
+      console.error("[api/assets] error", err);
+      return res.status(500).json({ error: "internal_error" });
     }
   });
 

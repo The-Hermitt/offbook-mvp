@@ -2905,122 +2905,48 @@ async function tryMountProjectHttpRoutes() {
 // Always-on assets route (in-memory first, then disk)
 app.get("/api/assets/:render_id", async (req: Request, res: Response) => {
   try {
-    const rid = String(req.params.render_id || "");
+    const renderId = String(req.params.render_id || "");
     const range = req.headers.range;
+    const filePath = path.join(process.cwd(), "assets", "renders", `${renderId}.mp3`);
 
-    const sendBuffer = (buf: Buffer) => {
-      const total = buf.length;
-      if (range && range.startsWith("bytes=")) {
-        const parts = range.replace(/bytes=/, "").split("-");
-        const start = Number(parts[0]) || 0;
-        const end = parts[1] ? Number(parts[1]) : total - 1;
-        if (start >= total || start < 0 || start > end) {
-          res.status(416).set("Content-Range", `bytes */${total}`).end();
-          return;
-        }
-        const clampedEnd = Math.min(end, total - 1);
-        const chunk = buf.subarray(start, clampedEnd + 1);
-        res.status(206);
-        res.setHeader("Content-Range", `bytes ${start}-${clampedEnd}/${total}`);
-        res.setHeader("Accept-Ranges", "bytes");
-        res.setHeader("Content-Length", chunk.length);
-        res.setHeader("Content-Type", "audio/mpeg");
-        res.setHeader("Cache-Control", "no-store");
-        return res.end(chunk);
-      }
-      res.setHeader("Content-Type", "audio/mpeg");
-      res.setHeader("Cache-Control", "no-store");
-      res.setHeader("Content-Length", total);
-      return res.end(buf);
-    };
+    console.log("[api/assets]", { renderId, filePath, hasRange: !!range });
 
-    const inMem = mem.assets.get(rid);
-    if (inMem) return sendBuffer(inMem);
-
-    // Check ASSETS_DIR
-    const filePath = path.join(ASSETS_DIR, `${rid}.mp3`);
-    if (fs.existsSync(filePath)) {
-      const stat = fs.statSync(filePath);
-      const total = stat.size;
-      res.setHeader("Content-Type", "audio/mpeg");
-      res.setHeader("Cache-Control", "no-store");
-      if (range && range.startsWith("bytes=")) {
-        const parts = range.replace(/bytes=/, "").split("-");
-        const start = Number(parts[0]) || 0;
-        const end = parts[1] ? Number(parts[1]) : total - 1;
-        if (start >= total || start < 0 || start > end) {
-          res.status(416).set("Content-Range", `bytes */${total}`).end();
-          return;
-        }
-        const clampedEnd = Math.min(end, total - 1);
-        res.status(206);
-        res.setHeader("Content-Range", `bytes ${start}-${clampedEnd}/${total}`);
-        res.setHeader("Accept-Ranges", "bytes");
-        res.setHeader("Content-Length", clampedEnd - start + 1);
-        return fs.createReadStream(filePath, { start, end: clampedEnd }).pipe(res);
-      }
-      res.setHeader("Content-Length", total);
-      return fs.createReadStream(filePath).pipe(res);
+    // Check if file exists
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ error: "asset_not_found" });
     }
 
-    // Check data/renders/ (local storage fallback)
-    const localPath = path.join(process.cwd(), "data", "renders", `${rid}.mp3`);
-    if (fs.existsSync(localPath)) {
-      const stat = fs.statSync(localPath);
-      const total = stat.size;
-      res.setHeader("Content-Type", "audio/mpeg");
-      res.setHeader("Cache-Control", "no-store");
-      if (range && range.startsWith("bytes=")) {
-        const parts = range.replace(/bytes=/, "").split("-");
-        const start = Number(parts[0]) || 0;
-        const end = parts[1] ? Number(parts[1]) : total - 1;
-        if (start >= total || start < 0 || start > end) {
-          res.status(416).set("Content-Range", `bytes */${total}`).end();
-          return;
-        }
-        const clampedEnd = Math.min(end, total - 1);
-        res.status(206);
-        res.setHeader("Content-Range", `bytes ${start}-${clampedEnd}/${total}`);
-        res.setHeader("Accept-Ranges", "bytes");
-        res.setHeader("Content-Length", clampedEnd - start + 1);
-        return fs.createReadStream(localPath, { start, end: clampedEnd }).pipe(res);
+    const stat = fs.statSync(filePath);
+    const total = stat.size;
+
+    res.setHeader("Content-Type", "audio/mpeg");
+    res.setHeader("Accept-Ranges", "bytes");
+
+    // Handle Range requests
+    if (range && range.startsWith("bytes=")) {
+      const parts = range.replace(/bytes=/, "").split("-");
+      const start = Number(parts[0]) || 0;
+      const end = parts[1] ? Number(parts[1]) : total - 1;
+
+      // Invalid range
+      if (start >= total || start < 0 || start > end) {
+        res.status(416).set("Content-Range", `bytes */${total}`).end();
+        return;
       }
-      res.setHeader("Content-Length", total);
-      return fs.createReadStream(localPath).pipe(res);
+
+      const clampedEnd = Math.min(end, total - 1);
+      res.status(206);
+      res.setHeader("Content-Range", `bytes ${start}-${clampedEnd}/${total}`);
+      res.setHeader("Content-Length", clampedEnd - start + 1);
+      return fs.createReadStream(filePath, { start, end: clampedEnd }).pipe(res);
     }
 
-    // Try R2 if enabled
-    if (r2Enabled()) {
-      const r2Key = `renders/${rid}.mp3`;
-      const rangeHeader = req.headers.range;
-
-      try {
-        const { stream, contentType, contentLength, contentRange, statusCode } =
-          await r2GetObjectStream(r2Key, rangeHeader);
-
-        res.setHeader("Accept-Ranges", "bytes");
-        res.setHeader("Content-Type", contentType || "audio/mpeg");
-        res.setHeader("Cache-Control", "no-store");
-
-        if (contentLength !== undefined) {
-          res.setHeader("Content-Length", contentLength);
-        }
-
-        if (contentRange) {
-          res.setHeader("Content-Range", contentRange);
-        }
-
-        res.status(statusCode);
-        return stream.pipe(res);
-      } catch (r2Err: any) {
-        // R2 object not found - fall through to 404
-        console.error(`[assets/server] R2 fetch failed for ${r2Key}: ${r2Err.message || r2Err}`);
-      }
-    }
-
-    return res.status(404).json({ error: "asset not found" });
+    // No range - send full file
+    res.status(200);
+    res.setHeader("Content-Length", total);
+    return fs.createReadStream(filePath).pipe(res);
   } catch (err) {
-    console.error("[assets/server] Error in GET /api/assets/:render_id", err);
+    console.error("[api/assets] error", err);
     return res.status(500).json({ error: "internal_error" });
   }
 });
