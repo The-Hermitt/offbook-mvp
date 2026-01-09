@@ -24,3 +24,7 @@ public/.backup/
 
 
 .claude/
+
+# local-only
+.env.local
+.claude/settings.local.json
