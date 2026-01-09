@@ -14,7 +14,7 @@ import { addUserCredits, getAvailableCredits } from "./lib/credits";
 import { isSttEnabled, transcribeChunk } from "./lib/stt";
 import { makeAuditMiddleware } from "./lib/audit";
 import { makeRateLimiters } from "./middleware/rateLimit";
-import { r2Enabled, r2GetObjectStream } from "./lib/r2";
+import { r2Enabled, r2GetObjectStream, r2PutFile } from "./lib/r2";
 
 const app = express();
 const PORT = Number(process.env.PORT || 3010);
@@ -2752,6 +2752,10 @@ function mountFallbackDebugRoutes() {
           // Save individual segment
           const segPath = path.join(renderDir, `seg_${String(segIdx).padStart(3, "0")}.mp3`);
           fs.writeFileSync(segPath, b);
+          if (r2Enabled()) {
+            const r2Key = `renders/${rid}/seg_${String(segIdx).padStart(3, "0")}.mp3`;
+            await r2PutFile(r2Key, segPath, "audio/mpeg");
+          }
 
           // Add to manifest
           manifestSegments.push({
@@ -2778,6 +2782,10 @@ function mountFallbackDebugRoutes() {
         };
         const manifestPath = path.join(renderDir, "manifest.json");
         fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+        if (r2Enabled()) {
+          const r2Key = `renders/${rid}/manifest.json`;
+          await r2PutFile(r2Key, manifestPath, "application/json");
+        }
 
         // Create combined MP3 (existing behavior)
         const mp3 = concatMp3(chunks.length ? chunks : [await openaiTts(" ", "alloy", "tts-1")]);
@@ -3115,11 +3123,26 @@ app.get("/api/assets/:render_id", async (req: Request, res: Response) => {
 app.get("/api/assets/:render_id/manifest", async (req: Request, res: Response) => {
   try {
     const renderId = String(req.params.render_id || "");
-    const manifestPath = path.join(process.cwd(), "assets", "renders", renderId, "manifest.json");
+    const manifestPath = path.join(ASSETS_DIR, "renders", renderId, "manifest.json");
 
     console.log("[api/assets/manifest]", { renderId, manifestPath });
 
     if (!fs.existsSync(manifestPath)) {
+      if (r2Enabled()) {
+        const r2Key = `renders/${renderId}/manifest.json`;
+        try {
+          const { stream, contentType, contentLength, statusCode } = await r2GetObjectStream(r2Key);
+          res.status(statusCode);
+          res.setHeader("Content-Type", contentType || "application/json");
+          res.setHeader("Cache-Control", "no-store");
+          if (contentLength !== undefined) {
+            res.setHeader("Content-Length", contentLength);
+          }
+          return stream.pipe(res);
+        } catch (r2Err: any) {
+          console.error(`[api/assets/manifest] R2 fetch failed for ${r2Key}: ${r2Err.message || r2Err}`);
+        }
+      }
       return res.status(404).json({ error: "manifest_not_found" });
     }
 
@@ -3127,6 +3150,7 @@ app.get("/api/assets/:render_id/manifest", async (req: Request, res: Response) =
     const manifest = JSON.parse(manifestData);
 
     res.setHeader("Content-Type", "application/json");
+    res.setHeader("Cache-Control", "no-store");
     return res.json(manifest);
   } catch (err) {
     console.error("[api/assets/manifest] error", err);
@@ -3141,8 +3165,7 @@ app.get("/api/assets/:render_id/segment/:segment_index", async (req: Request, re
     const segmentIndex = String(req.params.segment_index || "");
     const range = req.headers.range;
     const segmentPath = path.join(
-      process.cwd(),
-      "assets",
+      ASSETS_DIR,
       "renders",
       renderId,
       `seg_${segmentIndex.padStart(3, "0")}.mp3`
@@ -3151,6 +3174,30 @@ app.get("/api/assets/:render_id/segment/:segment_index", async (req: Request, re
     console.log("[api/assets/segment]", { renderId, segmentIndex, segmentPath, hasRange: !!range });
 
     if (!fs.existsSync(segmentPath)) {
+      if (r2Enabled()) {
+        const r2Key = `renders/${renderId}/seg_${segmentIndex.padStart(3, "0")}.mp3`;
+        try {
+          const { stream, contentType, contentLength, contentRange, statusCode } =
+            await r2GetObjectStream(r2Key, range);
+
+          res.setHeader("Accept-Ranges", "bytes");
+          res.setHeader("Content-Type", contentType || "audio/mpeg");
+          res.setHeader("Cache-Control", "no-store");
+
+          if (contentLength !== undefined) {
+            res.setHeader("Content-Length", contentLength);
+          }
+
+          if (contentRange) {
+            res.setHeader("Content-Range", contentRange);
+          }
+
+          res.status(statusCode);
+          return stream.pipe(res);
+        } catch (r2Err: any) {
+          console.error(`[api/assets/segment] R2 fetch failed for ${r2Key}: ${r2Err.message || r2Err}`);
+        }
+      }
       return res.status(404).json({ error: "segment_not_found" });
     }
 
@@ -3159,6 +3206,7 @@ app.get("/api/assets/:render_id/segment/:segment_index", async (req: Request, re
 
     res.setHeader("Content-Type", "audio/mpeg");
     res.setHeader("Accept-Ranges", "bytes");
+    res.setHeader("Cache-Control", "no-store");
 
     // Handle Range requests
     if (range && range.startsWith("bytes=")) {
