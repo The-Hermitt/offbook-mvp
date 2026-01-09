@@ -1591,6 +1591,22 @@ type RenderJob = {
   url?: string;
   err?: string;
   accounted?: boolean;
+  manifest_url?: string;
+};
+
+type RenderManifest = {
+  render_id: string;
+  script_id: string;
+  scene_id: string;
+  role: string;
+  created_at: string;
+  segments: Array<{
+    segment_index: number;
+    script_line_index: number;
+    speaker: string;
+    text: string;
+    url: string;
+  }>;
 };
 
 const mem = {
@@ -2685,28 +2701,100 @@ function mountFallbackDebugRoutes() {
     (async () => {
       try {
         const scene = s.scenes[0];
-        const items = scene.lines
-          .filter(ln => ln && ln.speaker && ln.speaker !== "NARRATOR" && ln.speaker !== "SYSTEM")
-          .filter(ln => ln.speaker !== myRole)
-          .filter(ln => !isBoilerplate(ln.text));
 
-        const voiceFor = (name: string) => (s.voices[name] || "alloy");
+        // Normalize role for case-insensitive comparison
+        const roleNorm = myRole.trim().toUpperCase();
+
+        // Build case-insensitive voice map
+        const voiceMapNorm: Record<string, string> = {};
+        for (const [k, v] of Object.entries(s.voices)) {
+          voiceMapNorm[k.trim().toUpperCase()] = v;
+        }
+
+        // Build partner lines with original indices
+        const partnerLinesWithIndices: Array<{ line: Line; originalIndex: number }> = [];
+        for (let i = 0; i < scene.lines.length; i++) {
+          const ln = scene.lines[i];
+          if (!ln || !ln.speaker || ln.speaker === "NARRATOR" || ln.speaker === "SYSTEM") continue;
+          const speakerNorm = (ln.speaker ?? "").trim().toUpperCase();
+          if (speakerNorm === roleNorm) continue;
+          if (isBoilerplate(ln.text)) continue;
+          partnerLinesWithIndices.push({ line: ln, originalIndex: i });
+        }
+
+        const voiceFor = (name: string) => {
+          const nameNorm = name.trim().toUpperCase();
+          return voiceMapNorm[nameNorm] || "alloy";
+        };
+
+        // Validate partner lines exist
+        if (partnerLinesWithIndices.length === 0) {
+          job.status = "error";
+          job.err = "no_partner_lines";
+          return;
+        }
+
+        // Log first few partner lines for debugging
+        const firstPartners = partnerLinesWithIndices.slice(0, 3).map(({ line }) => ({
+          speaker: line.speaker,
+          speakerNorm: (line.speaker ?? "").trim().toUpperCase(),
+          voice: voiceFor(line.speaker),
+        }));
+        console.log(`[render] partnerLines=${partnerLinesWithIndices.length} role=${myRole} firstPartners=${JSON.stringify(firstPartners)}`);
+
+        // Create render directory for segments
+        const renderDir = path.join(process.cwd(), "assets", "renders", rid);
+        fs.mkdirSync(renderDir, { recursive: true });
 
         const chunks: Buffer[] = [];
-        for (const ln of items) {
+        const manifestSegments: RenderManifest["segments"] = [];
+
+        for (let segIdx = 0; segIdx < partnerLinesWithIndices.length; segIdx++) {
+          const { line: ln, originalIndex } = partnerLinesWithIndices[segIdx];
           const voice = voiceFor(ln.speaker);
           const b = await openaiTts(ln.text, voice, "tts-1");
           chunks.push(b);
+
+          // Save individual segment
+          const segPath = path.join(renderDir, `seg_${String(segIdx).padStart(3, "0")}.mp3`);
+          fs.writeFileSync(segPath, b);
+
+          // Add to manifest
+          manifestSegments.push({
+            segment_index: segIdx,
+            script_line_index: originalIndex,
+            speaker: ln.speaker,
+            text: ln.text,
+            url: `/api/assets/${rid}/segment/${segIdx}`,
+          });
+
           if (paceMs > 0) {
             // optional silence could be inserted later
           }
         }
 
+        // Save manifest
+        const manifest: RenderManifest = {
+          render_id: rid,
+          script_id: script_id,
+          scene_id: scene.id,
+          role: myRole,
+          created_at: new Date().toISOString(),
+          segments: manifestSegments,
+        };
+        const manifestPath = path.join(renderDir, "manifest.json");
+        fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+
+        // Create combined MP3 (existing behavior)
         const mp3 = concatMp3(chunks.length ? chunks : [await openaiTts(" ", "alloy", "tts-1")]);
-        mem.assets.set(rid, mp3);
+
+        // Save combined MP3 to file (moved from mem.assets)
+        const mp3Path = path.join(process.cwd(), "assets", "renders", `${rid}.mp3`);
+        fs.writeFileSync(mp3Path, mp3);
 
         job.status = "complete";
         job.url = `/api/assets/${rid}`;
+        job.manifest_url = `/api/assets/${rid}/manifest`;
       } catch (e: any) {
         const msg = e?.message || String(e);
         job.status = "error";
@@ -2744,11 +2832,28 @@ function mountFallbackDebugRoutes() {
         return res.status(404).json({ error: "scene not found" });
       }
 
+      // Normalize role for case-insensitive comparison
+      const roleNorm = role.trim().toUpperCase();
+
+      // Build case-insensitive voice map
+      const voiceMapNorm: Record<string, string> = {};
+      for (const [k, v] of Object.entries(s.voices)) {
+        voiceMapNorm[k.trim().toUpperCase()] = v;
+      }
+
       // Build partner lines (lines where speaker !== role)
       const partnerLines = scene.lines
         .filter(ln => ln && ln.speaker && ln.speaker !== "NARRATOR" && ln.speaker !== "SYSTEM")
-        .filter(ln => ln.speaker.toUpperCase() !== role)
+        .filter(ln => {
+          const speakerNorm = (ln.speaker ?? "").trim().toUpperCase();
+          return speakerNorm !== roleNorm;
+        })
         .filter(ln => !isBoilerplate(ln.text));
+
+      // Validate partner lines exist
+      if (partnerLines.length === 0) {
+        return res.status(422).json({ error: "no_partner_lines" });
+      }
 
       // Hard cap: max 30 segments
       if (partnerLines.length > 30) {
@@ -2757,7 +2862,18 @@ function mountFallbackDebugRoutes() {
         });
       }
 
-      const voiceFor = (name: string) => (s.voices[name] || "alloy");
+      const voiceFor = (name: string) => {
+        const nameNorm = name.trim().toUpperCase();
+        return voiceMapNorm[nameNorm] || "alloy";
+      };
+
+      // Log first few partner lines for debugging
+      const firstPartners = partnerLines.slice(0, 3).map(ln => ({
+        speaker: ln.speaker,
+        speakerNorm: (ln.speaker ?? "").trim().toUpperCase(),
+        voice: voiceFor(ln.speaker),
+      }));
+      console.log(`[render] partnerLines=${partnerLines.length} role=${role} firstPartners=${JSON.stringify(firstPartners)}`);
       const segments: Array<{
         index: number;
         speaker: string;
@@ -2862,12 +2978,16 @@ function mountFallbackDebugRoutes() {
       }
     }
 
-    // Return a minimal, stable shape
-    res.json({
+    // Return a minimal, stable shape (with optional manifest_url)
+    const response: any = {
       status: job.status,
       url: job.url,
       err: job.err,
-    });
+    };
+    if (job.status === "complete" && job.manifest_url) {
+      response.manifest_url = job.manifest_url;
+    }
+    res.json(response);
   });
 
   console.log("[fallback] /debug/* routes active (in-memory, robust PDF import + strict speaker guard)");
@@ -2947,6 +3067,84 @@ app.get("/api/assets/:render_id", async (req: Request, res: Response) => {
     return fs.createReadStream(filePath).pipe(res);
   } catch (err) {
     console.error("[api/assets] error", err);
+    return res.status(500).json({ error: "internal_error" });
+  }
+});
+
+// Manifest endpoint
+app.get("/api/assets/:render_id/manifest", async (req: Request, res: Response) => {
+  try {
+    const renderId = String(req.params.render_id || "");
+    const manifestPath = path.join(process.cwd(), "assets", "renders", renderId, "manifest.json");
+
+    console.log("[api/assets/manifest]", { renderId, manifestPath });
+
+    if (!fs.existsSync(manifestPath)) {
+      return res.status(404).json({ error: "manifest_not_found" });
+    }
+
+    const manifestData = fs.readFileSync(manifestPath, "utf-8");
+    const manifest = JSON.parse(manifestData);
+
+    res.setHeader("Content-Type", "application/json");
+    return res.json(manifest);
+  } catch (err) {
+    console.error("[api/assets/manifest] error", err);
+    return res.status(500).json({ error: "internal_error" });
+  }
+});
+
+// Segment endpoint
+app.get("/api/assets/:render_id/segment/:segment_index", async (req: Request, res: Response) => {
+  try {
+    const renderId = String(req.params.render_id || "");
+    const segmentIndex = String(req.params.segment_index || "");
+    const range = req.headers.range;
+    const segmentPath = path.join(
+      process.cwd(),
+      "assets",
+      "renders",
+      renderId,
+      `seg_${segmentIndex.padStart(3, "0")}.mp3`
+    );
+
+    console.log("[api/assets/segment]", { renderId, segmentIndex, segmentPath, hasRange: !!range });
+
+    if (!fs.existsSync(segmentPath)) {
+      return res.status(404).json({ error: "segment_not_found" });
+    }
+
+    const stat = fs.statSync(segmentPath);
+    const total = stat.size;
+
+    res.setHeader("Content-Type", "audio/mpeg");
+    res.setHeader("Accept-Ranges", "bytes");
+
+    // Handle Range requests
+    if (range && range.startsWith("bytes=")) {
+      const parts = range.replace(/bytes=/, "").split("-");
+      const start = Number(parts[0]) || 0;
+      const end = parts[1] ? Number(parts[1]) : total - 1;
+
+      // Invalid range
+      if (start >= total || start < 0 || start > end) {
+        res.status(416).set("Content-Range", `bytes */${total}`).end();
+        return;
+      }
+
+      const clampedEnd = Math.min(end, total - 1);
+      res.status(206);
+      res.setHeader("Content-Range", `bytes ${start}-${clampedEnd}/${total}`);
+      res.setHeader("Content-Length", clampedEnd - start + 1);
+      return fs.createReadStream(segmentPath, { start, end: clampedEnd }).pipe(res);
+    }
+
+    // No range - send full file
+    res.status(200);
+    res.setHeader("Content-Length", total);
+    return fs.createReadStream(segmentPath).pipe(res);
+  } catch (err) {
+    console.error("[api/assets/segment] error", err);
     return res.status(500).json({ error: "internal_error" });
   }
 });

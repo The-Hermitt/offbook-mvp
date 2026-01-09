@@ -20,7 +20,8 @@
       "Bash(git push:*)",
       "Bash(test:*)",
       "Bash(lsof:*)",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "Bash(grep:*)"
     ]
   }
 }
