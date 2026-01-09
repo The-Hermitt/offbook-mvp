@@ -2799,8 +2799,6 @@ function mountFallbackDebugRoutes() {
     res.json({ render_id: rid, status: "queued" });
   });
 
-<<<<<<< HEAD
-=======
   // NEW: Render individual MP3 segments for each partner line
   app.post("/debug/render_segments", requireSecret, renderLimiter, audit("/debug/render_segments"), async (req: Request, res: Response) => {
     try {
@@ -2940,8 +2938,6 @@ function mountFallbackDebugRoutes() {
       return res.status(500).json({ error: err?.message || "internal_error" });
     }
   });
-
->>>>>>> 54acff7 (Add render manifest + segment asset endpoints)
   app.get("/debug/render_status", requireSecret, audit("/debug/render_status"), async (req: Request, res: Response) => {
     const render_id = String(req.query.render_id || "");
 
