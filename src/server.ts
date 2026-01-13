@@ -1581,11 +1581,12 @@ type Scene = { id: string; title: string; lines: Line[] };
 type Script = { id: string; title: string; scenes: Scene[]; voices: Record<string, string> };
 
 type RenderJob = {
-  status: "queued" | "complete" | "error";
+  status: "queued" | "working" | "complete" | "error";
   url?: string;
   err?: string;
   accounted?: boolean;
   manifest_url?: string;
+  enqueued_at?: number;
 };
 
 type RenderManifest = {
@@ -1608,6 +1609,11 @@ const mem = {
   renders: new Map<string, RenderJob>(),
   assets: new Map<string, Buffer>(), // id -> MP3 bytes (for renders and single-line TTS)
 };
+
+// Render worker state
+let renderWorkerRunning = false;
+const renderQueue: string[] = [];
+
 const ASSETS_DIR = path.join(process.cwd(), "assets");
 if (!fs.existsSync(ASSETS_DIR)) fs.mkdirSync(ASSETS_DIR, { recursive: true });
 const upload = multer({ storage: multer.memoryStorage() });
@@ -2673,6 +2679,168 @@ function mountFallbackDebugRoutes() {
     res.json({ ok: true });
   });
 
+  // ---- Render worker loop ----
+  async function processOneRenderJob(rid: string): Promise<void> {
+    const job = mem.renders.get(rid);
+    if (!job) {
+      console.log("[render-worker] job-not-found rid=%s", rid);
+      return;
+    }
+    if (job.status !== "queued") {
+      console.log("[render-worker] job-already-processed rid=%s status=%s", rid, job.status);
+      return;
+    }
+
+    console.log("[render-worker] job-start rid=%s", rid);
+    job.status = "working";
+
+    try {
+      // Extract script_id, myRole, paceMs from job metadata
+      // Since these aren't stored on the job, we need to pass them in
+      // For now, we'll refactor the existing IIFE logic here
+      const { script_id, myRole, paceMs } = (job as any);
+      if (!script_id || !myRole) {
+        throw new Error("Missing job metadata: script_id or myRole");
+      }
+
+      const s = await getOwnedScriptOrNull((job as any).userId, script_id);
+      if (!s) throw new Error("script not found");
+      if (!OPENAI_API_KEY) throw new Error("OPENAI_API_KEY not set");
+
+      const scene = s.scenes[0];
+      const roleNorm = myRole.trim().toUpperCase();
+
+      // Build case-insensitive voice map
+      const voiceMapNorm: Record<string, string> = {};
+      for (const [k, v] of Object.entries(s.voices)) {
+        voiceMapNorm[k.trim().toUpperCase()] = v;
+      }
+
+      // Build partner lines with original indices
+      const partnerLinesWithIndices: Array<{ line: Line; originalIndex: number }> = [];
+      for (let i = 0; i < scene.lines.length; i++) {
+        const ln = scene.lines[i];
+        if (!ln || !ln.speaker || ln.speaker === "NARRATOR" || ln.speaker === "SYSTEM") continue;
+        const speakerNorm = (ln.speaker ?? "").trim().toUpperCase();
+        if (speakerNorm === roleNorm) continue;
+        if (isBoilerplate(ln.text)) continue;
+        partnerLinesWithIndices.push({ line: ln, originalIndex: i });
+      }
+
+      const voiceFor = (name: string) => {
+        const nameNorm = name.trim().toUpperCase();
+        return voiceMapNorm[nameNorm] || "alloy";
+      };
+
+      // Validate partner lines exist
+      if (partnerLinesWithIndices.length === 0) {
+        job.status = "error";
+        job.err = "no_partner_lines";
+        console.log("[render-worker] job-error rid=%s err=no_partner_lines", rid);
+        return;
+      }
+
+      // Log first few partner lines for debugging
+      const firstPartners = partnerLinesWithIndices.slice(0, 3).map(({ line }) => ({
+        speaker: line.speaker,
+        speakerNorm: (line.speaker ?? "").trim().toUpperCase(),
+        voice: voiceFor(line.speaker),
+      }));
+      console.log(`[render] partnerLines=${partnerLinesWithIndices.length} role=${myRole} firstPartners=${JSON.stringify(firstPartners)}`);
+
+      // Create render directory for segments
+      const renderDir = path.join(process.cwd(), "assets", "renders", rid);
+      fs.mkdirSync(renderDir, { recursive: true });
+
+      const chunks: Buffer[] = [];
+      const manifestSegments: RenderManifest["segments"] = [];
+
+      for (let segIdx = 0; segIdx < partnerLinesWithIndices.length; segIdx++) {
+        const { line: ln, originalIndex } = partnerLinesWithIndices[segIdx];
+        const voice = voiceFor(ln.speaker);
+        const b = await openaiTts(ln.text, voice, "tts-1");
+        chunks.push(b);
+
+        // Save individual segment
+        const segPath = path.join(renderDir, `seg_${String(segIdx).padStart(3, "0")}.mp3`);
+        fs.writeFileSync(segPath, b);
+        if (r2Enabled()) {
+          const r2Key = `renders/${rid}/seg_${String(segIdx).padStart(3, "0")}.mp3`;
+          await r2PutFile(r2Key, segPath, "audio/mpeg");
+        }
+
+        // Add to manifest
+        manifestSegments.push({
+          segment_index: segIdx,
+          script_line_index: originalIndex,
+          speaker: ln.speaker,
+          text: ln.text,
+          url: `/api/assets/${rid}/segment/${segIdx}`,
+        });
+
+        if (paceMs > 0) {
+          // optional silence could be inserted later
+        }
+      }
+
+      // Save manifest
+      const manifest: RenderManifest = {
+        render_id: rid,
+        script_id: script_id,
+        scene_id: scene.id,
+        role: myRole,
+        created_at: new Date().toISOString(),
+        segments: manifestSegments,
+      };
+      const manifestPath = path.join(renderDir, "manifest.json");
+      fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+      if (r2Enabled()) {
+        const r2Key = `renders/${rid}/manifest.json`;
+        await r2PutFile(r2Key, manifestPath, "application/json");
+      }
+
+      // Create combined MP3 (existing behavior)
+      const mp3 = concatMp3(chunks.length ? chunks : [await openaiTts(" ", "alloy", "tts-1")]);
+
+      // Save combined MP3 to file
+      const mp3Path = path.join(process.cwd(), "assets", "renders", `${rid}.mp3`);
+      fs.writeFileSync(mp3Path, mp3);
+
+      job.status = "complete";
+      job.url = `/api/assets/${rid}`;
+      job.manifest_url = `/api/assets/${rid}/manifest`;
+      console.log("[render-worker] job-complete rid=%s", rid);
+    } catch (e: any) {
+      const msg = e?.message || String(e);
+      job.status = "error";
+      job.err = msg;
+      console.log("[render-worker] job-error rid=%s err=%s", rid, msg);
+    }
+  }
+
+  async function processRenderWorker(): Promise<void> {
+    while (renderQueue.length > 0) {
+      const rid = renderQueue.shift();
+      if (!rid) continue;
+      await processOneRenderJob(rid);
+    }
+    renderWorkerRunning = false;
+    console.log("[render-worker] worker-stopped queue_empty=true");
+  }
+
+  function kickRenderWorker(): void {
+    if (renderWorkerRunning) {
+      console.log("[render-worker] worker-already-running");
+      return;
+    }
+    console.log("[render-worker] worker-start");
+    renderWorkerRunning = true;
+    processRenderWorker().catch(err => {
+      console.error("[render-worker] worker-error:", err);
+      renderWorkerRunning = false;
+    });
+  }
+
   // REAL: Render partner-only reader MP3 with OpenAI
   app.post("/debug/render", requireSecret, renderLimiter, audit("/debug/render"), async (req: Request, res: Response) => {
     const userId = getUserIdForRequest(req);
@@ -2689,120 +2857,23 @@ function mountFallbackDebugRoutes() {
     if (!OPENAI_API_KEY) return res.status(500).json({ error: "OPENAI_API_KEY not set" });
 
     const rid = genId("rnd");
-    const job: RenderJob = { status: "queued", accounted: false };
+    const job: RenderJob = {
+      status: "queued",
+      accounted: false,
+      enqueued_at: Date.now()
+    };
+    // Store metadata needed for processing
+    (job as any).userId = userId;
+    (job as any).script_id = script_id;
+    (job as any).myRole = myRole;
+    (job as any).paceMs = paceMs;
     mem.renders.set(rid, job);
 
-    (async () => {
-      try {
-        const scene = s.scenes[0];
+    console.log("[render] enqueued rid=%s script_id=%s role=%s", rid, script_id, myRole);
 
-        // Normalize role for case-insensitive comparison
-        const roleNorm = myRole.trim().toUpperCase();
-
-        // Build case-insensitive voice map
-        const voiceMapNorm: Record<string, string> = {};
-        for (const [k, v] of Object.entries(s.voices)) {
-          voiceMapNorm[k.trim().toUpperCase()] = v;
-        }
-
-        // Build partner lines with original indices
-        const partnerLinesWithIndices: Array<{ line: Line; originalIndex: number }> = [];
-        for (let i = 0; i < scene.lines.length; i++) {
-          const ln = scene.lines[i];
-          if (!ln || !ln.speaker || ln.speaker === "NARRATOR" || ln.speaker === "SYSTEM") continue;
-          const speakerNorm = (ln.speaker ?? "").trim().toUpperCase();
-          if (speakerNorm === roleNorm) continue;
-          if (isBoilerplate(ln.text)) continue;
-          partnerLinesWithIndices.push({ line: ln, originalIndex: i });
-        }
-
-        const voiceFor = (name: string) => {
-          const nameNorm = name.trim().toUpperCase();
-          return voiceMapNorm[nameNorm] || "alloy";
-        };
-
-        // Validate partner lines exist
-        if (partnerLinesWithIndices.length === 0) {
-          job.status = "error";
-          job.err = "no_partner_lines";
-          return;
-        }
-
-        // Log first few partner lines for debugging
-        const firstPartners = partnerLinesWithIndices.slice(0, 3).map(({ line }) => ({
-          speaker: line.speaker,
-          speakerNorm: (line.speaker ?? "").trim().toUpperCase(),
-          voice: voiceFor(line.speaker),
-        }));
-        console.log(`[render] partnerLines=${partnerLinesWithIndices.length} role=${myRole} firstPartners=${JSON.stringify(firstPartners)}`);
-
-        // Create render directory for segments
-        const renderDir = path.join(process.cwd(), "assets", "renders", rid);
-        fs.mkdirSync(renderDir, { recursive: true });
-
-        const chunks: Buffer[] = [];
-        const manifestSegments: RenderManifest["segments"] = [];
-
-        for (let segIdx = 0; segIdx < partnerLinesWithIndices.length; segIdx++) {
-          const { line: ln, originalIndex } = partnerLinesWithIndices[segIdx];
-          const voice = voiceFor(ln.speaker);
-          const b = await openaiTts(ln.text, voice, "tts-1");
-          chunks.push(b);
-
-          // Save individual segment
-          const segPath = path.join(renderDir, `seg_${String(segIdx).padStart(3, "0")}.mp3`);
-          fs.writeFileSync(segPath, b);
-          if (r2Enabled()) {
-            const r2Key = `renders/${rid}/seg_${String(segIdx).padStart(3, "0")}.mp3`;
-            await r2PutFile(r2Key, segPath, "audio/mpeg");
-          }
-
-          // Add to manifest
-          manifestSegments.push({
-            segment_index: segIdx,
-            script_line_index: originalIndex,
-            speaker: ln.speaker,
-            text: ln.text,
-            url: `/api/assets/${rid}/segment/${segIdx}`,
-          });
-
-          if (paceMs > 0) {
-            // optional silence could be inserted later
-          }
-        }
-
-        // Save manifest
-        const manifest: RenderManifest = {
-          render_id: rid,
-          script_id: script_id,
-          scene_id: scene.id,
-          role: myRole,
-          created_at: new Date().toISOString(),
-          segments: manifestSegments,
-        };
-        const manifestPath = path.join(renderDir, "manifest.json");
-        fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
-        if (r2Enabled()) {
-          const r2Key = `renders/${rid}/manifest.json`;
-          await r2PutFile(r2Key, manifestPath, "application/json");
-        }
-
-        // Create combined MP3 (existing behavior)
-        const mp3 = concatMp3(chunks.length ? chunks : [await openaiTts(" ", "alloy", "tts-1")]);
-
-        // Save combined MP3 to file (moved from mem.assets)
-        const mp3Path = path.join(process.cwd(), "assets", "renders", `${rid}.mp3`);
-        fs.writeFileSync(mp3Path, mp3);
-
-        job.status = "complete";
-        job.url = `/api/assets/${rid}`;
-        job.manifest_url = `/api/assets/${rid}/manifest`;
-      } catch (e: any) {
-        const msg = e?.message || String(e);
-        job.status = "error";
-        job.err = msg;
-      }
-    })();
+    // Add to queue and kick worker
+    renderQueue.push(rid);
+    kickRenderWorker();
 
     res.json({ render_id: rid, status: "queued" });
   });
@@ -2988,6 +3059,17 @@ function mountFallbackDebugRoutes() {
     if (job.status === "complete" && job.manifest_url) {
       response.manifest_url = job.manifest_url;
     }
+
+    // Stuck job diagnostics: if queued > 3 minutes, flag as stuck
+    const STUCK_THRESHOLD_MS = 3 * 60 * 1000; // 3 minutes
+    if (job.status === "queued" && job.enqueued_at) {
+      const queuedDuration = Date.now() - job.enqueued_at;
+      if (queuedDuration > STUCK_THRESHOLD_MS) {
+        response.stuck = true;
+        response.stuck_reason = "worker_not_running";
+      }
+    }
+
     res.json(response);
   });
 
