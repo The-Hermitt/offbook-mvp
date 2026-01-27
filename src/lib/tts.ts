@@ -138,23 +138,6 @@ export async function generateReaderMp3(
   const tmpDir = path.join(os.tmpdir(), `offbook-tts-${id}`);
   fs.mkdirSync(tmpDir, { recursive: true });
 
-<<<<<<< HEAD
-  for (const ln of lines) {
-    if (ln.character.toUpperCase() === role.toUpperCase()) {
-      const gap = await getGapBuffer(voiceMap["UNKNOWN"] || "alloy");
-      for (let i = 0; i < repeats; i++) chunks.push(gap);
-      continue;
-    }
-    const v = voiceMap[ln.character] || voiceMap["UNKNOWN"] || "alloy";
-    const audio = await ttsToBuffer(ln.text, v);
-    chunks.push(audio);
-    const gap = await getGapBuffer(v);
-    for (let i = 0; i < repeats; i++) chunks.push(gap);
-  }
-
-  fs.writeFileSync(outPath, Buffer.concat(chunks));
-  return outPath;
-=======
   console.log(`[tts] generateReaderMp3 starting: ${lines.length} lines, role=${role}`);
 
   const segmentFiles: string[] = [];
@@ -317,5 +300,4 @@ async function runFFmpegConcat(
       resolve({ success: false, mode: encoder, error: err.message });
     });
   });
->>>>>>> 54acff7 (Add render manifest + segment asset endpoints)
 }

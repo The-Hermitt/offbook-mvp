@@ -2997,9 +2997,13 @@ function mountFallbackDebugRoutes() {
 // Prefer real project routes if present
 async function tryMountProjectHttpRoutes() {
   try {
-    const mod =
-      (await import("./http-routes.js").catch(() => null)) ||
-      (await import("./http-routes").catch(() => null));
+    let mod: any = null;
+    let lastErr: any = null;
+    try {
+      mod = await import("./http-routes");
+    } catch (err) {
+      lastErr = err;
+    }
     if (mod && (typeof (mod as any).registerHttpRoutes === "function" || typeof (mod as any).default === "function")) {
       const fn = ((mod as any).registerHttpRoutes || (mod as any).default) as (app: express.Express) => void;
       fn(app);
@@ -3012,11 +3016,15 @@ async function tryMountProjectHttpRoutes() {
       console.warn("[http-routes]", msg);
       ROUTES_MOUNT_STATUS = { mounted: false, error: msg };
     } else {
-      const msg = "http-routes module not found";
+      const msg =
+        lastErr && typeof lastErr?.message === "string"
+          ? lastErr.message
+          : "http-routes module not found";
       ROUTES_MOUNT_STATUS = { mounted: false, error: msg };
     }
   } catch (e) {
-    const errorMsg = String(e);
+    const errorMsg =
+      e && typeof (e as any)?.message === "string" ? (e as any).message : String(e);
     console.warn("[http-routes] failed to import, using fallback:", e);
     ROUTES_MOUNT_STATUS = { mounted: false, error: errorMsg };
   }
