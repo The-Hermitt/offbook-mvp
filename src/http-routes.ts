@@ -8,7 +8,7 @@ import * as os from "os";
 import crypto from "crypto";
 import { spawn, execFileSync } from "child_process";
 import db, { dbGet, dbAll, dbRun, USING_POSTGRES, listByUserAsync, getByIdAsync, saveAsync, deleteByIdAsync, updateNotesAsync } from "./lib/db";
-import { generateReaderMp3, ttsProvider } from "./lib/tts";
+import { generateReaderMp3, ttsProvider, type RenderResult } from "./lib/tts";
 import { isSttEnabled, transcribeChunk } from "./lib/stt";
 import { makeAuditMiddleware } from "./lib/audit";
 import { makeRateLimiters } from "./middleware/rateLimit";
@@ -1028,10 +1028,10 @@ export function initHttpRoutes(app: Express) {
       const lines = [{ character: "DEMO", text: sampleText }];
       const voiceMap: Record<string, string> = { DEMO: v, UNKNOWN: v };
 
-      const outPath = await generateReaderMp3(lines, voiceMap, "USER", "normal");
+      const result = await generateReaderMp3(lines, voiceMap, "USER", "normal");
 
       res.setHeader("Content-Type", "audio/mpeg");
-      fs.createReadStream(outPath).pipe(res);
+      fs.createReadStream(result.outPath).pipe(res);
     } catch (err) {
       console.error("[preview_voice] error:", err);
       if (!res.headersSent) {
@@ -1068,7 +1068,8 @@ export function initHttpRoutes(app: Express) {
       if (typeof generateReaderMp3 === "function" && generateReaderMp3.length >= 5) {
         args.push(model);
       }
-      const outPath = await (generateReaderMp3 as any)(...args);
+      const renderResult = await (generateReaderMp3 as any)(...args);
+      const outPath = typeof renderResult === "string" ? renderResult : renderResult.outPath;
       const id = crypto.randomUUID();
       const dest = path.join(ASSETS_DIR, `${id}.mp3`);
       fs.copyFileSync(outPath, dest);
@@ -1265,15 +1266,16 @@ export function initHttpRoutes(app: Express) {
       voiceMap.UNKNOWN = "alloy";
     }
 
-    // Generate reader MP3
-    let file: string;
+    // Generate reader MP3 + per-line segments + manifest
+    let result: RenderResult;
     try {
-      file = await generateReaderMp3(lines, voiceMap, role, pace, renderId);
+      result = await generateReaderMp3(lines, voiceMap, role, pace, renderId, { script_id, scene_id, role });
     } catch (ttsErr) {
       console.error("[debug/render] TTS generation failed:", ttsErr);
       renders.set(renderId, { status: "error", accounted: false });
       return res.status(500).json({ error: "tts_failed" });
     }
+    const file = result.outPath;
 
     // Upload to R2 if enabled
     const r2Key = `renders/${renderId}.mp3`;
@@ -1281,6 +1283,16 @@ export function initHttpRoutes(app: Express) {
       try {
         await r2PutFile(r2Key, file, "audio/mpeg");
         console.log("[debug/render] Uploaded to R2: key=%s", r2Key);
+
+        // Upload per-line segments + manifest to R2
+        for (const seg of result.segments) {
+          const segFile = path.join(result.segmentDir, `seg_${String(seg.segment_index).padStart(3, "0")}.mp3`);
+          const segR2Key = `renders/${renderId}/seg_${String(seg.segment_index).padStart(3, "0")}.mp3`;
+          await r2PutFile(segR2Key, segFile, "audio/mpeg");
+        }
+        const manifestFile = path.join(result.segmentDir, "manifest.json");
+        await r2PutFile(`renders/${renderId}/manifest.json`, manifestFile, "application/json");
+        console.log("[debug/render] Uploaded segments+manifest to R2: %d segments", result.segments.length);
       } catch (err) {
         console.error("[debug/render] R2 upload failed:", err);
         renders.set(renderId, { status: "error", err: "r2_upload_failed", accounted: false });
@@ -1319,6 +1331,7 @@ export function initHttpRoutes(app: Express) {
       const base = baseUrlFrom(req);
       const id = path.basename(job.file, ".mp3");
       payload.download_url = `${base}/api/assets/${id}`;
+      payload.manifest_url = `/api/assets/${id}/manifest`;
     }
     res.json(payload);
   });

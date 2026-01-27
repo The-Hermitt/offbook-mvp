@@ -11,6 +11,20 @@ type Line = { character: string; text: string };
 type VoiceMap = Record<string, string>;
 type Pace = "slow" | "normal" | "fast";
 
+export type SegmentInfo = {
+  segment_index: number;
+  script_line_index: number;
+  speaker: string;
+  text: string;
+  url: string;
+};
+
+export type RenderResult = {
+  outPath: string;
+  segmentDir: string;
+  segments: SegmentInfo[];
+};
+
 // Lazily initialize the OpenAI client after the env is available
 let _client: OpenAI | null = null;
 
@@ -113,8 +127,9 @@ export async function generateReaderMp3(
   voiceMap: VoiceMap,
   role: string,
   pace: Pace = "normal",
-  fixedId?: string
-): Promise<string> {
+  fixedId?: string,
+  meta?: { script_id?: string; scene_id?: string; role?: string }
+): Promise<RenderResult> {
   const id = fixedId || crypto.randomUUID();
   const outDir = path.join(process.cwd(), "assets", "renders");
   fs.mkdirSync(outDir, { recursive: true });
@@ -130,7 +145,11 @@ export async function generateReaderMp3(
       "utf8"
     );
     fs.writeFileSync(outPath, debugPayload);
-    return outPath;
+    // Stub: no real segments, but return valid structure
+    const stubSegDir = path.join(outDir, id);
+    fs.mkdirSync(stubSegDir, { recursive: true });
+    fs.writeFileSync(path.join(stubSegDir, "manifest.json"), JSON.stringify({ render_id: id, segments: [] }));
+    return { outPath, segmentDir: stubSegDir, segments: [] };
   }
 
   // OpenAI path with ffmpeg-based concatenation
@@ -142,6 +161,8 @@ export async function generateReaderMp3(
 
   const segmentFiles: string[] = [];
   let segmentIndex = 0;
+  // Track one buffer per script line for per-line segment output
+  const perLineBuffers = new Map<number, Buffer>();
 
   try {
     // Generate segments as individual MP3 files
@@ -151,6 +172,8 @@ export async function generateReaderMp3(
       if (ln.character.toUpperCase() === role.toUpperCase()) {
         // Actor's line - add gap(s)
         const gap = await getGapBuffer(voiceMap["UNKNOWN"] || "alloy");
+        // Save per-line buffer (boundary marker for actor line)
+        perLineBuffers.set(i, gap);
         for (let j = 0; j < repeats; j++) {
           const segPath = path.join(tmpDir, `seg-${String(segmentIndex).padStart(3, "0")}.mp3`);
           fs.writeFileSync(segPath, gap);
@@ -165,6 +188,8 @@ export async function generateReaderMp3(
 
       const v = voiceMap[ln.character] || voiceMap["UNKNOWN"] || "alloy";
       const audio = await ttsToBufferRobust(ln.text, v, i);
+      // Save per-line buffer for partner line
+      perLineBuffers.set(i, audio);
 
       const segPath = path.join(tmpDir, `seg-${String(segmentIndex).padStart(3, "0")}.mp3`);
       fs.writeFileSync(segPath, audio);
@@ -239,7 +264,36 @@ export async function generateReaderMp3(
     const outBytes = fs.statSync(outPath).size;
     console.log(`[tts] assembled mp3 via ffmpeg reencode encoder=${ffmpegResult.mode} bytes=${outBytes}`);
 
-    return outPath;
+    // ── Persist per-line segments + manifest ──
+    const segDir = path.join(outDir, id);
+    fs.mkdirSync(segDir, { recursive: true });
+
+    const segments: SegmentInfo[] = [];
+    for (let i = 0; i < lines.length; i++) {
+      const buf = perLineBuffers.get(i);
+      if (!buf) continue;
+      const segFile = `seg_${String(i).padStart(3, "0")}.mp3`;
+      fs.writeFileSync(path.join(segDir, segFile), buf);
+      console.log(`[render] segment stored idx=${i} rid=${id}`);
+      segments.push({
+        segment_index: i,
+        script_line_index: i,
+        speaker: lines[i].character,
+        text: lines[i].text,
+        url: `/api/assets/${id}/segment/${i}`,
+      });
+    }
+
+    const manifest = {
+      render_id: id,
+      ...(meta || {}),
+      created_at: new Date().toISOString(),
+      segments,
+    };
+    fs.writeFileSync(path.join(segDir, "manifest.json"), JSON.stringify(manifest, null, 2));
+    console.log(`[render] wrote manifest segments=${segments.length} rid=${id}`);
+
+    return { outPath, segmentDir: segDir, segments };
   } finally {
     // Clean up temp files (best effort)
     try {
