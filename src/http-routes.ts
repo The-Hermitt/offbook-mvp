@@ -12,7 +12,7 @@ import { generateReaderMp3, ttsProvider } from "./lib/tts";
 import { isSttEnabled, transcribeChunk } from "./lib/stt";
 import { makeAuditMiddleware } from "./lib/audit";
 import { makeRateLimiters } from "./middleware/rateLimit";
-import { getPasskeySession, noteRenderComplete, ensureSid } from "./routes/auth";
+import { getPasskeySession, ensureSid } from "./routes/auth";
 import { r2Enabled, r2PutFile, r2GetObjectStream, r2Head, r2Delete } from "./lib/r2";
 import { addUserCredits, getAvailableCredits } from "./lib/credits";
 import Stripe from "stripe";
@@ -455,6 +455,7 @@ export function initHttpRoutes(app: Express) {
   if (typeof app?.set === "function") { app.set("trust proxy", 1); }
   const audit = makeAuditMiddleware();
   const { debugLimiter, renderLimiter } = makeRateLimiters();
+  const INCLUDED_CREDITS = 150;
 
   function getMixdownEnabled(): boolean {
     const v = String(process.env.MIXDOWN_ENABLED || "").trim();
@@ -546,10 +547,104 @@ export function initHttpRoutes(app: Express) {
     next();
   });
 
-  // GET /debug/whoami - shows current user session info
+  type CreditsState = {
+    granted: number;
+    used: number;
+    periodStart: string;
+    periodEnd: string;
+  };
+
+  type CreditsStore = {
+    stateByOwner: Map<string, CreditsState>;
+    renderOwner: Map<string, string>;
+    accountedRenders: Set<string>;
+  };
+
+  function getPeriodBounds(now: Date = new Date()): { periodStart: string; periodEnd: string } {
+    const y = now.getUTCFullYear();
+    const m = now.getUTCMonth();
+    const periodStart = new Date(Date.UTC(y, m, 1));
+    const periodEnd = new Date(Date.UTC(y, m + 1, 1));
+    return { periodStart: periodStart.toISOString(), periodEnd: periodEnd.toISOString() };
+  }
+
+  function getCreditsStore(): CreditsStore {
+    const key = "__debugCreditsStore";
+    const localsAny = app.locals as any;
+    if (!localsAny[key]) {
+      localsAny[key] = {
+        stateByOwner: new Map<string, CreditsState>(),
+        renderOwner: new Map<string, string>(),
+        accountedRenders: new Set<string>(),
+      } satisfies CreditsStore;
+    }
+    return localsAny[key] as CreditsStore;
+  }
+
+  function getOwnerKey(req: Request): string {
+    const { userId } = getPasskeySession(req as any);
+    return userId || "shared";
+  }
+
+  function ensureOwnerState(ownerKey: string): CreditsState {
+    const store = getCreditsStore();
+    const bounds = getPeriodBounds();
+    const existing = store.stateByOwner.get(ownerKey);
+    if (!existing || existing.periodStart !== bounds.periodStart) {
+      const next: CreditsState = {
+        granted: 0,
+        used: 0,
+        periodStart: bounds.periodStart,
+        periodEnd: bounds.periodEnd,
+      };
+      store.stateByOwner.set(ownerKey, next);
+      return next;
+    }
+    return existing;
+  }
+
+  function creditsSnapshot(ownerKey: string) {
+    const state = ensureOwnerState(ownerKey);
+    const included = INCLUDED_CREDITS;
+    const granted = state.granted;
+    const used = state.used;
+    const remaining = included + granted - used;
+    return {
+      included,
+      granted,
+      used,
+      remaining,
+      period_start: state.periodStart,
+      period_end: state.periodEnd,
+    };
+  }
+
+  // GET /debug/whoami - probe for active route file
   debug.get("/whoami", (req: Request, res: Response) => {
-    const { passkeyLoggedIn, userId } = getPasskeySession(req as any);
-    res.json({ passkeyLoggedIn, userId });
+    res.json({ ok: true, marker: "credits-gate-v1" });
+  });
+
+  // GET /debug/credits - in-memory credits snapshot
+  debug.get("/credits", (req: Request, res: Response) => {
+    const ownerKey = getOwnerKey(req);
+    const snap = creditsSnapshot(ownerKey);
+    res.setHeader("x-credits-remaining", String(snap.remaining));
+    res.json(snap);
+  });
+
+  // POST /debug/credits/grant?amount=N - adjust granted credits for testing
+  debug.post("/credits/grant", (req: Request, res: Response) => {
+    const ownerKey = getOwnerKey(req);
+    const amountRaw = req.query.amount;
+    const amount = typeof amountRaw === "string" ? Number(amountRaw) : Number(amountRaw ?? 0);
+    if (!Number.isFinite(amount)) {
+      return res.status(400).json({ error: "amount must be a finite number" });
+    }
+    const state = ensureOwnerState(ownerKey);
+    state.granted += amount;
+    const snap = creditsSnapshot(ownerKey);
+    res.setHeader("x-credits-remaining", String(snap.remaining));
+    res.json(snap);
   });
 
   // GET /debug/my_scripts - list scripts owned by current user
@@ -1120,6 +1215,18 @@ export function initHttpRoutes(app: Express) {
     if (!userId) {
       return res.status(401).json({ error: "unauthorized" });
     }
+    const ownerKey = getOwnerKey(req);
+    const snap = creditsSnapshot(ownerKey);
+    res.setHeader("x-credits-remaining", String(snap.remaining));
+    if (snap.remaining <= 0) {
+      return res.status(402).json({
+        error: "insufficient_credits",
+        included: snap.included,
+        granted: snap.granted,
+        used: snap.used,
+        remaining: snap.remaining,
+      });
+    }
 
     const body = req.body || {};
     const script_id = body.script_id;
@@ -1138,6 +1245,9 @@ export function initHttpRoutes(app: Express) {
 
     const renderId = crypto.randomUUID();
     renders.set(renderId, { status: "working", accounted: false });
+    const store = getCreditsStore();
+    store.renderOwner.set(renderId, ownerKey);
+    store.accountedRenders.delete(renderId);
 
     // Find the scene
     const scene = script.scenes.find(s => s.id === scene_id) || script.scenes[0];
@@ -1179,16 +1289,6 @@ export function initHttpRoutes(app: Express) {
     }
 
     const job = { status: "complete" as const, file, accounted: false };
-    try {
-      console.log(
-        "[credits] render complete (http-routes:/debug/render): accounting usage; rid=%s",
-        renderId
-      );
-      await noteRenderComplete(req);
-      job.accounted = true;
-    } catch (err) {
-      console.error("[credits] noteRenderComplete failed (http-routes:/debug/render):", err);
-    }
     renders.set(renderId, job);
     res.json({ render_id: renderId, status: "complete", r2Key });
   });
@@ -1203,13 +1303,14 @@ export function initHttpRoutes(app: Express) {
 
     // When a render first reaches "complete", account for it exactly once.
     if (job.status === "complete" && !job.accounted) {
-      try {
-        console.log("[credits] render complete (http-routes): accounting usage; rid=%s", rid);
-        await noteRenderComplete(req);
+      const store = getCreditsStore();
+      if (!store.accountedRenders.has(rid)) {
+        const ownerKey = store.renderOwner.get(rid) || getOwnerKey(req);
+        const state = ensureOwnerState(ownerKey);
+        state.used += 1;
+        store.accountedRenders.add(rid);
         job.accounted = true;
         renders.set(rid, job);
-      } catch (err) {
-        console.error("[credits] noteRenderComplete failed (http-routes):", err);
       }
     }
 
