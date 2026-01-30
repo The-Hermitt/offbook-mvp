@@ -14,8 +14,8 @@ import { makeAuditMiddleware } from "./lib/audit";
 import { makeRateLimiters } from "./middleware/rateLimit";
 import { getPasskeySession, ensureSid } from "./routes/auth";
 import { r2Enabled, r2PutFile, r2GetObjectStream, r2Head, r2Delete } from "./lib/r2";
-import { addUserCredits, getAvailableCredits } from "./lib/credits";
-import { getCreditsSnapshot as getDbCreditsSnapshot } from "./lib/usage";
+import { addUserCredits, getAvailableCredits, getUserCredits } from "./lib/credits";
+import { getUserBilling } from "./lib/db";
 import Stripe from "stripe";
 
 // ---------- Types ----------
@@ -2665,53 +2665,42 @@ export function initHttpRoutes(app: Express) {
       return res.status(500).send("Internal Server Error");
     }
   });
-
   // ────────────────────────────────────────────────────────────────────────────
-  // GET /credits - Production credits endpoint (DB-backed)
-  // Identity resolution: X-OffBook-User header > session userId > "anonymous"
+  // GET /credits - Production credits endpoint (DB-backed billing + top-ups)
   // ────────────────────────────────────────────────────────────────────────────
-  const PRODUCTION_INCLUDED_CREDITS = 120;
-
-  api.get("/credits", async (req: Request, res: Response) => {
+  app.get("/credits", secretGuard, async (req: Request, res: Response) => {
     try {
-      // Identity resolution: X-OffBook-User header takes precedence (prevents reinstall resets)
-      const xOffBookUser = req.headers["x-offbook-user"];
-      const headerUser = typeof xOffBookUser === "string" ? xOffBookUser.trim() : null;
-      const { userId: sessionUserId } = getPasskeySession(req as any);
-      const userKey = headerUser || sessionUserId || "anonymous";
+      // Ensure session exists and get user identity
+      const sid = ensureSid(req as any, res as any);
+      const { userId } = getPasskeySession(req as any);
+      const userKey = userId || `anon:${sid}`;
 
-      // Get DB-backed usage snapshot
-      const dbSnap = await getDbCreditsSnapshot(userKey);
+      // Load billing + top-up state from DB
+      const billing = await getUserBilling(userKey);
+      const creditsRow = await getUserCredits(userKey);
 
-      // Period bounds (monthly reset)
-      const now = new Date();
-      const y = now.getUTCFullYear();
-      const m = now.getUTCMonth();
-      const periodStart = new Date(Date.UTC(y, m, 1)).toISOString();
-      const periodEnd = new Date(Date.UTC(y, m + 1, 1)).toISOString();
+      // Compute totals
+      const includedMonthly = billing?.status === "active" ? (billing.included_quota || 120) : 0;
+      const usedMonthly = billing?.renders_used ?? 0;
+      const monthlyRemaining = Math.max(0, includedMonthly - usedMonthly);
 
-      // Build response (same shape as /debug/credits)
-      const included = PRODUCTION_INCLUDED_CREDITS;
-      const granted = dbSnap.granted;
-      const used = dbSnap.used;
-      const remaining = Math.max(0, included + granted - used);
+      const topupRemaining = creditsRow ? Math.max(0, creditsRow.total_credits - creditsRow.used_credits) : 0;
+      const topupFrozen = billing?.status !== "active";
 
-      const payload = {
-        included,
-        granted,
-        used,
-        remaining,
-        period_start: periodStart,
-        period_end: periodEnd,
-      };
-
-      // Logging (user key, credits info, period)
-      console.log(
-        `[credits] user=${userKey} included=${included} granted=${granted} used=${used} remaining=${remaining} period_start=${periodStart} period_end=${periodEnd}`
-      );
+      const remaining = monthlyRemaining + (topupFrozen ? 0 : topupRemaining);
+      const usedTotal = usedMonthly + (creditsRow?.used_credits ?? 0);
 
       res.setHeader("x-credits-remaining", String(remaining));
-      res.json(payload);
+      res.json({
+        included: includedMonthly,
+        granted: topupRemaining,
+        used: usedTotal,
+        remaining,
+        period_start: billing?.current_period_start ? new Date(Number(billing.current_period_start)).toISOString() : "",
+        period_end: billing?.current_period_end ? new Date(Number(billing.current_period_end)).toISOString() : "",
+        topup_frozen: topupFrozen,
+        status: billing?.status ?? "inactive",
+      });
     } catch (err) {
       console.error("[credits] error:", err);
       res.status(500).json({ error: "internal_error" });
