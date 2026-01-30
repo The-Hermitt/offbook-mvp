@@ -353,17 +353,33 @@ function deriveUserId(sess: Sess | undefined | null): string {
   return "";
 }
 
+// Sanitize header user id: trim, max 200 chars, only allow [a-zA-Z0-9:._-]
+function sanitizeHeaderUserId(raw: string): string {
+  const trimmed = raw.trim().slice(0, 200);
+  return /^[a-zA-Z0-9:._-]+$/.test(trimmed) ? trimmed : "";
+}
+
 // Lightweight helper for other routes to read the passkey session state
 export function getPasskeySession(req: express.Request) {
   const sess = ensureSessionDefaults(req);
   const passkeyLoggedIn = Boolean(sess.loggedIn);
   const allowAnon = !ENFORCE_AUTH_GATE;
 
+  // Check for X-OffBook-User or X-User-Id header (stable identity across reinstalls)
+  const headerRaw = req.header("X-OffBook-User") || req.header("X-User-Id") || "";
+  const headerUser = sanitizeHeaderUserId(headerRaw);
+
   let userId: string | null = null;
   if (passkeyLoggedIn) {
     userId = deriveUserId(sess);
   } else if (allowAnon) {
-    userId = sess.userId || `anon:${sess.sid}`;
+    // Prefer header user id when present and valid (prevents reinstall resets)
+    if (headerUser) {
+      sess.userId = headerUser;
+      userId = headerUser;
+    } else {
+      userId = sess.userId || `anon:${sess.sid}`;
+    }
   }
 
   return { passkeyLoggedIn, userId };
@@ -382,16 +398,25 @@ router.get("/session", async (req, res) => {
   const passkeyLoggedIn = Boolean(sess.loggedIn);
   const allowAnon = !ENFORCE_AUTH_GATE;
 
-  // Ensure anon identity is stable
-  if (allowAnon && sess && !sess.userId) {
-    sess.userId = `anon:${sid}`;
+  // Check for X-OffBook-User or X-User-Id header (stable identity across reinstalls)
+  const headerRaw = req.header("X-OffBook-User") || req.header("X-User-Id") || "";
+  const headerUser = sanitizeHeaderUserId(headerRaw);
+
+  // Ensure anon identity is stable - prefer header user id when present
+  if (allowAnon && sess) {
+    if (headerUser) {
+      sess.userId = headerUser;
+    } else if (!sess.userId) {
+      sess.userId = `anon:${sid}`;
+    }
   }
 
   let userId: string | null = null;
   if (passkeyLoggedIn) {
     userId = deriveUserId(sess);
   } else if (allowAnon) {
-    userId = sess.userId || `anon:${sid}`;
+    // Prefer header user id when present
+    userId = headerUser || sess.userId || `anon:${sid}`;
   }
 
   // One-time migration: move legacy solo-tester + old anon data to this user

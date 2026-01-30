@@ -2691,7 +2691,8 @@ export function initHttpRoutes(app: Express) {
       const usedTotal = usedMonthly + (creditsRow?.used_credits ?? 0);
 
       res.setHeader("x-credits-remaining", String(remaining));
-      res.json({
+
+      const payload: Record<string, unknown> = {
         included: includedMonthly,
         granted: topupRemaining,
         used: usedTotal,
@@ -2700,7 +2701,14 @@ export function initHttpRoutes(app: Express) {
         period_end: billing?.current_period_end ? new Date(Number(billing.current_period_end)).toISOString() : "",
         topup_frozen: topupFrozen,
         status: billing?.status ?? "inactive",
-      });
+      };
+
+      // Debug aid: include user key when debug=1
+      if (req.query.debug === "1") {
+        payload.debug_user_key = userKey;
+      }
+
+      res.json(payload);
     } catch (err) {
       console.error("[credits] error:", err);
       res.status(500).json({ error: "internal_error" });
