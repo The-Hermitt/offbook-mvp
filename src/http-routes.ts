@@ -15,6 +15,7 @@ import { makeRateLimiters } from "./middleware/rateLimit";
 import { getPasskeySession, ensureSid } from "./routes/auth";
 import { r2Enabled, r2PutFile, r2GetObjectStream, r2Head, r2Delete } from "./lib/r2";
 import { addUserCredits, getAvailableCredits } from "./lib/credits";
+import { getCreditsSnapshot as getDbCreditsSnapshot } from "./lib/usage";
 import Stripe from "stripe";
 
 // ---------- Types ----------
@@ -624,7 +625,8 @@ export function initHttpRoutes(app: Express) {
     res.json({ ok: true, marker: "credits-gate-v1" });
   });
 
-  // GET /debug/credits - in-memory credits snapshot
+  // GET /debug/credits - in-memory credits snapshot (DEBUG ONLY - use GET /credits for production)
+  // This endpoint is kept for internal testing only. iOS app should use GET /credits instead.
   debug.get("/credits", (req: Request, res: Response) => {
     const ownerKey = getOwnerKey(req);
     const snap = creditsSnapshot(ownerKey);
@@ -2661,6 +2663,58 @@ export function initHttpRoutes(app: Express) {
     } catch (err) {
       console.error("Error in GET /api/assets/:render_id", err);
       return res.status(500).send("Internal Server Error");
+    }
+  });
+
+  // ────────────────────────────────────────────────────────────────────────────
+  // GET /credits - Production credits endpoint (DB-backed)
+  // Identity resolution: X-OffBook-User header > session userId > "anonymous"
+  // ────────────────────────────────────────────────────────────────────────────
+  const PRODUCTION_INCLUDED_CREDITS = 120;
+
+  api.get("/credits", async (req: Request, res: Response) => {
+    try {
+      // Identity resolution: X-OffBook-User header takes precedence (prevents reinstall resets)
+      const xOffBookUser = req.headers["x-offbook-user"];
+      const headerUser = typeof xOffBookUser === "string" ? xOffBookUser.trim() : null;
+      const { userId: sessionUserId } = getPasskeySession(req as any);
+      const userKey = headerUser || sessionUserId || "anonymous";
+
+      // Get DB-backed usage snapshot
+      const dbSnap = await getDbCreditsSnapshot(userKey);
+
+      // Period bounds (monthly reset)
+      const now = new Date();
+      const y = now.getUTCFullYear();
+      const m = now.getUTCMonth();
+      const periodStart = new Date(Date.UTC(y, m, 1)).toISOString();
+      const periodEnd = new Date(Date.UTC(y, m + 1, 1)).toISOString();
+
+      // Build response (same shape as /debug/credits)
+      const included = PRODUCTION_INCLUDED_CREDITS;
+      const granted = dbSnap.granted;
+      const used = dbSnap.used;
+      const remaining = Math.max(0, included + granted - used);
+
+      const payload = {
+        included,
+        granted,
+        used,
+        remaining,
+        period_start: periodStart,
+        period_end: periodEnd,
+      };
+
+      // Logging (user key, credits info, period)
+      console.log(
+        `[credits] user=${userKey} included=${included} granted=${granted} used=${used} remaining=${remaining} period_start=${periodStart} period_end=${periodEnd}`
+      );
+
+      res.setHeader("x-credits-remaining", String(remaining));
+      res.json(payload);
+    } catch (err) {
+      console.error("[credits] error:", err);
+      res.status(500).json({ error: "internal_error" });
     }
   });
 

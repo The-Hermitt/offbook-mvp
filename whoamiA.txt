@@ -1,0 +1,18 @@
+HTTP/2 200 
+date: Fri, 30 Jan 2026 17:17:11 GMT
+content-type: application/json; charset=utf-8
+cf-ray: 9c629d98cf3fa62e-EWR
+access-control-allow-origin: *
+etag: W/"99-ONtm8aUSpYp23006aueWzBN79p8"
+rndr-id: 5b3c8a73-a0cc-4dba
+set-cookie: ob_sess=eyJzaWQiOiJjNzcwYjE0OS0xZGM5LTQyZDItOTczMi0yMmJmODNkYTRhMjQiLCJ1c2VySWQiOiJhbm9uOmM3NzBiMTQ5LTFkYzktNDJkMi05NzMyLTIyYmY4M2RhNGEyNCIsInBsYW4iOiJub25lIiwicmVuZGVyc1VzZWQiOjAsImNyZWRpdHNBdmFpbGFibGUiOjAsInBlcmlvZFN0YXJ0IjoiMjAyNi0wMS0wMVQwMDowMDowMC4wMDBaIiwicGVyaW9kRW5kIjoiMjAyNi0wMi0wMVQwMDowMDowMC4wMDBaIn0=; path=/; expires=Sun, 01 Mar 2026 17:17:11 GMT; samesite=lax; secure; httponly
+set-cookie: ob_sess.sig=3yqznD8HKezENnPu9bCcrfF1RHw; path=/; expires=Sun, 01 Mar 2026 17:17:11 GMT; samesite=lax; secure; httponly
+vary: Accept-Encoding
+x-powered-by: Express
+x-ratelimit-remaining: 119
+x-render-origin-server: Render
+cf-cache-status: DYNAMIC
+server: cloudflare
+alt-svc: h3=":443"; ma=86400
+
+{"ok":true,"has_session":true,"sid":null,"session_user_id":null,"resolved_user_id":"anon:c770b149-1dc9-42d2-9732-22bf83da4a24","enforce_auth_gate":false}

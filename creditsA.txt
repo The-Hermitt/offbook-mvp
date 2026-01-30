@@ -1,0 +1,17 @@
+HTTP/2 200 
+date: Fri, 30 Jan 2026 17:17:11 GMT
+content-type: application/json; charset=utf-8
+cf-ray: 9c629f118943b90a-IAD
+access-control-allow-origin: *
+etag: W/"87-86Ei0S7XsPh+Tlim/VZWe5QAT9M"
+rndr-id: b73d7fa1-f33d-40f3
+vary: Accept-Encoding
+x-credits-remaining: 150
+x-powered-by: Express
+x-ratelimit-remaining: 119
+x-render-origin-server: Render
+cf-cache-status: DYNAMIC
+server: cloudflare
+alt-svc: h3=":443"; ma=86400
+
+{"included":150,"granted":0,"used":0,"remaining":150,"period_start":"2026-01-01T00:00:00.000Z","period_end":"2026-02-01T00:00:00.000Z"}
