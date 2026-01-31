@@ -2699,12 +2699,11 @@ export function initHttpRoutes(app: Express) {
   // ────────────────────────────────────────────────────────────────────────────
   app.post("/billing/apple/sync", secretGuard, express.json(), async (req: Request, res: Response) => {
     try {
-      // Identify user: prefer x-offbook-user header, then x-user-id, then passkey, then anon
+      // Identify user: X-OffBook-User header > passkey userId > anon:sid
       const sid = ensureSid(req as any, res as any);
       const { userId } = getPasskeySession(req as any);
-      const xOffbookUser = (req.header("x-offbook-user") || "").trim();
-      const xUserId = (req.header("x-user-id") || "").trim();
-      const userKey = xOffbookUser || xUserId || userId || `anon:${sid}`;
+      const xOffbookUser = (req.header("X-OffBook-User") || "").trim();
+      const userKey = xOffbookUser || userId || `anon:${sid}`;
 
       const { status, periodStartMs, periodEndMs } = req.body || {};
 
@@ -2760,19 +2759,15 @@ export function initHttpRoutes(app: Express) {
   app.get("/credits", secretGuard, async (req: Request, res: Response) => {
     try {
       // Ensure session exists and get user identity
-      // Priority: x-offbook-user header > x-user-id header > passkey userId > anon:sid
+      // Priority: X-OffBook-User header > passkey userId > anon:sid
       const sid = ensureSid(req as any, res as any);
       const { userId } = getPasskeySession(req as any);
-      const xOffbookUser = (req.header("x-offbook-user") || "").trim();
-      const xUserId = (req.header("x-user-id") || "").trim();
+      const xOffbookUser = (req.header("X-OffBook-User") || "").trim();
       let userKey: string;
-      let userKeySource: "x-offbook-user" | "x-user-id" | "passkey" | "anon-sid";
+      let userKeySource: "x-offbook-user" | "passkey" | "anon-sid";
       if (xOffbookUser) {
         userKey = xOffbookUser;
         userKeySource = "x-offbook-user";
-      } else if (xUserId) {
-        userKey = xUserId;
-        userKeySource = "x-user-id";
       } else if (userId) {
         userKey = userId;
         userKeySource = "passkey";
