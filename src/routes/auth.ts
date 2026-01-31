@@ -224,6 +224,13 @@ export async function noteRenderComplete(req: express.Request) {
   const sess = ensureSessionDefaults(req);
   const sid = sess.sid!;
 
+  // Respect X-OffBook-User header for consistent user identity across reinstalls
+  const headerRaw = req.header("X-OffBook-User") || req.header("X-User-Id") || "";
+  const headerUser = sanitizeHeaderUserId(headerRaw);
+  if (headerUser && !sess.loggedIn) {
+    sess.userId = headerUser;
+  }
+
   const beforeUsed =
     typeof sess.rendersUsed === "number" ? sess.rendersUsed : 0;
   const beforeCredits =

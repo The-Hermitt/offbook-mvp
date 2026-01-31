@@ -12,7 +12,7 @@ import { generateReaderMp3, ttsProvider, type RenderResult } from "./lib/tts";
 import { isSttEnabled, transcribeChunk } from "./lib/stt";
 import { makeAuditMiddleware } from "./lib/audit";
 import { makeRateLimiters } from "./middleware/rateLimit";
-import { getPasskeySession, ensureSid } from "./routes/auth";
+import { getPasskeySession, ensureSid, noteRenderComplete } from "./routes/auth";
 import { r2Enabled, r2PutFile, r2GetObjectStream, r2Head, r2Delete } from "./lib/r2";
 import { addUserCredits, getAvailableCredits, getUserCredits } from "./lib/credits";
 import { getUserBilling, upsertUserBilling } from "./lib/db";
@@ -1323,6 +1323,15 @@ export function initHttpRoutes(app: Express) {
         const state = ensureOwnerState(ownerKey);
         state.used += 1;
         store.accountedRenders.add(rid);
+
+        // Debit against DB-backed billing (noteRenderComplete respects X-OffBook-User header)
+        try {
+          await noteRenderComplete(req);
+          console.log("[render_status] debited", { render_id: rid, userKey: ownerKey, debited: true });
+        } catch (err) {
+          console.error("[render_status] noteRenderComplete failed", err);
+        }
+
         job.accounted = true;
         renders.set(rid, job);
       }
