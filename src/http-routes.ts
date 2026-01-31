@@ -15,7 +15,7 @@ import { makeRateLimiters } from "./middleware/rateLimit";
 import { getPasskeySession, ensureSid } from "./routes/auth";
 import { r2Enabled, r2PutFile, r2GetObjectStream, r2Head, r2Delete } from "./lib/r2";
 import { addUserCredits, getAvailableCredits, getUserCredits } from "./lib/credits";
-import { getUserBilling } from "./lib/db";
+import { getUserBilling, upsertUserBilling } from "./lib/db";
 import Stripe from "stripe";
 
 // ---------- Types ----------
@@ -2666,6 +2666,64 @@ export function initHttpRoutes(app: Express) {
     }
   });
   // ────────────────────────────────────────────────────────────────────────────
+  // POST /billing/apple/sync - Sync Apple entitlement to user_billing
+  // ────────────────────────────────────────────────────────────────────────────
+  app.post("/billing/apple/sync", secretGuard, express.json(), async (req: Request, res: Response) => {
+    try {
+      // Identify user using same mechanism as /credits (respects X-OffBook-User)
+      const sid = ensureSid(req as any, res as any);
+      const { userId } = getPasskeySession(req as any);
+      const userKey = userId || `anon:${sid}`;
+
+      const { status, periodStartMs, periodEndMs } = req.body || {};
+
+      if (!status || typeof status !== "string") {
+        return res.status(400).json({ error: "missing_status" });
+      }
+      if (typeof periodStartMs !== "number" || typeof periodEndMs !== "number") {
+        return res.status(400).json({ error: "missing_period_timestamps" });
+      }
+
+      // Convert ms → seconds for DB storage (DB stores seconds as string)
+      const periodStartSec = Math.floor(periodStartMs / 1000);
+      const periodEndSec = Math.floor(periodEndMs / 1000);
+
+      // Check if period changed vs existing row → reset renders_used
+      const existing = await getUserBilling(userKey);
+      const existingStartSec = existing?.current_period_start ? Number(existing.current_period_start) : null;
+      const existingEndSec = existing?.current_period_end ? Number(existing.current_period_end) : null;
+      const periodChanged = existingStartSec !== periodStartSec || existingEndSec !== periodEndSec;
+      const resetMonthlyUsed = periodChanged && existing !== null;
+
+      // Upsert user_billing
+      await upsertUserBilling({
+        user_id: userKey,
+        plan: "pro",
+        status: status,
+        included_quota: 120,
+        current_period_start: String(periodStartSec),
+        current_period_end: String(periodEndSec),
+        renders_used: resetMonthlyUsed ? 0 : (existing?.renders_used ?? 0),
+      });
+
+      console.log(`[billing/apple/sync] userKey=${userKey} status=${status} periodChanged=${periodChanged} resetMonthlyUsed=${resetMonthlyUsed}`);
+
+      res.json({
+        ok: true,
+        userKey,
+        status,
+        included: 120,
+        periodStartSec,
+        periodEndSec,
+        resetMonthlyUsed,
+      });
+    } catch (err) {
+      console.error("[billing/apple/sync] error:", err);
+      res.status(500).json({ error: "internal_error" });
+    }
+  });
+
+  // ────────────────────────────────────────────────────────────────────────────
   // GET /credits - Production credits endpoint (DB-backed billing + top-ups)
   // ────────────────────────────────────────────────────────────────────────────
   app.get("/credits", secretGuard, async (req: Request, res: Response) => {
@@ -2679,16 +2737,23 @@ export function initHttpRoutes(app: Express) {
       const billing = await getUserBilling(userKey);
       const creditsRow = await getUserCredits(userKey);
 
-      // Compute totals
-      const includedMonthly = billing?.status === "active" ? (billing.included_quota || 120) : 0;
+      // Compute totals - active or trialing status gets included quota
+      const isActiveOrTrialing = billing?.status === "active" || billing?.status === "trialing";
+      const includedMonthly = isActiveOrTrialing ? (billing?.included_quota || 120) : 0;
       const usedMonthly = billing?.renders_used ?? 0;
       const monthlyRemaining = Math.max(0, includedMonthly - usedMonthly);
 
       const topupRemaining = creditsRow ? Math.max(0, creditsRow.total_credits - creditsRow.used_credits) : 0;
-      const topupFrozen = billing?.status !== "active";
+      const topupFrozen = !isActiveOrTrialing;
 
       const remaining = monthlyRemaining + (topupFrozen ? 0 : topupRemaining);
       const usedTotal = usedMonthly + (creditsRow?.used_credits ?? 0);
+
+      // Convert period timestamps to ISO (stored as seconds, output as ISO)
+      const periodStartSec = billing?.current_period_start ? Number(billing.current_period_start) : null;
+      const periodEndSec = billing?.current_period_end ? Number(billing.current_period_end) : null;
+      const periodStartIso = periodStartSec ? new Date(periodStartSec * 1000).toISOString() : "";
+      const periodEndIso = periodEndSec ? new Date(periodEndSec * 1000).toISOString() : "";
 
       res.setHeader("x-credits-remaining", String(remaining));
 
@@ -2697,8 +2762,8 @@ export function initHttpRoutes(app: Express) {
         granted: topupRemaining,
         used: usedTotal,
         remaining,
-        period_start: billing?.current_period_start ? new Date(Number(billing.current_period_start)).toISOString() : "",
-        period_end: billing?.current_period_end ? new Date(Number(billing.current_period_end)).toISOString() : "",
+        period_start: periodStartIso,
+        period_end: periodEndIso,
         topup_frozen: topupFrozen,
         status: billing?.status ?? "inactive",
       };
