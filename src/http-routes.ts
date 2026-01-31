@@ -2737,8 +2737,28 @@ export function initHttpRoutes(app: Express) {
       const billing = await getUserBilling(userKey);
       const creditsRow = await getUserCredits(userKey);
 
+      // Check if subscription period has expired
+      const nowSec = Math.floor(Date.now() / 1000);
+      const periodEndSec = billing?.current_period_end ? Number(billing.current_period_end) : null;
+      const periodStartSec = billing?.current_period_start ? Number(billing.current_period_start) : null;
+      const dbStatusIsActive = billing?.status === "active" || billing?.status === "trialing";
+      const periodExpired = dbStatusIsActive && periodEndSec !== null && nowSec >= periodEndSec;
+
+      // If expired, persist status flip to inactive for consistency
+      if (periodExpired && billing) {
+        await upsertUserBilling({
+          user_id: userKey,
+          plan: billing.plan,
+          status: "inactive",
+        });
+        console.log(`[credits] period expired, flipped status to inactive for userKey=${userKey}`);
+      }
+
+      // Effective status: if period expired, treat as inactive
+      const effectiveStatus = periodExpired ? "inactive" : (billing?.status ?? "inactive");
+      const isActiveOrTrialing = effectiveStatus === "active" || effectiveStatus === "trialing";
+
       // Compute totals - active or trialing status gets included quota
-      const isActiveOrTrialing = billing?.status === "active" || billing?.status === "trialing";
       const includedMonthly = isActiveOrTrialing ? (billing?.included_quota || 120) : 0;
       const usedMonthly = billing?.renders_used ?? 0;
       const monthlyRemaining = Math.max(0, includedMonthly - usedMonthly);
@@ -2750,10 +2770,9 @@ export function initHttpRoutes(app: Express) {
       const usedTotal = usedMonthly + (creditsRow?.used_credits ?? 0);
 
       // Convert period timestamps to ISO (stored as seconds, output as ISO)
-      const periodStartSec = billing?.current_period_start ? Number(billing.current_period_start) : null;
-      const periodEndSec = billing?.current_period_end ? Number(billing.current_period_end) : null;
-      const periodStartIso = periodStartSec ? new Date(periodStartSec * 1000).toISOString() : "";
-      const periodEndIso = periodEndSec ? new Date(periodEndSec * 1000).toISOString() : "";
+      // If expired/inactive, return empty strings for period
+      const periodStartIso = isActiveOrTrialing && periodStartSec ? new Date(periodStartSec * 1000).toISOString() : "";
+      const periodEndIso = isActiveOrTrialing && periodEndSec ? new Date(periodEndSec * 1000).toISOString() : "";
 
       res.setHeader("x-credits-remaining", String(remaining));
 
@@ -2765,7 +2784,7 @@ export function initHttpRoutes(app: Express) {
         period_start: periodStartIso,
         period_end: periodEndIso,
         topup_frozen: topupFrozen,
-        status: billing?.status ?? "inactive",
+        status: effectiveStatus,
       };
 
       // Debug aid: include user key when debug=1
