@@ -82,6 +82,10 @@ const renders = new Map<string, {
   file?: string;
   err?: string;
   accounted?: boolean;
+  chargedChars?: number;
+  chargedCredits?: number;
+  scriptId?: string;
+  sceneId?: string;
 }>();
 
 type ScriptRow = {
@@ -1218,18 +1222,6 @@ export function initHttpRoutes(app: Express) {
     if (!userId) {
       return res.status(401).json({ error: "unauthorized" });
     }
-    const ownerKey = getOwnerKey(req);
-    const snap = creditsSnapshot(ownerKey);
-    res.setHeader("x-credits-remaining", String(snap.remaining));
-    if (snap.remaining <= 0) {
-      return res.status(402).json({
-        error: "insufficient_credits",
-        included: snap.included,
-        granted: snap.granted,
-        used: snap.used,
-        remaining: snap.remaining,
-      });
-    }
 
     const body = req.body || {};
     const script_id = body.script_id;
@@ -1246,18 +1238,37 @@ export function initHttpRoutes(app: Express) {
       return res.status(404).json({ error: "script not found" });
     }
 
-    const renderId = crypto.randomUUID();
-    renders.set(renderId, { status: "working", accounted: false });
-    const store = getCreditsStore();
-    store.renderOwner.set(renderId, ownerKey);
-    store.accountedRenders.delete(renderId);
-
     // Find the scene
     const scene = script.scenes.find(s => s.id === scene_id) || script.scenes[0];
     if (!scene) {
-      renders.set(renderId, { status: "error", accounted: false });
       return res.status(404).json({ error: "scene not found" });
     }
+
+    // Compute chargedChars: count only lines that will be synthesized (NOT the user/actor role)
+    const chargedChars = scene.lines
+      .filter(l => l.speaker.toUpperCase() !== role)
+      .reduce((sum, l) => sum + (l.text?.length || 0), 0);
+    const chargedCredits = chargedChars / 1000;
+
+    const ownerKey = getOwnerKey(req);
+    const snap = creditsSnapshot(ownerKey);
+    res.setHeader("x-credits-remaining", String(snap.remaining));
+    if (snap.remaining < chargedCredits) {
+      return res.status(402).json({
+        error: "insufficient_credits",
+        included: snap.included,
+        granted: snap.granted,
+        used: snap.used,
+        remaining: snap.remaining,
+        chargedCredits,
+      });
+    }
+
+    const renderId = crypto.randomUUID();
+    renders.set(renderId, { status: "working", accounted: false, chargedChars, chargedCredits, scriptId: script_id, sceneId: scene_id });
+    const store = getCreditsStore();
+    store.renderOwner.set(renderId, ownerKey);
+    store.accountedRenders.delete(renderId);
 
     // Build lines for TTS
     const lines = scene.lines.map(l => ({ character: l.speaker, text: l.text }));
@@ -1274,7 +1285,7 @@ export function initHttpRoutes(app: Express) {
       result = await generateReaderMp3(lines, voiceMap, role, pace, renderId, { script_id, scene_id, role });
     } catch (ttsErr) {
       console.error("[debug/render] TTS generation failed:", ttsErr);
-      renders.set(renderId, { status: "error", accounted: false });
+      renders.set(renderId, { status: "error", accounted: false, chargedChars, chargedCredits, scriptId: script_id, sceneId: scene_id });
       return res.status(500).json({ error: "tts_failed" });
     }
     const file = result.outPath;
@@ -1297,12 +1308,12 @@ export function initHttpRoutes(app: Express) {
         console.log("[debug/render] Uploaded segments+manifest to R2: %d segments", result.segments.length);
       } catch (err) {
         console.error("[debug/render] R2 upload failed:", err);
-        renders.set(renderId, { status: "error", err: "r2_upload_failed", accounted: false });
+        renders.set(renderId, { status: "error", err: "r2_upload_failed", accounted: false, chargedChars, chargedCredits, scriptId: script_id, sceneId: scene_id });
         return res.status(500).json({ error: "r2_upload_failed" });
       }
     }
 
-    const job = { status: "complete" as const, file, accounted: false };
+    const job = { status: "complete" as const, file, accounted: false, chargedChars, chargedCredits, scriptId: script_id, sceneId: scene_id };
     renders.set(renderId, job);
     res.json({ render_id: renderId, status: "complete", r2Key });
   });
@@ -1321,13 +1332,22 @@ export function initHttpRoutes(app: Express) {
       if (!store.accountedRenders.has(rid)) {
         const ownerKey = store.renderOwner.get(rid) || getOwnerKey(req);
         const state = ensureOwnerState(ownerKey);
-        state.used += 1;
+        const creditsToCharge = job.chargedCredits ?? 1;
+        state.used += creditsToCharge;
         store.accountedRenders.add(rid);
 
         // Debit against DB-backed billing (noteRenderComplete respects X-OffBook-User header)
         try {
-          await noteRenderComplete(req);
-          console.log("[render_status] debited", { render_id: rid, userKey: ownerKey, debited: true });
+          const result = await noteRenderComplete(req, {
+            chargedChars: job.chargedChars,
+            chargedCredits: job.chargedCredits,
+            meta: { renderId: rid, scriptId: job.scriptId, sceneId: job.sceneId },
+          });
+          if (result) {
+            console.error("[render_status] noteRenderComplete returned error", { render_id: rid, error: result });
+          } else {
+            console.log("[render_status] debited", { render_id: rid, userKey: ownerKey, chargedCredits: creditsToCharge });
+          }
         } catch (err) {
           console.error("[render_status] noteRenderComplete failed", err);
         }
@@ -2769,10 +2789,20 @@ export function initHttpRoutes(app: Express) {
 
       // Compute totals - active or trialing status gets included quota
       const includedMonthly = isActiveOrTrialing ? (billing?.included_quota || 120) : 0;
-      const usedMonthly = billing?.renders_used ?? 0;
-      const monthlyRemaining = Math.max(0, includedMonthly - usedMonthly);
 
-      const topupRemaining = creditsRow ? Math.max(0, creditsRow.total_credits - creditsRow.used_credits) : 0;
+      // Exact float values (from NUMERIC/REAL columns)
+      const monthlyUsedExact = Number(billing?.renders_used ?? 0);
+      const monthlyRemainingExact = Math.max(0, includedMonthly - monthlyUsedExact);
+
+      // Display integers: floor remaining, derive used to keep UI conservative
+      const monthlyRemaining = Math.floor(monthlyRemainingExact);
+      const usedMonthly = includedMonthly - monthlyRemaining;
+
+      // Top-up: exact and display values
+      const topupTotalExact = creditsRow ? Number(creditsRow.total_credits) : 0;
+      const topupUsedExact = creditsRow ? Number(creditsRow.used_credits) : 0;
+      const topupRemainingExact = Math.max(0, topupTotalExact - topupUsedExact);
+      const topupRemaining = Math.floor(topupRemainingExact);
       const topupFrozen = !isActiveOrTrialing;
 
       const remaining = monthlyRemaining + (topupFrozen ? 0 : topupRemaining);
@@ -2794,11 +2824,19 @@ export function initHttpRoutes(app: Express) {
         period_end: periodEndIso,
         topup_frozen: topupFrozen,
         status: effectiveStatus,
+        // Explicit monthly fields (integers for UI)
+        monthly_included: includedMonthly,
+        monthly_used: usedMonthly,
+        monthly_remaining: monthlyRemaining,
       };
 
-      // Debug aid: include user key when debug=1
+      // Debug aid: include exact values and user key when debug=1
       if (req.query.debug === "1") {
         payload.debug_user_key = userKey;
+        payload.monthly_used_exact = monthlyUsedExact;
+        payload.monthly_remaining_exact = monthlyRemainingExact;
+        payload.topup_used_exact = topupUsedExact;
+        payload.topup_remaining_exact = topupRemainingExact;
       }
 
       res.json(payload);

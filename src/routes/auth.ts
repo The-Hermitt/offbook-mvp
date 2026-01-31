@@ -6,6 +6,7 @@ import db, { dbAll, dbGet, dbRun, USING_POSTGRES, getUserBilling, upsertUserBill
 
 const INCLUDED_RENDERS_PER_MONTH = Number(process.env.INCLUDED_RENDERS_PER_MONTH || 0);
 const DEV_STARTING_CREDITS = Number(process.env.DEV_STARTING_CREDITS || 0);
+const CHARS_PER_CREDIT = 1000;
 const MAX_PASSKEYS_PER_USER = 2;
 const COOLDOWN_MS = parseInt(process.env.LINK_CODE_COOLDOWN_MS || "120000", 10);
 const REAUTH_WINDOW_MS = parseInt(process.env.LINK_CODE_REAUTH_WINDOW_MS || "300000", 10); // default 5 min
@@ -220,7 +221,13 @@ export function ensureSid(req: express.Request, _res: express.Response) {
   return sess.sid!;
 }
 
-export async function noteRenderComplete(req: express.Request) {
+export interface NoteRenderOpts {
+  chargedChars?: number;
+  chargedCredits?: number;
+  meta?: { scriptId?: string; sceneId?: string; renderId?: string };
+}
+
+export async function noteRenderComplete(req: express.Request, opts?: NoteRenderOpts): Promise<string | undefined> {
   const sess = ensureSessionDefaults(req);
   const sid = sess.sid!;
 
@@ -231,99 +238,110 @@ export async function noteRenderComplete(req: express.Request) {
     sess.userId = headerUser;
   }
 
-  const beforeUsed =
-    typeof sess.rendersUsed === "number" ? sess.rendersUsed : 0;
-  const beforeCredits =
-    typeof sess.creditsAvailable === "number" ? sess.creditsAvailable : 0;
-
-  const used = beforeUsed + 1;
-  let credits = beforeCredits;
-  if (credits > 0) {
-    credits = credits - 1;
-  }
-
-  sess.rendersUsed = used;
-  sess.creditsAvailable = credits;
-
-  console.log(
-    "[credits] noteRenderComplete: sid=%s used %d→%d credits %d→%d",
-    sid,
-    beforeUsed,
-    used,
-    beforeCredits,
-    credits
-  );
   const userId = deriveUserId(sess) || sess.userId || `anon:${sid}`;
 
-  // Check if user has Pro subscription and consume included quota first
-  let consumedFromSubscription = false;
+  // Calculate spend amount (fractional)
+  const spend = opts?.chargedCredits ?? (opts?.chargedChars ? opts.chargedChars / CHARS_PER_CREDIT : 1);
+
+  // Get user billing state
+  let userBilling = null;
   try {
-    const userBilling = await getUserBilling(userId);
+    userBilling = await getUserBilling(userId);
+  } catch (err) {
+    console.error("[credits] failed to get user billing", err);
+  }
 
-    if (userBilling &&
-        userBilling.plan === "pro" &&
-        (userBilling.status === "active" || userBilling.status === "trialing") &&
-        userBilling.renders_used < userBilling.included_quota) {
-      // Increment renders_used in user_billing
+  // Check if billing is active (pro plan with valid period)
+  const periodEnd = userBilling?.current_period_end ? parseInt(userBilling.current_period_end, 10) : null;
+  const periodEndMs = periodEnd ? periodEnd * 1000 : NaN;
+  const nowMs = Date.now();
+  const billingActive = userBilling?.plan === "pro" &&
+    (userBilling.status === "active" || userBilling.status === "trialing") &&
+    (Number.isNaN(periodEndMs) || nowMs < periodEndMs);
+
+  // Calculate monthly remaining
+  const includedQuota = userBilling?.included_quota ?? 0;
+  const rendersUsed = userBilling?.renders_used ?? 0;
+  const monthlyRemaining = Math.max(0, includedQuota - rendersUsed);
+
+  // Split spend between monthly and topup
+  const monthlySpend = Math.min(spend, monthlyRemaining);
+  const topupSpend = spend - monthlySpend;
+
+  // If topup needed but billing not active, return error
+  if (topupSpend > 0 && !billingActive) {
+    console.log("[credits] cannot spend top-ups: billing not active", {
+      userId,
+      spend,
+      monthlySpend,
+      topupSpend,
+      plan: userBilling?.plan,
+      status: userBilling?.status,
+      periodEnd,
+    });
+    return "billing_inactive_topup_required";
+  }
+
+  // Apply monthly spend
+  if (monthlySpend > 0 && userBilling) {
+    try {
       await dbRun(
-        `UPDATE user_billing
-         SET renders_used = renders_used + 1
-         WHERE user_id = ?`,
-        [userId]
+        `UPDATE user_billing SET renders_used = renders_used + ? WHERE user_id = ?`,
+        [monthlySpend, userId]
       );
-
-      consumedFromSubscription = true;
-
       console.log("[credits] consumed Pro included quota", {
         userId,
-        rendersUsed: userBilling.renders_used + 1,
-        includedQuota: userBilling.included_quota,
+        monthlySpend,
+        newRendersUsed: rendersUsed + monthlySpend,
+        includedQuota,
       });
-    }
-  } catch (err) {
-    console.error("[credits] failed to check/consume Pro quota", err);
-  }
-
-  // Only spend top-up credits if we didn't consume from subscription
-  if (!consumedFromSubscription) {
-    // Rule B: Top-ups can only be spent while Pro is active
-    try {
-      const userBilling = await getUserBilling(userId);
-      const periodEnd = userBilling?.current_period_end ? parseInt(userBilling.current_period_end, 10) : null;
-      const periodEndMs = periodEnd ? periodEnd * 1000 : NaN;
-      const nowMs = Date.now();
-      const proActiveNow = userBilling?.plan === "pro" && (Number.isNaN(periodEndMs) || nowMs < periodEndMs);
-
-      if (!proActiveNow) {
-        console.log("[credits] cannot spend top-ups: Pro not active", {
-          userId,
-          plan: userBilling?.plan,
-          periodEnd,
-          proActiveNow,
-        });
-        // Don't throw - just skip spending top-ups
-        return;
-      }
-
-      const beforeDb = await getAvailableCreditsForUser(userId);
-      if (beforeDb > 0) {
-        const updated = await spendUserCredits(userId, 1);
-        const afterDb = updated
-          ? updated.total_credits - updated.used_credits
-          : await getAvailableCreditsForUser(userId);
-
-        console.log("[credits] db spend after render", {
-          userId,
-          beforeDb,
-          afterDb,
-        });
-      } else {
-        console.log("[credits] db spend after render: no db credits for user", userId);
-      }
     } catch (err) {
-      console.error("[credits] db spend after render failed", err);
+      console.error("[credits] failed to update monthly renders_used", err);
     }
   }
+
+  // Apply topup spend
+  if (topupSpend > 0) {
+    try {
+      await dbRun(
+        `UPDATE user_credits SET used_credits = used_credits + ? WHERE user_id = ?`,
+        [topupSpend, userId]
+      );
+      console.log("[credits] consumed top-up credits", {
+        userId,
+        topupSpend,
+      });
+    } catch (err) {
+      console.error("[credits] failed to update top-up used_credits", err);
+    }
+  }
+
+  // Insert usage event
+  try {
+    const metaJson = opts?.meta ? JSON.stringify(opts.meta) : null;
+    await dbRun(
+      `INSERT INTO usage_events (id, user_id, kind, chars, credits, meta_json)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [crypto.randomUUID(), userId, "render_tts", opts?.chargedChars ?? null, spend, metaJson]
+    );
+  } catch (err) {
+    console.error("[credits] failed to insert usage_event", err);
+  }
+
+  // Update session state for legacy compatibility
+  const beforeUsed = typeof sess.rendersUsed === "number" ? sess.rendersUsed : 0;
+  sess.rendersUsed = beforeUsed + spend;
+
+  console.log("[credits] noteRenderComplete", {
+    userId,
+    spend,
+    monthlySpend,
+    topupSpend,
+    chargedChars: opts?.chargedChars,
+    chargedCredits: opts?.chargedCredits,
+  });
+
+  return undefined; // success
 }
 
 function getRpId(req: express.Request) {

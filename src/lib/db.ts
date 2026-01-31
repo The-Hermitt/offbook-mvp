@@ -166,8 +166,8 @@ export async function ensureSchema(): Promise<void> {
     await dbExec(`
       CREATE TABLE IF NOT EXISTS user_credits (
         user_id TEXT PRIMARY KEY,
-        total_credits ${USING_POSTGRES ? 'INTEGER' : 'INTEGER'} NOT NULL DEFAULT 0,
-        used_credits ${USING_POSTGRES ? 'INTEGER' : 'INTEGER'} NOT NULL DEFAULT 0,
+        total_credits ${USING_POSTGRES ? 'NUMERIC(12,3)' : 'REAL'} NOT NULL DEFAULT 0,
+        used_credits ${USING_POSTGRES ? 'NUMERIC(12,3)' : 'REAL'} NOT NULL DEFAULT 0,
         updated_at ${USING_POSTGRES ? 'TIMESTAMP DEFAULT NOW()' : "TEXT NOT NULL DEFAULT (datetime('now'))"}
       )
     `);
@@ -225,7 +225,7 @@ export async function ensureSchema(): Promise<void> {
         current_period_start ${USING_POSTGRES ? 'BIGINT' : 'INTEGER'},
         current_period_end ${USING_POSTGRES ? 'BIGINT' : 'INTEGER'},
         included_quota ${USING_POSTGRES ? 'INTEGER' : 'INTEGER'} NOT NULL DEFAULT 0,
-        renders_used ${USING_POSTGRES ? 'INTEGER' : 'INTEGER'} NOT NULL DEFAULT 0,
+        renders_used ${USING_POSTGRES ? 'NUMERIC(12,3)' : 'REAL'} NOT NULL DEFAULT 0,
         updated_at ${USING_POSTGRES ? 'TIMESTAMP DEFAULT NOW()' : "TEXT NOT NULL DEFAULT (datetime('now'))"}
       )
     `);
@@ -250,6 +250,45 @@ export async function ensureSchema(): Promise<void> {
         created_at ${USING_POSTGRES ? 'TIMESTAMP DEFAULT NOW()' : "TEXT NOT NULL DEFAULT (datetime('now'))"}
       )
     `);
+
+    // Usage events table (for tracking credit usage)
+    await dbExec(`
+      CREATE TABLE IF NOT EXISTS usage_events (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        chars ${USING_POSTGRES ? 'INTEGER' : 'INTEGER'},
+        credits ${USING_POSTGRES ? 'NUMERIC(12,3)' : 'REAL'},
+        meta_json TEXT,
+        created_at ${USING_POSTGRES ? 'TIMESTAMP DEFAULT NOW()' : "TEXT NOT NULL DEFAULT (datetime('now'))"}
+      )
+    `);
+
+    // Postgres-only: migrate INTEGER columns to NUMERIC for fractional credits
+    if (USING_POSTGRES) {
+      try {
+        await dbExec(`ALTER TABLE user_billing ALTER COLUMN renders_used TYPE NUMERIC(12,3) USING renders_used::numeric`);
+      } catch (err: any) {
+        // Ignore if column is already the correct type
+        if (!err?.message?.includes('already of type')) {
+          console.log("[db] user_billing.renders_used migration:", err?.message || err);
+        }
+      }
+      try {
+        await dbExec(`ALTER TABLE user_credits ALTER COLUMN total_credits TYPE NUMERIC(12,3) USING total_credits::numeric`);
+      } catch (err: any) {
+        if (!err?.message?.includes('already of type')) {
+          console.log("[db] user_credits.total_credits migration:", err?.message || err);
+        }
+      }
+      try {
+        await dbExec(`ALTER TABLE user_credits ALTER COLUMN used_credits TYPE NUMERIC(12,3) USING used_credits::numeric`);
+      } catch (err: any) {
+        if (!err?.message?.includes('already of type')) {
+          console.log("[db] user_credits.used_credits migration:", err?.message || err);
+        }
+      }
+    }
 
     // SQLite-specific: Add missing columns if needed
     if (!USING_POSTGRES) {
