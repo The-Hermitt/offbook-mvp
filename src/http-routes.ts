@@ -2722,8 +2722,17 @@ export function initHttpRoutes(app: Express) {
       const existing = await getUserBilling(userKey);
       const existingStartSec = existing?.current_period_start ? Number(existing.current_period_start) : null;
       const existingEndSec = existing?.current_period_end ? Number(existing.current_period_end) : null;
+      const nowSec = Math.floor(Date.now() / 1000);
       const periodChanged = existingStartSec !== periodStartSec || existingEndSec !== periodEndSec;
-      const resetMonthlyUsed = periodChanged && existing !== null;
+
+      // Reset ONLY when this sync represents a new billing period AFTER the previous one ended.
+      // This prevents accidental wipes from restore/duplicate sync calls where timestamps drift.
+      const isRollover =
+        existingEndSec !== null &&
+        periodEndSec > existingEndSec &&
+        nowSec >= existingEndSec;
+
+      const resetMonthlyUsed = isRollover;
 
       // Upsert user_billing
       await upsertUserBilling({
@@ -2736,7 +2745,7 @@ export function initHttpRoutes(app: Express) {
         renders_used: resetMonthlyUsed ? 0 : (existing?.renders_used ?? 0),
       });
 
-      console.log(`[billing/apple/sync] userKey=${userKey} status=${status} periodChanged=${periodChanged} resetMonthlyUsed=${resetMonthlyUsed}`);
+      console.log(`[billing/apple/sync] userKey=${userKey} status=${status} existingEndSec=${existingEndSec} periodEndSec=${periodEndSec} nowSec=${nowSec} isRollover=${isRollover} resetMonthlyUsed=${resetMonthlyUsed}`);
 
       res.json({
         ok: true,
