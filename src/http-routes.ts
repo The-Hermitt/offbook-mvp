@@ -624,9 +624,15 @@ export function initHttpRoutes(app: Express) {
     };
   }
 
-  // GET /debug/whoami - probe for active route file
+  // GET /debug/whoami - probe for active route file and env info
   debug.get("/whoami", (req: Request, res: Response) => {
-    res.json({ ok: true, marker: "credits-gate-v1" });
+    res.json({
+      ok: true,
+      marker: "credits-gate-v1",
+      allow_test_routes: process.env.ALLOW_TEST_ROUTES === "1" && process.env.OFFBOOK_ENV === "staging",
+      offbook_env: process.env.OFFBOOK_ENV || null,
+      node_env: process.env.NODE_ENV || null,
+    });
   });
 
   // GET /debug/credits - in-memory credits snapshot (DEBUG ONLY - use GET /credits for production)
@@ -1535,6 +1541,235 @@ export function initHttpRoutes(app: Express) {
       });
     }
   });
+
+  // ────────────────────────────────────────────────────────────────────────────
+  // STAGING TEST ONLY - Credit manipulation endpoints for testing without TTS cost
+  // Gated: ALLOW_TEST_ROUTES=1 AND OFFBOOK_ENV === "staging"
+  // ────────────────────────────────────────────────────────────────────────────
+  const allowTestRoutes = process.env.ALLOW_TEST_ROUTES === "1" && process.env.OFFBOOK_ENV === "staging";
+
+  if (allowTestRoutes) {
+    console.log("[http-routes] STAGING TEST ONLY: /debug/test/* routes enabled");
+
+    // Helper: build /credits?debug=1 style response for a user
+    async function buildCreditsDebugResponse(userKey: string): Promise<Record<string, unknown>> {
+      const billing = await getUserBilling(userKey);
+      const creditsRow = await getUserCredits(userKey);
+
+      const nowSec = Math.floor(Date.now() / 1000);
+      const periodEndSec = billing?.current_period_end ? Number(billing.current_period_end) : null;
+      const periodStartSec = billing?.current_period_start ? Number(billing.current_period_start) : null;
+      const dbStatusIsActive = billing?.status === "active" || billing?.status === "trialing";
+      const periodExpired = dbStatusIsActive && periodEndSec !== null && nowSec >= periodEndSec;
+
+      const effectiveStatus = periodExpired ? "inactive" : (billing?.status ?? "inactive");
+      const isActiveOrTrialing = effectiveStatus === "active" || effectiveStatus === "trialing";
+
+      const includedMonthly = isActiveOrTrialing ? (billing?.included_quota || 120) : 0;
+      const monthlyUsedExact = Number(billing?.renders_used ?? 0);
+      const monthlyRemainingExact = Math.max(0, includedMonthly - monthlyUsedExact);
+      const monthlyRemaining = Math.floor(monthlyRemainingExact);
+      const usedMonthly = includedMonthly - monthlyRemaining;
+
+      const topupTotalExact = creditsRow ? Number(creditsRow.total_credits) : 0;
+      const topupUsedExact = creditsRow ? Number(creditsRow.used_credits) : 0;
+      const topupRemainingExact = Math.max(0, topupTotalExact - topupUsedExact);
+      const topupRemaining = Math.floor(topupRemainingExact);
+      const topupFrozen = !isActiveOrTrialing;
+
+      const remaining = monthlyRemaining + (topupFrozen ? 0 : topupRemaining);
+      const usedTotal = usedMonthly + (creditsRow?.used_credits ?? 0);
+
+      const periodStartIso = isActiveOrTrialing && periodStartSec ? new Date(periodStartSec * 1000).toISOString() : "";
+      const periodEndIso = isActiveOrTrialing && periodEndSec ? new Date(periodEndSec * 1000).toISOString() : "";
+
+      return {
+        included: includedMonthly,
+        granted: topupRemaining,
+        used: usedTotal,
+        remaining,
+        period_start: periodStartIso,
+        period_end: periodEndIso,
+        topup_frozen: topupFrozen,
+        status: effectiveStatus,
+        monthly_included: includedMonthly,
+        monthly_used: usedMonthly,
+        monthly_remaining: monthlyRemaining,
+        // Debug fields (always included for test routes)
+        debug_user_key: userKey,
+        monthly_used_exact: monthlyUsedExact,
+        monthly_remaining_exact: monthlyRemainingExact,
+        topup_used_exact: topupUsedExact,
+        topup_remaining_exact: topupRemainingExact,
+      };
+    }
+
+    // STAGING TEST ONLY: POST /debug/test/set_credits
+    // Directly set credit values for testing
+    debug.post("/test/set_credits", express.json(), async (req: Request, res: Response) => {
+      try {
+        const { user_key, monthly_used_exact, topup_remaining_exact } = req.body || {};
+
+        if (!user_key || typeof user_key !== "string") {
+          return res.status(400).json({ error: "missing_user_key" });
+        }
+
+        // Update monthly used (renders_used in user_billing)
+        if (typeof monthly_used_exact === "number") {
+          const existing = await getUserBilling(user_key);
+          if (existing) {
+            await upsertUserBilling({
+              user_id: user_key,
+              plan: existing.plan,
+              status: existing.status,
+              renders_used: monthly_used_exact,
+            });
+          } else {
+            // Create billing row if none exists (default to active pro)
+            await upsertUserBilling({
+              user_id: user_key,
+              plan: "pro",
+              status: "active",
+              included_quota: 120,
+              renders_used: monthly_used_exact,
+            });
+          }
+          console.log(`[test/set_credits] STAGING TEST ONLY: set monthly_used_exact=${monthly_used_exact} for user_key=${user_key}`);
+        }
+
+        // Update topup remaining (set total_credits and used_credits accordingly)
+        if (typeof topup_remaining_exact === "number") {
+          const newTotal = topup_remaining_exact;
+          const newUsed = 0;
+          await dbRun(
+            `INSERT INTO user_credits (user_id, total_credits, used_credits, updated_at)
+             VALUES (?, ?, ?, ?)
+             ON CONFLICT(user_id) DO UPDATE SET total_credits = ?, used_credits = ?, updated_at = ?`,
+            [user_key, newTotal, newUsed, new Date().toISOString(), newTotal, newUsed, new Date().toISOString()]
+          );
+          console.log(`[test/set_credits] STAGING TEST ONLY: set topup_remaining_exact=${topup_remaining_exact} for user_key=${user_key}`);
+        }
+
+        const credits = await buildCreditsDebugResponse(user_key);
+        res.json({ ok: true, ...credits });
+      } catch (err) {
+        console.error("[test/set_credits] STAGING TEST ONLY error:", err);
+        res.status(500).json({ error: "internal_error" });
+      }
+    });
+
+    // STAGING TEST ONLY: POST /debug/test/simulate_debit
+    // Apply a debit using the same bucket-selection logic as real charging
+    debug.post("/test/simulate_debit", express.json(), async (req: Request, res: Response) => {
+      try {
+        const { user_key, credits_exact } = req.body || {};
+
+        if (!user_key || typeof user_key !== "string") {
+          return res.status(400).json({ error: "missing_user_key" });
+        }
+        if (typeof credits_exact !== "number" || credits_exact <= 0) {
+          return res.status(400).json({ error: "invalid_credits_exact" });
+        }
+
+        const billing = await getUserBilling(user_key);
+
+        // Check billing active status
+        const nowSec = Math.floor(Date.now() / 1000);
+        const periodEndSec = billing?.current_period_end ? Number(billing.current_period_end) : null;
+        const dbStatusIsActive = billing?.status === "active" || billing?.status === "trialing";
+        const periodExpired = dbStatusIsActive && periodEndSec !== null && nowSec >= periodEndSec;
+        const billingActive = dbStatusIsActive && !periodExpired;
+
+        // Calculate monthly remaining
+        const includedQuota = billing?.included_quota ?? 0;
+        const rendersUsed = billing?.renders_used ?? 0;
+        const monthlyRemaining = Math.max(0, includedQuota - rendersUsed);
+
+        // Split spend between monthly and topup (same logic as real charging)
+        const monthlySpend = Math.min(credits_exact, monthlyRemaining);
+        const topupSpend = credits_exact - monthlySpend;
+
+        // Check if topup needed but billing not active
+        if (topupSpend > 0 && !billingActive) {
+          return res.status(400).json({
+            error: "billing_inactive_topup_required",
+            monthly_remaining: monthlyRemaining,
+            monthly_spend: monthlySpend,
+            topup_spend_needed: topupSpend,
+          });
+        }
+
+        // Apply monthly spend
+        if (monthlySpend > 0 && billing) {
+          await dbRun(
+            `UPDATE user_billing SET renders_used = renders_used + ? WHERE user_id = ?`,
+            [monthlySpend, user_key]
+          );
+        }
+
+        // Apply topup spend
+        if (topupSpend > 0) {
+          await dbRun(
+            `UPDATE user_credits SET used_credits = used_credits + ? WHERE user_id = ?`,
+            [topupSpend, user_key]
+          );
+        }
+
+        console.log(`[test/simulate_debit] STAGING TEST ONLY: debit=${credits_exact} (monthly=${monthlySpend}, topup=${topupSpend}) for user_key=${user_key}`);
+
+        const credits = await buildCreditsDebugResponse(user_key);
+        res.json({
+          ok: true,
+          debited: credits_exact,
+          monthly_spend: monthlySpend,
+          topup_spend: topupSpend,
+          ...credits,
+        });
+      } catch (err) {
+        console.error("[test/simulate_debit] STAGING TEST ONLY error:", err);
+        res.status(500).json({ error: "internal_error" });
+      }
+    });
+
+    // STAGING TEST ONLY: POST /debug/test/reset_monthly
+    // Reset monthly usage to 0 (120 remaining)
+    debug.post("/test/reset_monthly", express.json(), async (req: Request, res: Response) => {
+      try {
+        const { user_key } = req.body || {};
+
+        if (!user_key || typeof user_key !== "string") {
+          return res.status(400).json({ error: "missing_user_key" });
+        }
+
+        const existing = await getUserBilling(user_key);
+        if (!existing) {
+          // Create billing row with defaults
+          await upsertUserBilling({
+            user_id: user_key,
+            plan: "pro",
+            status: "active",
+            included_quota: 120,
+            renders_used: 0,
+          });
+        } else {
+          await upsertUserBilling({
+            user_id: user_key,
+            plan: existing.plan,
+            status: existing.status,
+            renders_used: 0,
+          });
+        }
+
+        console.log(`[test/reset_monthly] STAGING TEST ONLY: reset monthly to 0 used for user_key=${user_key}`);
+
+        const credits = await buildCreditsDebugResponse(user_key);
+        res.json({ ok: true, ...credits });
+      } catch (err) {
+        console.error("[test/reset_monthly] STAGING TEST ONLY error:", err);
+        res.status(500).json({ error: "internal_error" });
+      }
+    });
+  }
 
   // Mount routers
   app.use("/debug", debugLimiter, debug);
@@ -2718,12 +2953,10 @@ export function initHttpRoutes(app: Express) {
       const periodStartSec = Math.floor(periodStartMs / 1000);
       const periodEndSec = Math.floor(periodEndMs / 1000);
 
-      // Check if period changed vs existing row → reset renders_used
+      // Check existing billing for rollover logic
       const existing = await getUserBilling(userKey);
-      const existingStartSec = existing?.current_period_start ? Number(existing.current_period_start) : null;
       const existingEndSec = existing?.current_period_end ? Number(existing.current_period_end) : null;
       const nowSec = Math.floor(Date.now() / 1000);
-      const periodChanged = existingStartSec !== periodStartSec || existingEndSec !== periodEndSec;
 
       // Reset ONLY when this sync represents a new billing period AFTER the previous one ended.
       // This prevents accidental wipes from restore/duplicate sync calls where timestamps drift.
