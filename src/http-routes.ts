@@ -2996,6 +2996,85 @@ export function initHttpRoutes(app: Express) {
   });
 
   // ────────────────────────────────────────────────────────────────────────────
+  // POST /billing/apple/topup - Mint top-up credits from Apple IAP purchase
+  // ────────────────────────────────────────────────────────────────────────────
+  app.post("/billing/apple/topup", secretGuard, express.json(), async (req: Request, res: Response) => {
+    try {
+      // Identify user: X-OffBook-User header > passkey userId > anon:sid
+      const sid = ensureSid(req as any, res as any);
+      const { userId } = getPasskeySession(req as any);
+      const xOffbookUser = (req.header("X-OffBook-User") || "").trim();
+      const userKey = xOffbookUser || userId || `anon:${sid}`;
+
+      const { credits, transaction_id, product_id } = req.body || {};
+
+      // Validate required fields
+      if (typeof credits !== "number" || credits <= 0) {
+        return res.status(400).json({ error: "invalid_credits", message: "credits must be a positive number" });
+      }
+      if (!transaction_id || typeof transaction_id !== "string") {
+        return res.status(400).json({ error: "missing_transaction_id", message: "transaction_id is required for idempotency" });
+      }
+
+      // Idempotency: use transaction_id to prevent double-minting
+      const eventId = `apple_topup:${transaction_id}`;
+      const eventType = "apple_topup";
+
+      let isNewEvent = false;
+      try {
+        isNewEvent = await recordBillingEventOnce(eventId, eventType, userKey);
+      } catch (err) {
+        console.error("[billing/apple/topup] failed to record event", err);
+        return res.status(500).json({ error: "event_recording_failed" });
+      }
+
+      // If duplicate, return success but indicate it was already processed
+      if (!isNewEvent) {
+        console.log(`[billing/apple/topup] duplicate transaction_id=${transaction_id} for userKey=${userKey}`);
+
+        // Still return current credits state
+        const creditsRow = await getUserCredits(userKey);
+        const topupTotal = creditsRow ? Number(creditsRow.total_credits) : 0;
+        const topupUsed = creditsRow ? Number(creditsRow.used_credits) : 0;
+        const topupRemaining = Math.max(0, topupTotal - topupUsed);
+
+        return res.json({
+          ok: true,
+          userKey,
+          credits_added: 0,
+          duplicate: true,
+          transaction_id,
+          product_id: product_id || null,
+          topup_total: topupTotal,
+          topup_used: topupUsed,
+          topup_remaining: topupRemaining,
+        });
+      }
+
+      // Mint the credits
+      const updated = await addUserCredits(userKey, credits);
+      const topupRemaining = Math.max(0, updated.total_credits - updated.used_credits);
+
+      console.log(`[billing/apple/topup] minted credits=${credits} for userKey=${userKey} transaction_id=${transaction_id} product_id=${product_id || "N/A"} new_total=${updated.total_credits}`);
+
+      res.json({
+        ok: true,
+        userKey,
+        credits_added: credits,
+        duplicate: false,
+        transaction_id,
+        product_id: product_id || null,
+        topup_total: updated.total_credits,
+        topup_used: updated.used_credits,
+        topup_remaining: topupRemaining,
+      });
+    } catch (err) {
+      console.error("[billing/apple/topup] error:", err);
+      res.status(500).json({ error: "internal_error" });
+    }
+  });
+
+  // ────────────────────────────────────────────────────────────────────────────
   // GET /credits - Production credits endpoint (DB-backed billing + top-ups)
   // ────────────────────────────────────────────────────────────────────────────
   app.get("/credits", secretGuard, async (req: Request, res: Response) => {
