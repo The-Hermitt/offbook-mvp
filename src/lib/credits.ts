@@ -25,7 +25,14 @@ export async function getUserCredits(userId: string): Promise<UserCreditsRow | n
     "SELECT user_id, total_credits, used_credits, updated_at FROM user_credits WHERE user_id = ?",
     [userId]
   );
-  return row || null;
+  if (!row) return null;
+  // Postgres NUMERIC columns are returned as strings by the pg driver.
+  // Coerce to numbers to prevent string concatenation in arithmetic (e.g., "90" + 10 = "9010").
+  return {
+    ...row,
+    total_credits: Number(row.total_credits) || 0,
+    used_credits: Number(row.used_credits) || 0,
+  };
 }
 
 // Upsert helper for future webhook use:
@@ -51,9 +58,12 @@ export async function addUserCredits(userId: string, amount: number): Promise<Us
     };
   }
 
-  const nextTotal = existing.total_credits + amount;
+  // Defensive: ensure numeric arithmetic even if getUserCredits changes
+  const existingTotal = Number(existing.total_credits) || 0;
+  const existingUsed = Number(existing.used_credits) || 0;
+  const nextTotal = existingTotal + amount;
   const total = nextTotal > 0 ? nextTotal : 0;
-  const used = existing.used_credits;
+  const used = existingUsed;
 
   await dbRun(
     "UPDATE user_credits SET total_credits = ?, used_credits = ?, updated_at = ? WHERE user_id = ?",
@@ -77,7 +87,10 @@ export async function spendUserCredits(userId: string, amount: number): Promise<
     return null;
   }
 
-  const remaining = row.total_credits - row.used_credits;
+  // getUserCredits already coerces to numbers, but be defensive
+  const totalCredits = Number(row.total_credits) || 0;
+  const usedCredits = Number(row.used_credits) || 0;
+  const remaining = totalCredits - usedCredits;
   if (remaining <= 0) {
     return row;
   }
@@ -94,11 +107,9 @@ export async function spendUserCredits(userId: string, amount: number): Promise<
     return row;
   }
 
-  return {
-    ...row,
-    used_credits: row.used_credits + toSpend,
-    updated_at: now,
-  };
+  // Re-fetch to ensure numeric coercion and accurate state after UPDATE
+  const updated = await getUserCredits(userId);
+  return updated || row;
 }
 
 export async function getAvailableCreditsForUser(userId: string): Promise<number> {
@@ -109,6 +120,7 @@ export async function getAvailableCreditsForUser(userId: string): Promise<number
   );
 
   if (!row) return 0;
-  const remaining = (row.total_credits || 0) - (row.used_credits || 0);
+  // Postgres NUMERIC columns are returned as strings; coerce to numbers
+  const remaining = (Number(row.total_credits) || 0) - (Number(row.used_credits) || 0);
   return remaining > 0 ? remaining : 0;
 }
