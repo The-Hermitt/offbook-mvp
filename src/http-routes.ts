@@ -1673,16 +1673,18 @@ export function initHttpRoutes(app: Express) {
 
         const billing = await getUserBilling(user_key);
 
-        // Check billing active status
+        // Match buildCreditsDebugResponse effectiveStatus logic so inactive implies 0 monthly
         const nowSec = Math.floor(Date.now() / 1000);
         const periodEndSec = billing?.current_period_end ? Number(billing.current_period_end) : null;
         const dbStatusIsActive = billing?.status === "active" || billing?.status === "trialing";
         const periodExpired = dbStatusIsActive && periodEndSec !== null && nowSec >= periodEndSec;
-        const billingActive = dbStatusIsActive && !periodExpired;
+        const effectiveStatus = periodExpired ? "inactive" : (billing?.status ?? "inactive");
+        const isActiveOrTrialing = effectiveStatus === "active" || effectiveStatus === "trialing";
+        const billingActive = isActiveOrTrialing;
 
-        // Calculate monthly remaining
-        const includedQuota = billing?.included_quota ?? 0;
-        const rendersUsed = billing?.renders_used ?? 0;
+        // Calculate monthly remaining (0 if not active/trialing)
+        const includedQuota = isActiveOrTrialing ? (billing?.included_quota ?? 0) : 0;
+        const rendersUsed = Number(billing?.renders_used ?? 0);
         const monthlyRemaining = Math.max(0, includedQuota - rendersUsed);
 
         // Split spend between monthly and topup (same logic as real charging)
