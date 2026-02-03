@@ -3163,6 +3163,8 @@ export function initHttpRoutes(app: Express) {
         monthly_included: includedMonthly,
         monthly_used: usedMonthly,
         monthly_remaining: monthlyRemaining,
+        // Always return exact topup balance so iOS can display "(Frozen)" with real amount
+        topup_remaining_exact: topupRemainingExact,
       };
 
       // Debug aid: include exact values and user key when debug=1
@@ -3172,7 +3174,6 @@ export function initHttpRoutes(app: Express) {
         payload.monthly_used_exact = monthlyUsedExact;
         payload.monthly_remaining_exact = monthlyRemainingExact;
         payload.topup_used_exact = topupUsedExact;
-        payload.topup_remaining_exact = topupRemainingExact;
       }
 
       res.json(payload);
