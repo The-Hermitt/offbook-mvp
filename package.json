@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "start": "cross-env PORT=3010 SHARED_SECRET=1976 tsx ./src/server.ts",
+    "start": "cross-env PORT=3010 tsx ./src/server.ts",
     "dev": "cross-env NODE_ENV=development tsx watch ./src/server.ts",
     "health": "node -e \"fetch('http://localhost:'+(process.env.PORT||3010)+'/health').then(r=>r.text()).then(console.log).catch(e=>{console.error(e);process.exit(1)})\""
   },
