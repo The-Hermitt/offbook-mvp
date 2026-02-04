@@ -86,6 +86,8 @@ const renders = new Map<string, {
   chargedCredits?: number;
   scriptId?: string;
   sceneId?: string;
+  startedAt?: number;
+  updatedAt?: number;
 }>();
 
 type ScriptRow = {
@@ -1222,7 +1224,100 @@ export function initHttpRoutes(app: Express) {
     }
   });
 
-  // POST /debug/render (real TTS)
+  // Background render job (non-blocking)
+  async function runRenderJob(
+    renderId: string,
+    lines: { character: string; text: string }[],
+    voiceMap: Record<string, string>,
+    role: string,
+    pace: "slow" | "normal" | "fast",
+    chargedChars: number,
+    chargedCredits: number,
+    script_id: string,
+    scene_id: string,
+  ) {
+    console.log("[debug/render] start render_id=%s script_id=%s scene_id=%s", renderId, script_id, scene_id);
+    const now = Date.now();
+    renders.set(renderId, {
+      status: "working",
+      accounted: false,
+      chargedChars,
+      chargedCredits,
+      scriptId: script_id,
+      sceneId: scene_id,
+      startedAt: now,
+      updatedAt: now,
+    });
+
+    // Generate reader MP3 + per-line segments + manifest
+    let result: RenderResult;
+    try {
+      result = await generateReaderMp3(lines, voiceMap, role, pace, renderId, { script_id, scene_id, role });
+    } catch (ttsErr) {
+      console.error("[debug/render] error render_id=%s tts_failed", renderId, ttsErr);
+      renders.set(renderId, {
+        status: "error",
+        err: "tts_failed",
+        accounted: false,
+        chargedChars,
+        chargedCredits,
+        scriptId: script_id,
+        sceneId: scene_id,
+        startedAt: now,
+        updatedAt: Date.now(),
+      });
+      return;
+    }
+    const file = result.outPath;
+
+    // Upload to R2 if enabled
+    if (r2Enabled()) {
+      try {
+        const r2Key = `renders/${renderId}.mp3`;
+        await r2PutFile(r2Key, file, "audio/mpeg");
+        console.log("[debug/render] Uploaded to R2: key=%s", r2Key);
+
+        // Upload per-line segments + manifest to R2
+        for (const seg of result.segments) {
+          const segFile = path.join(result.segmentDir, `seg_${String(seg.segment_index).padStart(3, "0")}.mp3`);
+          const segR2Key = `renders/${renderId}/seg_${String(seg.segment_index).padStart(3, "0")}.mp3`;
+          await r2PutFile(segR2Key, segFile, "audio/mpeg");
+        }
+        const manifestFile = path.join(result.segmentDir, "manifest.json");
+        await r2PutFile(`renders/${renderId}/manifest.json`, manifestFile, "application/json");
+        console.log("[debug/render] Uploaded segments+manifest to R2: %d segments", result.segments.length);
+      } catch (err) {
+        console.error("[debug/render] error render_id=%s r2_upload_failed", renderId, err);
+        renders.set(renderId, {
+          status: "error",
+          err: "r2_upload_failed",
+          accounted: false,
+          chargedChars,
+          chargedCredits,
+          scriptId: script_id,
+          sceneId: scene_id,
+          startedAt: now,
+          updatedAt: Date.now(),
+        });
+        return;
+      }
+    }
+
+    console.log("[debug/render] complete render_id=%s", renderId);
+    renders.set(renderId, {
+      status: "complete",
+      file,
+      accounted: false,
+      chargedChars,
+      chargedCredits,
+      scriptId: script_id,
+      sceneId: scene_id,
+      startedAt: now,
+      updatedAt: Date.now(),
+    });
+  }
+
+  // POST /debug/render (real TTS) - non-blocking, returns immediately
   debug.post("/render", renderLimiter, audit("/debug/render"), async (req: Request, res: Response) => {
     const { userId } = getPasskeySession(req as any);
     if (!userId) {
@@ -1234,7 +1329,7 @@ export function initHttpRoutes(app: Express) {
     const scene_id = body.scene_id || body.script_id; // default single-scene behavior
     const roleRaw = body.role ?? body.my_role; // accept legacy client payload
     const role = String(roleRaw || "").toUpperCase();
-    const pace = body.pace || "normal";
+    const pace = (body.pace || "normal") as "slow" | "normal" | "fast";
     if (!script_id || !scene_id || !role) {
       return res.status(400).json({ error: "script_id, scene_id, role required" });
     }
@@ -1271,7 +1366,17 @@ export function initHttpRoutes(app: Express) {
     }
 
     const renderId = crypto.randomUUID();
-    renders.set(renderId, { status: "working", accounted: false, chargedChars, chargedCredits, scriptId: script_id, sceneId: scene_id });
+    const now = Date.now();
+    renders.set(renderId, {
+      status: "queued",
+      accounted: false,
+      chargedChars,
+      chargedCredits,
+      scriptId: script_id,
+      sceneId: scene_id,
+      startedAt: now,
+      updatedAt: now,
+    });
     const store = getCreditsStore();
     store.renderOwner.set(renderId, ownerKey);
     store.accountedRenders.delete(renderId);
@@ -1285,43 +1390,11 @@ export function initHttpRoutes(app: Express) {
       voiceMap.UNKNOWN = "alloy";
     }
 
-    // Generate reader MP3 + per-line segments + manifest
-    let result: RenderResult;
-    try {
-      result = await generateReaderMp3(lines, voiceMap, role, pace, renderId, { script_id, scene_id, role });
-    } catch (ttsErr) {
-      console.error("[debug/render] TTS generation failed:", ttsErr);
-      renders.set(renderId, { status: "error", accounted: false, chargedChars, chargedCredits, scriptId: script_id, sceneId: scene_id });
-      return res.status(500).json({ error: "tts_failed" });
-    }
-    const file = result.outPath;
+    // Kick off render in background (non-blocking)
+    void runRenderJob(renderId, lines, voiceMap, role, pace, chargedChars, chargedCredits, script_id, scene_id);
 
-    // Upload to R2 if enabled
-    const r2Key = `renders/${renderId}.mp3`;
-    if (r2Enabled()) {
-      try {
-        await r2PutFile(r2Key, file, "audio/mpeg");
-        console.log("[debug/render] Uploaded to R2: key=%s", r2Key);
-
-        // Upload per-line segments + manifest to R2
-        for (const seg of result.segments) {
-          const segFile = path.join(result.segmentDir, `seg_${String(seg.segment_index).padStart(3, "0")}.mp3`);
-          const segR2Key = `renders/${renderId}/seg_${String(seg.segment_index).padStart(3, "0")}.mp3`;
-          await r2PutFile(segR2Key, segFile, "audio/mpeg");
-        }
-        const manifestFile = path.join(result.segmentDir, "manifest.json");
-        await r2PutFile(`renders/${renderId}/manifest.json`, manifestFile, "application/json");
-        console.log("[debug/render] Uploaded segments+manifest to R2: %d segments", result.segments.length);
-      } catch (err) {
-        console.error("[debug/render] R2 upload failed:", err);
-        renders.set(renderId, { status: "error", err: "r2_upload_failed", accounted: false, chargedChars, chargedCredits, scriptId: script_id, sceneId: scene_id });
-        return res.status(500).json({ error: "r2_upload_failed" });
-      }
-    }
-
-    const job = { status: "complete" as const, file, accounted: false, chargedChars, chargedCredits, scriptId: script_id, sceneId: scene_id };
-    renders.set(renderId, job);
-    res.json({ render_id: renderId, status: "complete", r2Key });
+    // Respond immediately
+    res.json({ render_id: renderId, status: "queued" });
   });
 
   // GET /debug/render_status
@@ -1369,6 +1442,9 @@ export function initHttpRoutes(app: Express) {
       const id = path.basename(job.file, ".mp3");
       payload.download_url = `${base}/api/assets/${id}`;
       payload.manifest_url = `/api/assets/${id}/manifest`;
+    }
+    if (job.status === "error" && job.err) {
+      payload.error = job.err;
     }
     res.json(payload);
   });
