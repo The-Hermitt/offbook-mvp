@@ -1351,19 +1351,59 @@ export function initHttpRoutes(app: Express) {
       .reduce((sum, l) => sum + (l.text?.length || 0), 0);
     const chargedCredits = chargedChars / 1000;
 
-    const ownerKey = getOwnerKey(req);
-    const snap = creditsSnapshot(ownerKey);
-    res.setHeader("x-credits-remaining", String(snap.remaining));
-    if (snap.remaining < chargedCredits) {
+    // Resolve user key: X-OffBook-User > passkey userId > anon:sid (match /credits)
+    const sid = ensureSid(req as any, res as any);
+    const xOffbookUser = (req.header("X-OffBook-User") || "").trim();
+    let userKey: string;
+    if (xOffbookUser) {
+      userKey = xOffbookUser;
+    } else if (userId) {
+      userKey = userId;
+    } else {
+      userKey = `anon:${sid}`;
+    }
+
+    // DB-backed credits gate (mirrors GET /credits logic)
+    const billing = await getUserBilling(userKey);
+    const creditsRow = await getUserCredits(userKey);
+
+    const nowSec = Math.floor(Date.now() / 1000);
+    const periodEndSec = billing?.current_period_end ? Number(billing.current_period_end) : null;
+    const dbStatusIsActive = billing?.status === "active" || billing?.status === "trialing";
+    const periodExpired = dbStatusIsActive && periodEndSec !== null && nowSec >= periodEndSec;
+
+    if (periodExpired && billing) {
+      await upsertUserBilling({ user_id: userKey, plan: billing.plan, status: "inactive" });
+    }
+
+    const effectiveStatus = periodExpired ? "inactive" : (billing?.status ?? "inactive");
+    const isActiveOrTrialing = effectiveStatus === "active" || effectiveStatus === "trialing";
+
+    const includedMonthly = isActiveOrTrialing ? (billing?.included_quota || 120) : 0;
+    const monthlyUsedExact = Number(billing?.renders_used ?? 0);
+    const monthlyRemainingExact = Math.max(0, includedMonthly - monthlyUsedExact);
+
+    const topupTotalExact = creditsRow ? Number(creditsRow.total_credits) : 0;
+    const topupUsedExact = creditsRow ? Number(creditsRow.used_credits) : 0;
+    const topupRemainingExact = Math.max(0, topupTotalExact - topupUsedExact);
+    const topupFrozen = !isActiveOrTrialing;
+
+    const spendableExact = monthlyRemainingExact + (topupFrozen ? 0 : topupRemainingExact);
+
+    res.setHeader("x-credits-remaining", String(Math.floor(spendableExact)));
+    if (spendableExact < chargedCredits) {
       return res.status(402).json({
         error: "insufficient_credits",
-        included: snap.included,
-        granted: snap.granted,
-        used: snap.used,
-        remaining: snap.remaining,
+        status: effectiveStatus,
+        topup_frozen: topupFrozen,
+        monthly_remaining_exact: monthlyRemainingExact,
+        topup_remaining_exact: topupRemainingExact,
+        remaining_exact: spendableExact,
         chargedCredits,
       });
     }
+
+    const ownerKey = userKey;
 
     const renderId = crypto.randomUUID();
     const now = Date.now();
