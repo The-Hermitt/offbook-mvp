@@ -236,7 +236,11 @@ const galleryUpload = multer({
 
 // ---------- Parser: supports `NAME: line` and screenplay blocks ----------
 function parseScenesFromText(text: string, scriptTitle?: string): Scene[] {
-  const lines = text.split(/\r?\n/);
+  const debugParse = process.env.DEBUG_PDF_PARSE === "1";
+  let inlineCueSplits = 0;
+  let continuationAppends = 0;
+
+  const rawLines = text.split(/\r?\n/);
 
   const isAllCapsWordy = (s: string) =>
     /^[A-Z0-9 ,.'"?!\-:;()]+$/.test(s) &&
@@ -246,7 +250,7 @@ function parseScenesFromText(text: string, scriptTitle?: string): Scene[] {
   const isSceneHeading = (s: string) => /^\s*(INT\.|EXT\.|SCENE\b)/i.test(s.trim());
   const isLikelyHeaderFooter = (s: string) => /(page \d+|actors access|breakdown services|http|https|www\.)/i.test(s);
   const isOnlyParen = (s: string) => /^\s*\([^)]*\)\s*$/.test(s);
-  const colonLine = (s: string) => s.match(/^\s*([A-Z][A-Z0-9 _&'.-]{1,30})\s*:\s*(.+)$/);
+  const colonLine = (s: string) => s.match(/^\s*([A-Z][A-Z0-9 _&'.-]{1,30})\s*:\s*(.*)$/);
 
   // Helpers for noise removal
   const isNumericOnlyLine = (s: string) => /^\s*\d+(\s+\d+)*\s*$/.test(s);
@@ -262,25 +266,73 @@ function parseScenesFromText(text: string, scriptTitle?: string): Scene[] {
   };
   const cleanDialogue = (s: string) => stripInlineSceneHeading(stripParens(s));
 
+  const inlineCueRegex = /[A-Z][A-Z0-9 _&'.-]{1,25}:/g;
+  const lines: string[] = [];
+  for (const raw of rawLines) {
+    const line = raw.replace(/\t/g, " ");
+    const matches = Array.from(line.matchAll(inlineCueRegex));
+    if (matches.length > 1) {
+      inlineCueSplits += matches.length - 1;
+      const firstIdx = matches[0].index ?? 0;
+      const prefix = line.slice(0, firstIdx).trimRight();
+      if (prefix.trim()) lines.push(prefix);
+      for (let i = 0; i < matches.length; i++) {
+        const start = matches[i].index ?? 0;
+        const end = i + 1 < matches.length ? (matches[i + 1].index ?? line.length) : line.length;
+        const piece = line.slice(start, end).trimRight();
+        if (piece.trim()) lines.push(piece);
+      }
+      continue;
+    }
+    lines.push(line);
+  }
+
+  const logDebugCounts = () => {
+    if (!debugParse) return;
+    console.log("[parseScenes] inlineCueSplits=%d continuationAppends=%d", inlineCueSplits, continuationAppends);
+  };
+
   const scene: Scene = { id: crypto.randomUUID(), title: "Scene 1", lines: [] };
 
   // Pass 1: NAME: dialogue
-  for (const raw of lines) {
-    const s = raw.replace(/\t/g, " ").trimRight();
+  let i = 0;
+  while (i < lines.length) {
+    const s = lines[i].trimRight();
+    i++;
     if (!s.trim()) continue;
     if (isSceneHeading(s) || isOnlyParen(s) || isLikelyHeaderFooter(s) || isSkippable(s)) continue;
     const m = colonLine(s);
-    if (m) {
-      const t = cleanDialogue(m[2].trim());
-      if (t) scene.lines.push({ speaker: m[1].trim(), text: t });
+    if (!m) continue;
+
+    const speaker = m[1].trim();
+    const buf: string[] = [];
+    if (m[2].trim()) buf.push(m[2].trim());
+
+    while (i < lines.length) {
+      const peek = lines[i].trimRight();
+      const isBlank = !peek.trim();
+      const nextIsSpeaker = !!colonLine(peek);
+      const nextIsHeader = isSceneHeading(peek) || isLikelyHeaderFooter(peek) || isSkippable(peek);
+      if (isBlank || nextIsSpeaker || nextIsHeader) break;
+      if (!isOnlyParen(peek)) {
+        buf.push(peek.trim());
+        continuationAppends++;
+      }
+      i++;
     }
+
+    const t = cleanDialogue(buf.join(" ").replace(/\s+/g, " ").trim());
+    if (t) scene.lines.push({ speaker, text: t });
   }
-  if (scene.lines.length) return mergeSpeakerAliases([scene]);
+  if (scene.lines.length) {
+    logDebugCounts();
+    return mergeSpeakerAliases([scene]);
+  }
 
   // Pass 2: screenplay blocks (NAME on its own line; optional parenthetical; dialogue lines)
-  let i = 0;
+  i = 0;
   while (i < lines.length) {
-    let line = lines[i].replace(/\t/g, " ").trimRight();
+    let line = lines[i].trimRight();
     i++;
 
     if (!line.trim()) continue;
@@ -306,6 +358,7 @@ function parseScenesFromText(text: string, scriptTitle?: string): Scene[] {
     }
   }
 
+  logDebugCounts();
   return mergeSpeakerAliases([scene]);
 }
 
