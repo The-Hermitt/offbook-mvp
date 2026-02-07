@@ -234,6 +234,145 @@ const galleryUpload = multer({
   dest: UPLOADS_TMP_DIR,
 });
 
+// ---------- LLM Import Cleanup (optional, gated) ----------
+
+function isImportCleanupEnabled(req: Request): boolean {
+  if (!process.env.IMPORT_CLEANUP_ENABLED || process.env.IMPORT_CLEANUP_ENABLED !== "1") return false;
+  const q = (req.query?.llm ?? "") as string;
+  return q === "1" || q === "true";
+}
+
+async function llmCleanupToLines(
+  rawText: string,
+  title: string
+): Promise<{ lines: { speaker: string; text: string }[]; meta: any } | null> {
+  const apiKey = process.env.OPENAI_API_KEY;
+  const model = process.env.IMPORT_CLEANUP_MODEL;
+  if (!apiKey || !model) return null;
+
+  const systemPrompt = [
+    "You are a screenplay dialogue extractor. Given raw script text (possibly from OCR), return ONLY spoken dialogue lines as JSON.",
+    "Rules:",
+    "- Return ONLY spoken dialogue lines with their speaker names.",
+    "- Drop ALL scene headings (INT./EXT./SCENE), action/description paragraphs, transitions (CUT TO, FADE IN, DISSOLVE TO, etc.), page numbers, headers, and footers.",
+    "- Keep speaker names in ALL CAPS. If the speaker cannot be determined, use \"UNKNOWN\".",
+    "- Merge broken dialogue lines that clearly belong to the same speech.",
+    "- DO NOT invent or add any dialogue that is not present in the source text.",
+    "- DO NOT output anything except JSON matching the required schema.",
+  ].join("\n");
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 25_000);
+  const t0 = Date.now();
+
+  try {
+    const resp = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model,
+        input: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: `TITLE: ${title}\n\nSCRIPT:\n${rawText}` },
+        ],
+        temperature: 0,
+        max_output_tokens: 12000,
+        text: {
+          format: {
+            type: "json_schema",
+            name: "offbook_dialogue_extract",
+            strict: true,
+            schema: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                lines: {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    additionalProperties: false,
+                    properties: {
+                      speaker: { type: "string" },
+                      text: { type: "string" },
+                    },
+                    required: ["speaker", "text"],
+                  },
+                },
+              },
+              required: ["lines"],
+            },
+          },
+        },
+      }),
+      signal: controller.signal,
+    });
+
+    if (!resp.ok) {
+      const body = await resp.text().catch(() => "");
+      console.error("[import-cleanup] API error status=%d body=%s", resp.status, body.slice(0, 300));
+      return null;
+    }
+
+    const json: any = await resp.json();
+
+    // Extract text from response.output[] -> message items -> content items where type == "output_text"
+    let outputText = "";
+    if (Array.isArray(json.output)) {
+      for (const item of json.output) {
+        if (item.type === "message" && Array.isArray(item.content)) {
+          for (const part of item.content) {
+            if (part.type === "output_text" && typeof part.text === "string") {
+              outputText += part.text;
+            }
+          }
+        }
+      }
+    }
+
+    if (!outputText) {
+      console.error("[import-cleanup] no output_text found in response");
+      return null;
+    }
+
+    const parsed = JSON.parse(outputText);
+    if (!Array.isArray(parsed.lines)) return null;
+
+    // Validate each line has non-empty speaker and text strings
+    const validLines = parsed.lines.filter(
+      (ln: any) =>
+        typeof ln.speaker === "string" &&
+        typeof ln.text === "string" &&
+        ln.speaker.trim().length > 0 &&
+        ln.text.trim().length > 0
+    );
+
+    const ms = Date.now() - t0;
+    console.log(
+      "[import-cleanup] ok=%s model=%s inChars=%d outLines=%d ms=%d",
+      true, model, rawText.length, validLines.length, ms
+    );
+
+    return { lines: validLines, meta: { model, ms, inputChars: rawText.length } };
+  } catch (err: any) {
+    const ms = Date.now() - t0;
+    console.log(
+      "[import-cleanup] ok=%s model=%s inChars=%d outLines=%d ms=%d",
+      false, model, rawText.length, 0, ms
+    );
+    if (err.name !== "AbortError") {
+      console.error("[import-cleanup] error:", err.message || err);
+    } else {
+      console.error("[import-cleanup] timeout after 25s");
+    }
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 // ---------- Parser: supports `NAME: line` and screenplay blocks ----------
 function parseScenesFromText(text: string, scriptTitle?: string): Scene[] {
   const debugParse = process.env.DEBUG_PDF_PARSE === "1";
@@ -1008,8 +1147,28 @@ export function initHttpRoutes(app: Express) {
     if (!title || !text) return res.status(400).json({ error: "title and text are required" });
 
     const id = crypto.randomUUID();
-    const scenes = parseScenesFromText(String(text), String(title));
-    const script: Script = { id, title: String(title), text: String(text), scenes };
+    const rawText = String(text);
+    const rawTitle = String(title);
+
+    let scenes: Scene[];
+    let cleanupUsed = false;
+    let cleanupOutLines = 0;
+
+    // Try LLM cleanup if enabled for this request
+    if (isImportCleanupEnabled(req)) {
+      const result = await llmCleanupToLines(rawText, rawTitle);
+      if (result && result.lines.length > 0) {
+        scenes = [{ id: crypto.randomUUID(), title: "Scene 1", lines: result.lines }];
+        cleanupUsed = true;
+        cleanupOutLines = result.lines.length;
+      } else {
+        scenes = parseScenesFromText(rawText, rawTitle);
+      }
+    } else {
+      scenes = parseScenesFromText(rawText, rawTitle);
+    }
+
+    const script: Script = { id, title: rawTitle, text: rawText, scenes };
 
     // Cache in memory for this process (user-keyed)
     const cacheKey = `${userId}:${id}`;
@@ -1031,6 +1190,7 @@ export function initHttpRoutes(app: Express) {
       script_id: id,
       scene_count: scenes.length,
       speakers,
+      ...(cleanupUsed ? { cleanup_used: true, cleanup_out_lines: cleanupOutLines } : {}),
     });
   });
 
@@ -1063,12 +1223,30 @@ export function initHttpRoutes(app: Express) {
 
         // Only attempt scene parsing when we have a reasonable amount of text.
         let scenes: Scene[] = [];
+        let cleanupUsed = false;
+        let cleanupOutLines = 0;
+
         if (textLen >= 40) {
-          const parsed = parseScenesFromText(extracted, title);
-          // Drop any scenes that have no dialogue lines; they are noise.
-          scenes = (parsed || []).filter(
-            (sc) => Array.isArray(sc.lines) && sc.lines.length > 0
-          );
+          // Try LLM cleanup if enabled for this request
+          if (isImportCleanupEnabled(req)) {
+            const result = await llmCleanupToLines(extracted, title);
+            if (result && result.lines.length > 0) {
+              scenes = [{ id: crypto.randomUUID(), title: "Scene 1", lines: result.lines }];
+              cleanupUsed = true;
+              cleanupOutLines = result.lines.length;
+            } else {
+              const parsed = parseScenesFromText(extracted, title);
+              scenes = (parsed || []).filter(
+                (sc) => Array.isArray(sc.lines) && sc.lines.length > 0
+              );
+            }
+          } else {
+            const parsed = parseScenesFromText(extracted, title);
+            // Drop any scenes that have no dialogue lines; they are noise.
+            scenes = (parsed || []).filter(
+              (sc) => Array.isArray(sc.lines) && sc.lines.length > 0
+            );
+          }
         }
 
         const id = crypto.randomUUID();
@@ -1108,6 +1286,7 @@ export function initHttpRoutes(app: Express) {
           speakers,
           textLen,
           ...(note ? { note } : {}),
+          ...(cleanupUsed ? { cleanup_used: true, cleanup_out_lines: cleanupOutLines } : {}),
         });
       } catch (e) {
         console.error("[upload] failed:", e);
