@@ -234,31 +234,105 @@ const galleryUpload = multer({
   dest: UPLOADS_TMP_DIR,
 });
 
-// ---------- LLM Import Cleanup (optional, gated) ----------
+// ---------- LLM Import Cleanup (auto, env-gated) ----------
 
-function isImportCleanupEnabled(req: Request): boolean {
-  if (!process.env.IMPORT_CLEANUP_ENABLED || process.env.IMPORT_CLEANUP_ENABLED !== "1") return false;
-  const q = (req.query?.llm ?? "") as string;
-  return q === "1" || q === "true";
+const SCENE_HEADING_RE = /\b(?:INT\.|EXT\.|INT\/EXT\.|I\/E\.)\s/i;
+const TRANSITION_RE = /\b(?:CUT TO|FADE IN|FADE OUT|DISSOLVE TO|SMASH CUT|MATCH CUT)\b/i;
+const SCENE_KEYWORD_RE = /\bSCENE\b/;
+const PDF_GIBBERISH_TOKENS = ["endobj", "xref", "obj", "stream", "/type", "/font", "/length", "/filter", "flatedecode"];
+const EMBEDDED_SPEAKER_RE = /\b[A-Z][A-Z0-9 ]{1,24}:\s/;
+
+function shouldUseImportCleanup(
+  extractedText: string,
+  scenes: Scene[]
+): { use: boolean; reason: string; metrics: any } {
+  if (!process.env.IMPORT_CLEANUP_ENABLED || process.env.IMPORT_CLEANUP_ENABLED !== "1") {
+    return { use: false, reason: "disabled", metrics: {} };
+  }
+  if (!process.env.OPENAI_API_KEY || !process.env.IMPORT_CLEANUP_MODEL) {
+    return { use: false, reason: "missing_env", metrics: {} };
+  }
+
+  // Force mode for debugging
+  if (process.env.IMPORT_CLEANUP_FORCE === "1") {
+    return { use: true, reason: "force", metrics: {} };
+  }
+
+  const allLines = scenes.flatMap(sc => Array.isArray(sc.lines) ? sc.lines : []);
+  const totalLines = allLines.length;
+
+  // Too few lines — parse probably failed
+  if (scenes.length === 0 || totalLines < 4) {
+    return { use: true, reason: "too_few_lines", metrics: { scenes: scenes.length, totalLines } };
+  }
+
+  // Check line contents for quality problems
+  let headingLeaks = 0;
+  let actionLeaks = 0;
+  let speakerMixes = 0;
+
+  for (const ln of allLines) {
+    const t = ln.text || "";
+    if (SCENE_HEADING_RE.test(t) || TRANSITION_RE.test(t) || SCENE_KEYWORD_RE.test(t)) {
+      headingLeaks++;
+    }
+    // Long multi-sentence text with description cues
+    if (t.length > 240) {
+      const sentenceCount = (t.match(/[.!?]\s+[A-Z]/g) || []).length + 1;
+      if (sentenceCount >= 3) actionLeaks++;
+    }
+    // Location/time description cues in line text
+    if (/\s-\s/.test(t) && /\b(?:DAY|NIGHT|MORNING|EVENING|LATER|CONTINUOUS)\b/i.test(t)) {
+      headingLeaks++;
+    }
+    // Embedded speaker label in dialogue text
+    if (EMBEDDED_SPEAKER_RE.test(t)) {
+      speakerMixes++;
+    }
+  }
+
+  if (headingLeaks > 0) {
+    return { use: true, reason: "heading_leaks", metrics: { headingLeaks, totalLines } };
+  }
+  if (actionLeaks > 0) {
+    return { use: true, reason: "action_leaks", metrics: { actionLeaks, totalLines } };
+  }
+  if (speakerMixes >= 2) {
+    return { use: true, reason: "speaker_mixing", metrics: { speakerMixes, totalLines } };
+  }
+
+  // PDF-object gibberish in raw text
+  const lower = extractedText.toLowerCase();
+  let gibberishHits = 0;
+  for (const tok of PDF_GIBBERISH_TOKENS) {
+    if (lower.includes(tok)) gibberishHits++;
+  }
+  if (gibberishHits >= 3) {
+    return { use: true, reason: "pdf_gibberish", metrics: { gibberishHits } };
+  }
+
+  return { use: false, reason: "quality_ok", metrics: { totalLines, headingLeaks, actionLeaks, speakerMixes, gibberishHits } };
 }
 
-async function llmCleanupToLines(
+async function llmCleanupToScenes(
   rawText: string,
   title: string
-): Promise<{ lines: { speaker: string; text: string }[]; meta: any } | null> {
+): Promise<{ scenes: Scene[] } | null> {
   const apiKey = process.env.OPENAI_API_KEY;
   const model = process.env.IMPORT_CLEANUP_MODEL;
   if (!apiKey || !model) return null;
 
   const systemPrompt = [
-    "You are a screenplay dialogue extractor. Given raw script text (possibly from OCR), return ONLY spoken dialogue lines as JSON.",
+    "You are a screenplay dialogue extractor. Given raw script text (possibly from OCR), extract ONLY spoken dialogue lines as structured JSON.",
     "Rules:",
-    "- Return ONLY spoken dialogue lines with their speaker names.",
-    "- Drop ALL scene headings (INT./EXT./SCENE), action/description paragraphs, transitions (CUT TO, FADE IN, DISSOLVE TO, etc.), page numbers, headers, and footers.",
-    "- Keep speaker names in ALL CAPS. If the speaker cannot be determined, use \"UNKNOWN\".",
-    "- Merge broken dialogue lines that clearly belong to the same speech.",
-    "- DO NOT invent or add any dialogue that is not present in the source text.",
-    "- DO NOT output anything except JSON matching the required schema.",
+    "- Keep ONLY spoken dialogue lines with their speaker names.",
+    "- Remove ALL scene headings (INT./EXT./SCENE), action/description paragraphs, transitions (CUT TO, FADE IN, DISSOLVE TO, etc.), parentheticals, page numbers, headers, and footers.",
+    "- Merge broken dialogue lines that clearly belong to the same speaker's speech.",
+    "- Preserve the original order of dialogue.",
+    "- DO NOT invent or add any dialogue not present in the source text.",
+    "- If a speaker cannot be determined, use \"UNKNOWN\".",
+    "- Prefer speaker names in ALL CAPS.",
+    "- Group lines into scenes. If scene breaks are unclear, put all lines in one scene titled \"Scene 1\".",
   ].join("\n");
 
   const controller = new AbortController();
@@ -289,20 +363,31 @@ async function llmCleanupToLines(
               type: "object",
               additionalProperties: false,
               properties: {
-                lines: {
+                scenes: {
                   type: "array",
                   items: {
                     type: "object",
                     additionalProperties: false,
                     properties: {
-                      speaker: { type: "string" },
-                      text: { type: "string" },
+                      title: { type: "string" },
+                      lines: {
+                        type: "array",
+                        items: {
+                          type: "object",
+                          additionalProperties: false,
+                          properties: {
+                            speaker: { type: "string" },
+                            text: { type: "string" },
+                          },
+                          required: ["speaker", "text"],
+                        },
+                      },
                     },
-                    required: ["speaker", "text"],
+                    required: ["title", "lines"],
                   },
                 },
               },
-              required: ["lines"],
+              required: ["scenes"],
             },
           },
         },
@@ -318,7 +403,7 @@ async function llmCleanupToLines(
 
     const json: any = await resp.json();
 
-    // Extract text from response.output[] -> message items -> content items where type == "output_text"
+    // Extract text from response.output[] -> message items -> output_text content
     let outputText = "";
     if (Array.isArray(json.output)) {
       for (const item of json.output) {
@@ -338,30 +423,32 @@ async function llmCleanupToLines(
     }
 
     const parsed = JSON.parse(outputText);
-    if (!Array.isArray(parsed.lines)) return null;
+    if (!Array.isArray(parsed.scenes)) return null;
 
-    // Validate each line has non-empty speaker and text strings
-    const validLines = parsed.lines.filter(
-      (ln: any) =>
-        typeof ln.speaker === "string" &&
-        typeof ln.text === "string" &&
-        ln.speaker.trim().length > 0 &&
-        ln.text.trim().length > 0
-    );
+    // Validate and build Scene[] with IDs
+    const validScenes: Scene[] = [];
+    for (const sc of parsed.scenes) {
+      if (!Array.isArray(sc.lines)) continue;
+      const validLines = sc.lines.filter(
+        (ln: any) =>
+          typeof ln.speaker === "string" &&
+          typeof ln.text === "string" &&
+          ln.speaker.trim().length > 0 &&
+          ln.text.trim().length > 0
+      );
+      if (validLines.length > 0) {
+        validScenes.push({
+          id: crypto.randomUUID(),
+          title: typeof sc.title === "string" && sc.title.trim() ? sc.title.trim() : `Scene ${validScenes.length + 1}`,
+          lines: validLines,
+        });
+      }
+    }
 
-    const ms = Date.now() - t0;
-    console.log(
-      "[import-cleanup] ok=%s model=%s inChars=%d outLines=%d ms=%d",
-      true, model, rawText.length, validLines.length, ms
-    );
+    if (validScenes.length === 0) return null;
 
-    return { lines: validLines, meta: { model, ms, inputChars: rawText.length } };
+    return { scenes: validScenes };
   } catch (err: any) {
-    const ms = Date.now() - t0;
-    console.log(
-      "[import-cleanup] ok=%s model=%s inChars=%d outLines=%d ms=%d",
-      false, model, rawText.length, 0, ms
-    );
     if (err.name !== "AbortError") {
       console.error("[import-cleanup] error:", err.message || err);
     } else {
@@ -1150,22 +1237,32 @@ export function initHttpRoutes(app: Express) {
     const rawText = String(text);
     const rawTitle = String(title);
 
-    let scenes: Scene[];
-    let cleanupUsed = false;
-    let cleanupOutLines = 0;
+    // First: run existing parser
+    let scenes = parseScenesFromText(rawText, rawTitle);
 
-    // Try LLM cleanup if enabled for this request
-    if (isImportCleanupEnabled(req)) {
-      const result = await llmCleanupToLines(rawText, rawTitle);
-      if (result && result.lines.length > 0) {
-        scenes = [{ id: crypto.randomUUID(), title: "Scene 1", lines: result.lines }];
+    // Auto LLM cleanup if quality is poor
+    let cleanupUsed = false;
+    let cleanupReason = "";
+    let cleanupOutLines = 0;
+    const qualityCheck = shouldUseImportCleanup(rawText, scenes);
+    if (qualityCheck.use) {
+      const t0 = Date.now();
+      const result = await llmCleanupToScenes(rawText, rawTitle);
+      const ms = Date.now() - t0;
+      const model = process.env.IMPORT_CLEANUP_MODEL || "?";
+      const outLines = result ? result.scenes.flatMap(s => s.lines).length : 0;
+      const ok = !!(result && outLines > 0);
+      console.log(
+        "[import-cleanup] used=%s ok=%s reason=%s model=%s inChars=%d outScenes=%d outLines=%d ms=%d",
+        true, ok, qualityCheck.reason, model, rawText.length,
+        result ? result.scenes.length : 0, outLines, ms
+      );
+      if (ok) {
+        scenes = result!.scenes;
         cleanupUsed = true;
-        cleanupOutLines = result.lines.length;
-      } else {
-        scenes = parseScenesFromText(rawText, rawTitle);
+        cleanupReason = qualityCheck.reason;
+        cleanupOutLines = outLines;
       }
-    } else {
-      scenes = parseScenesFromText(rawText, rawTitle);
     }
 
     const script: Script = { id, title: rawTitle, text: rawText, scenes };
@@ -1190,7 +1287,7 @@ export function initHttpRoutes(app: Express) {
       script_id: id,
       scene_count: scenes.length,
       speakers,
-      ...(cleanupUsed ? { cleanup_used: true, cleanup_out_lines: cleanupOutLines } : {}),
+      ...(cleanupUsed ? { cleanup_used: true, cleanup_reason: cleanupReason, cleanup_out_lines: cleanupOutLines } : {}),
     });
   });
 
@@ -1224,28 +1321,36 @@ export function initHttpRoutes(app: Express) {
         // Only attempt scene parsing when we have a reasonable amount of text.
         let scenes: Scene[] = [];
         let cleanupUsed = false;
+        let cleanupReason = "";
         let cleanupOutLines = 0;
 
         if (textLen >= 40) {
-          // Try LLM cleanup if enabled for this request
-          if (isImportCleanupEnabled(req)) {
-            const result = await llmCleanupToLines(extracted, title);
-            if (result && result.lines.length > 0) {
-              scenes = [{ id: crypto.randomUUID(), title: "Scene 1", lines: result.lines }];
-              cleanupUsed = true;
-              cleanupOutLines = result.lines.length;
-            } else {
-              const parsed = parseScenesFromText(extracted, title);
-              scenes = (parsed || []).filter(
-                (sc) => Array.isArray(sc.lines) && sc.lines.length > 0
-              );
-            }
-          } else {
-            const parsed = parseScenesFromText(extracted, title);
-            // Drop any scenes that have no dialogue lines; they are noise.
-            scenes = (parsed || []).filter(
-              (sc) => Array.isArray(sc.lines) && sc.lines.length > 0
+          const parsed = parseScenesFromText(extracted, title);
+          // Drop any scenes that have no dialogue lines; they are noise.
+          scenes = (parsed || []).filter(
+            (sc) => Array.isArray(sc.lines) && sc.lines.length > 0
+          );
+
+          // Auto LLM cleanup if quality is poor
+          const qualityCheck = shouldUseImportCleanup(extracted, scenes);
+          if (qualityCheck.use) {
+            const t0 = Date.now();
+            const result = await llmCleanupToScenes(extracted, title);
+            const ms = Date.now() - t0;
+            const model = process.env.IMPORT_CLEANUP_MODEL || "?";
+            const outLines = result ? result.scenes.flatMap(s => s.lines).length : 0;
+            const ok = !!(result && outLines > 0);
+            console.log(
+              "[import-cleanup] used=%s ok=%s reason=%s model=%s inChars=%d outScenes=%d outLines=%d ms=%d",
+              true, ok, qualityCheck.reason, model, extracted.length,
+              result ? result.scenes.length : 0, outLines, ms
             );
+            if (ok) {
+              scenes = result!.scenes;
+              cleanupUsed = true;
+              cleanupReason = qualityCheck.reason;
+              cleanupOutLines = outLines;
+            }
           }
         }
 
@@ -1286,7 +1391,7 @@ export function initHttpRoutes(app: Express) {
           speakers,
           textLen,
           ...(note ? { note } : {}),
-          ...(cleanupUsed ? { cleanup_used: true, cleanup_out_lines: cleanupOutLines } : {}),
+          ...(cleanupUsed ? { cleanup_used: true, cleanup_reason: cleanupReason, cleanup_out_lines: cleanupOutLines } : {}),
         });
       } catch (e) {
         console.error("[upload] failed:", e);
