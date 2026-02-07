@@ -314,9 +314,84 @@ function shouldUseImportCleanup(
   return { use: false, reason: "quality_ok", metrics: { totalLines, headingLeaks, actionLeaks, speakerMixes, gibberishHits } };
 }
 
+const SPEAKER_STOPWORDS = new Set([
+  "AND", "OR", "BUT", "WHAT", "WHATS", "WHO", "WHY", "HOW",
+  "I", "YOU", "HE", "SHE", "WE", "THEY", "MY", "YOUR", "HIS", "HER", "OUR",
+  "THE", "A", "AN", "IT", "IS", "DO", "DON", "DONT", "DIDN", "DIDNT",
+  "THAT", "THIS", "THERE", "WHERE", "WHEN", "IF", "SO", "NO", "YES",
+]);
+const VALID_SPEAKER_WORD_RE = /^[A-Z][A-Z0-9#&'./-]*$/;
+
+function isValidSpeakerShape(speaker: string): boolean {
+  const s = speaker.trim().toUpperCase();
+  if (!s) return false;
+  const words = s.split(/\s+/);
+  if (words.length < 1 || words.length > 3) return false;
+  if (SPEAKER_STOPWORDS.has(words[0].replace(/['']/g, ""))) return false;
+  return words.every(w => VALID_SPEAKER_WORD_RE.test(w));
+}
+
+function buildSpeakerWhitelistFromHeuristic(scenes: Scene[]): string[] {
+  const seen = new Set<string>();
+  for (const sc of scenes) {
+    if (!Array.isArray(sc.lines)) continue;
+    for (const ln of sc.lines) {
+      const s = (ln.speaker || "").trim().toUpperCase();
+      if (s && s !== "UNKNOWN" && isValidSpeakerShape(s)) {
+        seen.add(s);
+      }
+    }
+  }
+  return Array.from(seen).sort();
+}
+
+function normalizePseudoSpeaker(s: string): string {
+  return s
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase()
+    .replace(/^./, c => c.toUpperCase())
+    .replace(/\bi\b/g, "I");
+}
+
+function fixFalseSpeakers(
+  scenes: Scene[],
+  whitelist: string[]
+): { scenes: Scene[]; fixedCount: number; droppedSpeakers: string[] } {
+  const whiteSet = new Set(whitelist.map(w => w.toUpperCase()));
+  whiteSet.add("UNKNOWN");
+  let fixedCount = 0;
+  const droppedSpeakers: string[] = [];
+
+  for (const sc of scenes) {
+    if (!Array.isArray(sc.lines)) continue;
+    const fixed: SceneLine[] = [];
+    for (const ln of sc.lines) {
+      const upper = (ln.speaker || "").trim().toUpperCase();
+      if (whiteSet.has(upper) && isValidSpeakerShape(upper)) {
+        fixed.push(ln);
+      } else {
+        // Bad speaker — merge into previous or convert to UNKNOWN
+        fixedCount++;
+        if (!droppedSpeakers.includes(upper)) droppedSpeakers.push(upper);
+        const mergedText = (normalizePseudoSpeaker(ln.speaker) + " " + (ln.text || "").trim()).trim();
+        if (fixed.length > 0) {
+          fixed[fixed.length - 1].text = fixed[fixed.length - 1].text.trim() + " " + mergedText;
+        } else {
+          fixed.push({ speaker: "UNKNOWN", text: mergedText });
+        }
+      }
+    }
+    sc.lines = fixed;
+  }
+
+  return { scenes, fixedCount, droppedSpeakers };
+}
+
 async function llmCleanupToScenes(
   rawText: string,
-  title: string
+  title: string,
+  speakerWhitelist: string[]
 ): Promise<{ scenes: Scene[] } | null> {
   const apiKey = process.env.OPENAI_API_KEY;
   const model = process.env.IMPORT_CLEANUP_MODEL;
@@ -330,9 +405,25 @@ async function llmCleanupToScenes(
     "- Merge broken dialogue lines that clearly belong to the same speaker's speech.",
     "- Preserve the original order of dialogue.",
     "- DO NOT invent or add any dialogue not present in the source text.",
-    "- If a speaker cannot be determined, use \"UNKNOWN\".",
+    "- Speaker must be from the provided whitelist OR 'UNKNOWN'. Do NOT create new speakers.",
+    "- NEVER create speakers from dialogue fragments (e.g. 'AND WHAT DO YOU', 'I DON'T PLAY', 'WHAT'S').",
+    "- Do NOT treat names mentioned inside dialogue as speakers unless they appear in the whitelist.",
     "- Prefer speaker names in ALL CAPS.",
     "- Group lines into scenes. If scene breaks are unclear, put all lines in one scene titled \"Scene 1\".",
+  ].join("\n");
+
+  const whitelistStr = speakerWhitelist.length > 0
+    ? speakerWhitelist.join(", ")
+    : "UNKNOWN";
+
+  const userContent = [
+    `TITLE: ${title}`,
+    "",
+    `LIKELY SPEAKERS (use ONLY these as speaker values; if unsure use 'UNKNOWN'):`,
+    whitelistStr,
+    "",
+    "SCRIPT:",
+    rawText,
   ].join("\n");
 
   const controller = new AbortController();
@@ -350,7 +441,7 @@ async function llmCleanupToScenes(
         model,
         input: [
           { role: "system", content: systemPrompt },
-          { role: "user", content: `TITLE: ${title}\n\nSCRIPT:\n${rawText}` },
+          { role: "user", content: userContent },
         ],
         temperature: 0,
         max_output_tokens: 12000,
@@ -1246,22 +1337,32 @@ export function initHttpRoutes(app: Express) {
     let cleanupOutLines = 0;
     const qualityCheck = shouldUseImportCleanup(rawText, scenes);
     if (qualityCheck.use) {
+      const whitelist = buildSpeakerWhitelistFromHeuristic(scenes);
       const t0 = Date.now();
-      const result = await llmCleanupToScenes(rawText, rawTitle);
+      const result = await llmCleanupToScenes(rawText, rawTitle, whitelist);
       const ms = Date.now() - t0;
       const model = process.env.IMPORT_CLEANUP_MODEL || "?";
-      const outLines = result ? result.scenes.flatMap(s => s.lines).length : 0;
+      let outLines = result ? result.scenes.flatMap(s => s.lines).length : 0;
       const ok = !!(result && outLines > 0);
-      console.log(
-        "[import-cleanup] used=%s ok=%s reason=%s model=%s inChars=%d outScenes=%d outLines=%d ms=%d",
-        true, ok, qualityCheck.reason, model, rawText.length,
-        result ? result.scenes.length : 0, outLines, ms
-      );
+      let fixedCount = 0;
+      let droppedSpeakers: string[] = [];
       if (ok) {
-        scenes = result!.scenes;
+        const postFix = fixFalseSpeakers(result!.scenes, whitelist);
+        scenes = postFix.scenes.filter(sc => sc.lines.length > 0);
+        fixedCount = postFix.fixedCount;
+        droppedSpeakers = postFix.droppedSpeakers;
+        outLines = scenes.flatMap(s => s.lines).length;
         cleanupUsed = true;
         cleanupReason = qualityCheck.reason;
         cleanupOutLines = outLines;
+      }
+      console.log(
+        "[import-cleanup] used=%s ok=%s reason=%s model=%s inChars=%d outScenes=%d outLines=%d ms=%d whitelist=%d fixed=%d",
+        true, ok, qualityCheck.reason, model, rawText.length,
+        ok ? scenes.length : 0, outLines, ms, whitelist.length, fixedCount
+      );
+      if (fixedCount > 0) {
+        console.log("[import-cleanup] droppedSpeakers=%s", droppedSpeakers.join(", "));
       }
     }
 
@@ -1334,22 +1435,32 @@ export function initHttpRoutes(app: Express) {
           // Auto LLM cleanup if quality is poor
           const qualityCheck = shouldUseImportCleanup(extracted, scenes);
           if (qualityCheck.use) {
+            const whitelist = buildSpeakerWhitelistFromHeuristic(scenes);
             const t0 = Date.now();
-            const result = await llmCleanupToScenes(extracted, title);
+            const result = await llmCleanupToScenes(extracted, title, whitelist);
             const ms = Date.now() - t0;
             const model = process.env.IMPORT_CLEANUP_MODEL || "?";
-            const outLines = result ? result.scenes.flatMap(s => s.lines).length : 0;
+            let outLines = result ? result.scenes.flatMap(s => s.lines).length : 0;
             const ok = !!(result && outLines > 0);
-            console.log(
-              "[import-cleanup] used=%s ok=%s reason=%s model=%s inChars=%d outScenes=%d outLines=%d ms=%d",
-              true, ok, qualityCheck.reason, model, extracted.length,
-              result ? result.scenes.length : 0, outLines, ms
-            );
+            let fixedCount = 0;
+            let droppedSpeakers: string[] = [];
             if (ok) {
-              scenes = result!.scenes;
+              const postFix = fixFalseSpeakers(result!.scenes, whitelist);
+              scenes = postFix.scenes.filter(sc => sc.lines.length > 0);
+              fixedCount = postFix.fixedCount;
+              droppedSpeakers = postFix.droppedSpeakers;
+              outLines = scenes.flatMap(s => s.lines).length;
               cleanupUsed = true;
               cleanupReason = qualityCheck.reason;
               cleanupOutLines = outLines;
+            }
+            console.log(
+              "[import-cleanup] used=%s ok=%s reason=%s model=%s inChars=%d outScenes=%d outLines=%d ms=%d whitelist=%d fixed=%d",
+              true, ok, qualityCheck.reason, model, extracted.length,
+              ok ? scenes.length : 0, outLines, ms, whitelist.length, fixedCount
+            );
+            if (fixedCount > 0) {
+              console.log("[import-cleanup] droppedSpeakers=%s", droppedSpeakers.join(", "));
             }
           }
         }
