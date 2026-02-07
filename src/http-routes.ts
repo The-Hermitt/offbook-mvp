@@ -235,7 +235,7 @@ const galleryUpload = multer({
 });
 
 // ---------- Parser: supports `NAME: line` and screenplay blocks ----------
-function parseScenesFromText(text: string): Scene[] {
+function parseScenesFromText(text: string, scriptTitle?: string): Scene[] {
   const lines = text.split(/\r?\n/);
 
   const isAllCapsWordy = (s: string) =>
@@ -248,17 +248,34 @@ function parseScenesFromText(text: string): Scene[] {
   const isOnlyParen = (s: string) => /^\s*\([^)]*\)\s*$/.test(s);
   const colonLine = (s: string) => s.match(/^\s*([A-Z][A-Z0-9 _&'.-]{1,30})\s*:\s*(.+)$/);
 
+  // Helpers for noise removal
+  const isNumericOnlyLine = (s: string) => /^\s*\d+(\s+\d+)*\s*$/.test(s);
+  const titleUpper = (scriptTitle || "").trim().toUpperCase();
+  const isTitleHeaderLine = (s: string) => titleUpper.length > 0 && s.trim().toUpperCase() === titleUpper;
+  const isSkippable = (s: string) => isNumericOnlyLine(s) || isTitleHeaderLine(s);
+
+  const stripParens = (s: string) => s.replace(/\([^)]*\)/g, "").replace(/\s{2,}/g, " ").trim();
+  const stripInlineSceneHeading = (s: string) => {
+    const idx = s.search(/\b(INT\.|EXT\.|SCENE\b|CONTINUOUS\b)/i);
+    if (idx > 0) return s.slice(0, idx).replace(/\s+$/, "");
+    return s;
+  };
+  const cleanDialogue = (s: string) => stripInlineSceneHeading(stripParens(s));
+
   const scene: Scene = { id: crypto.randomUUID(), title: "Scene 1", lines: [] };
 
   // Pass 1: NAME: dialogue
   for (const raw of lines) {
     const s = raw.replace(/\t/g, " ").trimRight();
     if (!s.trim()) continue;
-    if (isSceneHeading(s) || isOnlyParen(s) || isLikelyHeaderFooter(s)) continue;
+    if (isSceneHeading(s) || isOnlyParen(s) || isLikelyHeaderFooter(s) || isSkippable(s)) continue;
     const m = colonLine(s);
-    if (m) scene.lines.push({ speaker: m[1].trim(), text: m[2].trim() });
+    if (m) {
+      const t = cleanDialogue(m[2].trim());
+      if (t) scene.lines.push({ speaker: m[1].trim(), text: t });
+    }
   }
-  if (scene.lines.length) return [scene];
+  if (scene.lines.length) return mergeSpeakerAliases([scene]);
 
   // Pass 2: screenplay blocks (NAME on its own line; optional parenthetical; dialogue lines)
   let i = 0;
@@ -267,7 +284,7 @@ function parseScenesFromText(text: string): Scene[] {
     i++;
 
     if (!line.trim()) continue;
-    if (isSceneHeading(line) || isLikelyHeaderFooter(line)) continue;
+    if (isSceneHeading(line) || isLikelyHeaderFooter(line) || isSkippable(line)) continue;
 
     const candidate = line.trim();
     if (/^[A-Z][A-Z0-9 '&.-]{1,29}$/.test(candidate) && isAllCapsWordy(candidate)) {
@@ -279,17 +296,52 @@ function parseScenesFromText(text: string): Scene[] {
         const peek = lines[i].trimRight();
         const isBlank = !peek.trim();
         const nextIsSpeaker = /^[A-Z][A-Z0-9 '&.-]{1,29}$/.test(peek) && isAllCapsWordy(peek);
-        const nextIsHeader = isSceneHeading(peek) || isLikelyHeaderFooter(peek);
+        const nextIsHeader = isSceneHeading(peek) || isLikelyHeaderFooter(peek) || isSkippable(peek);
         if (isBlank || nextIsSpeaker || nextIsHeader) break;
         if (!isOnlyParen(peek)) buf.push(peek);
         i++;
       }
-      const t = buf.join(" ").replace(/\s+/g, " ").trim();
+      const t = cleanDialogue(buf.join(" ").replace(/\s+/g, " ").trim());
       if (t) scene.lines.push({ speaker, text: t });
     }
   }
 
-  return [scene];
+  return mergeSpeakerAliases([scene]);
+}
+
+// Conservative alias merge: single-word speaker -> multi-word speaker when unambiguous
+function mergeSpeakerAliases(scenes: Scene[]): Scene[] {
+  const counts = new Map<string, number>();
+  for (const sc of scenes) {
+    for (const ln of sc.lines) {
+      counts.set(ln.speaker, (counts.get(ln.speaker) ?? 0) + 1);
+    }
+  }
+
+  const aliasMap = new Map<string, string>();
+  for (const [name] of counts) {
+    if (name.includes(" ")) continue; // only remap single-word speakers
+    // Find multi-word speakers whose last token matches this single-word speaker
+    const matches: string[] = [];
+    for (const [other] of counts) {
+      if (!other.includes(" ")) continue;
+      const lastToken = other.split(/\s+/).pop();
+      if (lastToken === name) matches.push(other);
+    }
+    if (matches.length === 1 && (counts.get(matches[0]) ?? 0) > (counts.get(name) ?? 0)) {
+      aliasMap.set(name, matches[0]);
+    }
+  }
+
+  if (aliasMap.size === 0) return scenes;
+
+  for (const sc of scenes) {
+    for (const ln of sc.lines) {
+      const mapped = aliasMap.get(ln.speaker);
+      if (mapped) ln.speaker = mapped;
+    }
+  }
+  return scenes;
 }
 
 // ---------- Silent MP3 generation ----------
@@ -869,7 +921,7 @@ export function initHttpRoutes(app: Express) {
     if (!title || !text) return res.status(400).json({ error: "title and text are required" });
 
     const id = crypto.randomUUID();
-    const scenes = parseScenesFromText(String(text));
+    const scenes = parseScenesFromText(String(text), String(title));
     const script: Script = { id, title: String(title), text: String(text), scenes };
 
     // Cache in memory for this process (user-keyed)
@@ -925,7 +977,7 @@ export function initHttpRoutes(app: Express) {
         // Only attempt scene parsing when we have a reasonable amount of text.
         let scenes: Scene[] = [];
         if (textLen >= 40) {
-          const parsed = parseScenesFromText(extracted);
+          const parsed = parseScenesFromText(extracted, title);
           // Drop any scenes that have no dialogue lines; they are noise.
           scenes = (parsed || []).filter(
             (sc) => Array.isArray(sc.lines) && sc.lines.length > 0
