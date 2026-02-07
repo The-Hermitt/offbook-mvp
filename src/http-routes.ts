@@ -266,6 +266,16 @@ function parseScenesFromText(text: string, scriptTitle?: string): Scene[] {
   };
   const cleanDialogue = (s: string) => stripInlineSceneHeading(stripParens(s));
 
+  // Standalone speaker cue: SPEAKER on its own line (no colon)
+  const isStandaloneSpeaker = (s: string) => {
+    const candidate = s.trim();
+    if (!/^[A-Z][A-Z0-9 '&.-]{1,29}$/.test(candidate)) return false;
+    if (!isAllCapsWordy(candidate)) return false;
+    if (isSceneHeading(candidate) || isLikelyHeaderFooter(candidate) || isSkippable(candidate)) return false;
+    if (candidate === "CONTINUED" || candidate === "CONT'D" || candidate === "CONT\u2019D") return false;
+    return true;
+  };
+
   const inlineCueRegex = /[A-Z][A-Z0-9 _&'.-]{1,25}:/g;
   const lines: string[] = [];
   for (const raw of rawLines) {
@@ -294,9 +304,17 @@ function parseScenesFromText(text: string, scriptTitle?: string): Scene[] {
 
   const scene: Scene = { id: crypto.randomUUID(), title: "Scene 1", lines: [] };
 
+  // IMPORTANT: OCR sometimes produces mixed formats (some NAME: lines + some screenplay blocks).
+  // If we return early after Pass 1, we drop the screenplay blocks and can mis-assign continuations.
+  // So we run both passes, track which source lines were consumed, then sort by original position.
+  type Parsed = { pos: number; speaker: string; text: string };
+  const parsed: Parsed[] = [];
+  const consumed = new Array(lines.length).fill(false);
+
   // Pass 1: NAME: dialogue
   let i = 0;
   while (i < lines.length) {
+    const startPos = i;
     const s = lines[i].trimRight();
     i++;
     if (!s.trim()) continue;
@@ -304,59 +322,75 @@ function parseScenesFromText(text: string, scriptTitle?: string): Scene[] {
     const m = colonLine(s);
     if (!m) continue;
 
+    consumed[startPos] = true;
     const speaker = m[1].trim();
     const buf: string[] = [];
     if (m[2].trim()) buf.push(m[2].trim());
 
     while (i < lines.length) {
+      const peekPos = i;
       const peek = lines[i].trimRight();
       const isBlank = !peek.trim();
-      const nextIsSpeaker = !!colonLine(peek);
+      const nextIsSpeaker = !!colonLine(peek) || isStandaloneSpeaker(peek);
       const nextIsHeader = isSceneHeading(peek) || isLikelyHeaderFooter(peek) || isSkippable(peek);
       if (isBlank || nextIsSpeaker || nextIsHeader) break;
       if (!isOnlyParen(peek)) {
         buf.push(peek.trim());
         continuationAppends++;
       }
+      consumed[peekPos] = true;
       i++;
     }
 
     const t = cleanDialogue(buf.join(" ").replace(/\s+/g, " ").trim());
-    if (t) scene.lines.push({ speaker, text: t });
-  }
-  if (scene.lines.length) {
-    logDebugCounts();
-    return mergeSpeakerAliases([scene]);
+    if (t) parsed.push({ pos: startPos, speaker, text: t });
   }
 
   // Pass 2: screenplay blocks (NAME on its own line; optional parenthetical; dialogue lines)
   i = 0;
   while (i < lines.length) {
+    if (consumed[i]) {
+      i++;
+      continue;
+    }
     let line = lines[i].trimRight();
+    const startPos = i;
     i++;
 
     if (!line.trim()) continue;
     if (isSceneHeading(line) || isLikelyHeaderFooter(line) || isSkippable(line)) continue;
 
     const candidate = line.trim();
-    if (/^[A-Z][A-Z0-9 '&.-]{1,29}$/.test(candidate) && isAllCapsWordy(candidate)) {
+    if (isStandaloneSpeaker(candidate)) {
       const speaker = candidate;
-      if (i < lines.length && isOnlyParen(lines[i].trim())) i++; // skip parenthetical
+      consumed[startPos] = true;
+      if (i < lines.length && isOnlyParen(lines[i].trim())) {
+        consumed[i] = true;
+        i++; // skip parenthetical
+      }
 
       const buf: string[] = [];
       while (i < lines.length) {
+        if (consumed[i]) {
+          i++;
+          continue;
+        }
         const peek = lines[i].trimRight();
         const isBlank = !peek.trim();
-        const nextIsSpeaker = /^[A-Z][A-Z0-9 '&.-]{1,29}$/.test(peek) && isAllCapsWordy(peek);
+        const nextIsSpeaker = isStandaloneSpeaker(peek) || !!colonLine(peek);
         const nextIsHeader = isSceneHeading(peek) || isLikelyHeaderFooter(peek) || isSkippable(peek);
         if (isBlank || nextIsSpeaker || nextIsHeader) break;
         if (!isOnlyParen(peek)) buf.push(peek);
+        consumed[i] = true;
         i++;
       }
       const t = cleanDialogue(buf.join(" ").replace(/\s+/g, " ").trim());
-      if (t) scene.lines.push({ speaker, text: t });
+      if (t) parsed.push({ pos: startPos, speaker, text: t });
     }
   }
+
+  parsed.sort((a, b) => a.pos - b.pos);
+  scene.lines = parsed.map(({ speaker, text }) => ({ speaker, text }));
 
   logDebugCounts();
   return mergeSpeakerAliases([scene]);
