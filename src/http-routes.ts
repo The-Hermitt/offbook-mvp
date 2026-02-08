@@ -7,6 +7,8 @@ import * as fs from "fs";
 import * as os from "os";
 import crypto from "crypto";
 import { spawn, execFileSync } from "child_process";
+import ffmpegPath from "ffmpeg-static";
+import { FormData as UndiciFormData, File as UndiciFile } from "undici";
 import db, { dbGet, dbAll, dbRun, USING_POSTGRES, listByUserAsync, getByIdAsync, saveAsync, deleteByIdAsync, updateNotesAsync } from "./lib/db";
 import { generateReaderMp3, ttsProvider, type RenderResult } from "./lib/tts";
 import { isSttEnabled, transcribeChunk } from "./lib/stt";
@@ -232,6 +234,10 @@ const UPLOADS_TMP_DIR = path.join(process.cwd(), "uploads", "tmp");
 if (!fs.existsSync(UPLOADS_TMP_DIR)) fs.mkdirSync(UPLOADS_TMP_DIR, { recursive: true });
 const galleryUpload = multer({
   dest: UPLOADS_TMP_DIR,
+});
+const voiceMaskUpload = multer({
+  dest: UPLOADS_TMP_DIR,
+  limits: { fileSize: 25 * 1024 * 1024 },
 });
 
 // ---------- LLM Import Cleanup (auto, env-gated) ----------
@@ -1027,6 +1033,23 @@ function baseUrlFrom(req: Request): string {
   const proto = (req.headers["x-forwarded-proto"] as string) || req.protocol || "https";
   const host = req.headers["x-forwarded-host"] || req.get("host");
   return `${proto}://${host}`;
+}
+
+// ---------- Audio probe helper ----------
+function probeAudioDurationSeconds(filePath: string): Promise<number | null> {
+  return new Promise((resolve) => {
+    const bin = ffmpegPath || "ffmpeg";
+    const proc = spawn(bin, ["-i", filePath], { stdio: ["ignore", "ignore", "pipe"] });
+    let stderr = "";
+    proc.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
+    proc.on("close", () => {
+      const m = stderr.match(/Duration:\s*(\d+):(\d+):(\d+)\.(\d+)/);
+      if (!m) return resolve(null);
+      const secs = parseInt(m[1], 10) * 3600 + parseInt(m[2], 10) * 60 + parseInt(m[3], 10) + parseInt(m[4], 10) / 100;
+      resolve(secs > 0 ? secs : null);
+    });
+    proc.on("error", () => resolve(null));
+  });
 }
 
 // ---------- Routes ----------
@@ -3679,6 +3702,172 @@ export function initHttpRoutes(app: Express) {
       return res.status(500).json({ error: "internal_error" });
     }
   });
+
+  // ────────────────────────────────────────────────────────────────────────────
+  // POST /api/voice_mask – ElevenLabs Speech-to-Speech voice masking
+  // ────────────────────────────────────────────────────────────────────────────
+  api.post(
+    "/voice_mask",
+    secretGuard,
+    audit("/api/voice_mask"),
+    voiceMaskUpload.fields([
+      { name: "audio", maxCount: 1 },
+      { name: "file", maxCount: 1 },
+    ]),
+    async (req: Request, res: Response) => {
+      let tmpFile: string | null = null;
+      try {
+        // 1. Require ElevenLabs key
+        const elevenLabsKey = process.env.ELEVENLABS_API_KEY;
+        if (!elevenLabsKey) {
+          return res.status(503).json({ error: "elevenlabs_not_configured" });
+        }
+
+        // 2. Get uploaded audio file
+        const files = req.files as Record<string, Express.Multer.File[]> | undefined;
+        const audioFile = files?.audio?.[0] || files?.file?.[0];
+        if (!audioFile) {
+          return res.status(400).json({ error: "missing_audio" });
+        }
+        tmpFile = audioFile.path;
+
+        // 3. Require voice_id
+        const voiceId = (req.body?.voice_id || "").trim();
+        if (!voiceId) {
+          return res.status(400).json({ error: "missing_voice_id" });
+        }
+
+        // 4. Probe duration
+        const durationSeconds = await probeAudioDurationSeconds(audioFile.path);
+        if (!durationSeconds || durationSeconds <= 0) {
+          return res.status(400).json({ error: "cannot_determine_duration" });
+        }
+        if (durationSeconds > 300) {
+          return res.status(400).json({ error: "max_duration_5min" });
+        }
+
+        // 5. Compute credits (ElevenLabs: 1000 chars per minute of audio)
+        const chargedCredits = durationSeconds / 60;
+        const chargedChars = chargedCredits * 1000;
+
+        // 6. Resolve user key (same pattern as /credits)
+        const sid = ensureSid(req as any, res as any);
+        const { userId } = getPasskeySession(req as any);
+        const xOffbookUser = (req.header("X-OffBook-User") || "").trim();
+        const userKey = xOffbookUser || userId || `anon:${sid}`;
+
+        // 7. Credits gate (mirrors /credits logic)
+        const billing = await getUserBilling(userKey);
+        const creditsRow = await getUserCredits(userKey);
+
+        const nowSec = Math.floor(Date.now() / 1000);
+        const periodEndSec = billing?.current_period_end ? Number(billing.current_period_end) : null;
+        const dbStatusIsActive = billing?.status === "active" || billing?.status === "trialing";
+        const periodExpired = dbStatusIsActive && periodEndSec !== null && nowSec >= periodEndSec;
+
+        if (periodExpired && billing) {
+          await upsertUserBilling({ user_id: userKey, plan: billing.plan, status: "inactive" });
+        }
+
+        const effectiveStatus = periodExpired ? "inactive" : (billing?.status ?? "inactive");
+        const isActiveOrTrialing = effectiveStatus === "active" || effectiveStatus === "trialing";
+
+        const includedMonthly = isActiveOrTrialing ? (billing?.included_quota || 120) : 0;
+        const monthlyUsedExact = Number(billing?.renders_used ?? 0);
+        const monthlyRemainingExact = Math.max(0, includedMonthly - monthlyUsedExact);
+
+        const topupTotalExact = creditsRow ? Number(creditsRow.total_credits) : 0;
+        const topupUsedExact = creditsRow ? Number(creditsRow.used_credits) : 0;
+        const topupRemainingExact = Math.max(0, topupTotalExact - topupUsedExact);
+        const topupFrozen = !isActiveOrTrialing;
+
+        const spendableExact = monthlyRemainingExact + (topupFrozen ? 0 : topupRemainingExact);
+
+        if (spendableExact < chargedCredits) {
+          return res.status(402).json({
+            error: "insufficient_credits",
+            needed: chargedCredits,
+            remaining: spendableExact,
+          });
+        }
+
+        // 8. Call ElevenLabs Speech-to-Speech streaming endpoint
+        const usedModelId = process.env.ELEVENLABS_STS_MODEL_ID || "eleven_english_sts_v2";
+        const form = new UndiciFormData();
+        const audioBlob = new Blob([fs.readFileSync(audioFile.path)]);
+        form.set("audio", audioBlob, audioFile.originalname || "audio.wav");
+        form.set("model_id", usedModelId);
+        if (req.body?.voice_settings) {
+          form.set("voice_settings", typeof req.body.voice_settings === "string"
+            ? req.body.voice_settings
+            : JSON.stringify(req.body.voice_settings));
+        }
+        if (req.body?.seed) {
+          form.set("seed", String(req.body.seed));
+        }
+
+        const elUrl = `https://api.elevenlabs.io/v1/speech-to-speech/${voiceId}/stream?output_format=mp3_44100_128`;
+        const elRes = await fetch(elUrl, {
+          method: "POST",
+          headers: {
+            "xi-api-key": elevenLabsKey,
+            "accept": "audio/mpeg",
+          },
+          body: form as any,
+        });
+
+        if (!elRes.ok) {
+          const errBody = await elRes.text().catch(() => "");
+          console.error("[voice_mask] ElevenLabs error", { status: elRes.status, body: errBody });
+          return res.status(502).json({ error: "elevenlabs_error", status: elRes.status, detail: errBody });
+        }
+
+        // 9. Write response to asset file
+        const maskId = crypto.randomUUID();
+        const maskPath = path.join(ASSETS_DIR, `${maskId}.mp3`);
+        const arrayBuf = await elRes.arrayBuffer();
+        fs.writeFileSync(maskPath, Buffer.from(arrayBuf));
+
+        // 10. Upload to R2 if enabled
+        if (r2Enabled()) {
+          try {
+            await r2PutFile(`renders/${maskId}.mp3`, maskPath, "audio/mpeg");
+          } catch (r2Err) {
+            console.error("[voice_mask] R2 upload failed (continuing)", r2Err);
+          }
+        }
+
+        // 11. Debit credits
+        const debitResult = await noteRenderComplete(req, {
+          kind: "voice_mask",
+          chargedCredits,
+          chargedChars,
+          meta: { maskId, durationSeconds, voiceId, modelId: usedModelId },
+        });
+        if (debitResult) {
+          return res.status(402).json({ error: debitResult });
+        }
+
+        // 12. Respond
+        const base = baseUrlFrom(req);
+        return res.json({
+          ok: true,
+          mask_id: maskId,
+          duration_seconds: durationSeconds,
+          charged_credits: chargedCredits,
+          asset_url: `${base}/api/assets/${maskId}`,
+        });
+      } catch (err) {
+        console.error("[voice_mask] unexpected error", err);
+        return res.status(500).json({ error: "internal_error" });
+      } finally {
+        // Cleanup uploaded temp file
+        if (tmpFile) {
+          fs.unlink(tmpFile, () => {});
+        }
+      }
+    }
+  );
 
   api.get("/assets/:render_id", secretGuard, async (req: Request, res: Response) => {
     try {

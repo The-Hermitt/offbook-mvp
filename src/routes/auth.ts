@@ -222,9 +222,10 @@ export function ensureSid(req: express.Request, _res: express.Response) {
 }
 
 export interface NoteRenderOpts {
+  kind?: string;
   chargedChars?: number;
   chargedCredits?: number;
-  meta?: { scriptId?: string; sceneId?: string; renderId?: string };
+  meta?: Record<string, any>;
 }
 
 export async function noteRenderComplete(req: express.Request, opts?: NoteRenderOpts): Promise<string | undefined> {
@@ -322,7 +323,7 @@ export async function noteRenderComplete(req: express.Request, opts?: NoteRender
     await dbRun(
       `INSERT INTO usage_events (id, user_id, kind, chars, credits, meta_json)
        VALUES (?, ?, ?, ?, ?, ?)`,
-      [crypto.randomUUID(), userId, "render_tts", opts?.chargedChars ?? null, spend, metaJson]
+      [crypto.randomUUID(), userId, opts?.kind || "render_tts", opts?.chargedChars ?? null, spend, metaJson]
     );
   } catch (err) {
     console.error("[credits] failed to insert usage_event", err);
