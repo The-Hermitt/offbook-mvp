@@ -209,6 +209,55 @@ async function getOrLoadScript(scriptId: string, userId: string): Promise<Script
   return null;
 }
 
+// UUID v4 pattern used as a safety guard in getScriptForUserOrMigrate.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Like getOrLoadScript but handles the case where X-OffBook-User changed
+ * between Upload (ios:device:*) and Rehearse (ios:otid:*). If the exact
+ * user lookup misses, falls back to a user-agnostic DB query, migrates
+ * ownership to the new user_id, and repopulates the cache.
+ *
+ * Manual test:
+ *   1. Upload script with X-OffBook-User: ios:device:AAA
+ *   2. Call /debug/render with X-OffBook-User: ios:otid:BBB
+ *   3. Expect 200 + log: [scripts] migrated ownership
+ *      { script_id, from_user: "ios:device:AAA", to_user: "ios:otid:BBB" }
+ */
+async function getScriptForUserOrMigrate(scriptId: string, userId: string): Promise<Script | null> {
+  // Safety guard: only attempt user-agnostic fallback for UUID-shaped IDs.
+  if (!UUID_RE.test(scriptId)) return getOrLoadScript(scriptId, userId);
+
+  // Fast path: exact user match (hits in-memory cache first).
+  const exact = await getOrLoadScript(scriptId, userId);
+  if (exact) return exact;
+
+  // Fallback: find script by id only, ignoring user_id.
+  try {
+    const row = await dbGet<ScriptRow>(
+      "SELECT id, user_id, title, scene_count, scenes_json FROM scripts WHERE id = ?",
+      [scriptId]
+    );
+    if (!row) return null;
+
+    const fromUser = row.user_id;
+
+    // Migrate ownership in DB to the current user_id.
+    await dbRun("UPDATE scripts SET user_id = ? WHERE id = ?", [userId, scriptId]);
+
+    // Populate in-memory cache under the new user key.
+    const script = deserializeScriptRow(row);
+    if (!script) return null;
+    scripts.set(`${userId}:${scriptId}`, script);
+
+    console.log("[scripts] migrated ownership", { script_id: scriptId, from_user: fromUser, to_user: userId });
+    return script;
+  } catch (err) {
+    console.error("[scripts] fallback lookup failed", scriptId, err);
+    return null;
+  }
+}
+
 function getUserIdOr401(req: Request, res: Response): string | null {
   const { passkeyLoggedIn, userId } = getPasskeySession(req as any);
   if (passkeyLoggedIn && userId) {
@@ -1749,7 +1798,7 @@ export function initHttpRoutes(app: Express) {
       return res.status(400).json({ error: "script_id required" });
     }
 
-    const script = await getOrLoadScript(scriptId, userId);
+    const script = await getScriptForUserOrMigrate(scriptId, userId);
     if (!script) {
       return res.status(404).json({ error: "script not found" });
     }
@@ -1772,7 +1821,7 @@ export function initHttpRoutes(app: Express) {
       return res.status(400).json({ error: "voice_map required" });
     }
 
-    const script = await getOrLoadScript(script_id, userId);
+    const script = await getScriptForUserOrMigrate(script_id, userId);
     if (!script) {
       return res.status(404).json({ error: "script not found" });
     }
@@ -2094,7 +2143,7 @@ export function initHttpRoutes(app: Express) {
       return res.status(400).json({ error: "script_id, scene_id, role required" });
     }
 
-    const script = await getOrLoadScript(script_id, userId);
+    const script = await getScriptForUserOrMigrate(script_id, userId);
     if (!script) {
       return res.status(404).json({ error: "script not found" });
     }
