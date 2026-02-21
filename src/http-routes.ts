@@ -348,7 +348,10 @@ function isValidSpeakerShape(speaker: string): boolean {
   if (!s) return false;
   const words = s.split(/\s+/);
   if (words.length < 1 || words.length > 3) return false;
-  if (SPEAKER_STOPWORDS.has(words[0].replace(/['']/g, ""))) return false;
+  // Reject if ANY word is a stopword (catches "AND WHAT DO YOU", "WHAT'S", etc.)
+  if (words.some(w => SPEAKER_STOPWORDS.has(w.replace(/['']/g, "")))) return false;
+  // Reject if any word exceeds 12 letters after stripping punctuation (kills "INTERCOLLEGIATE")
+  if (words.some(w => w.replace(/[^A-Z]/g, "").length > 12)) return false;
   return words.every(w => VALID_SPEAKER_WORD_RE.test(w));
 }
 
@@ -403,6 +406,7 @@ function fixFalseSpeakers(
   scenes: Scene[],
   whitelist: string[]
 ): { scenes: Scene[]; fixedCount: number; droppedSpeakers: string[] } {
+  const openMode = whitelist.length === 0;
   const whiteSet = new Set(whitelist.map(w => w.toUpperCase()));
   whiteSet.add("UNKNOWN");
   let fixedCount = 0;
@@ -413,7 +417,12 @@ function fixFalseSpeakers(
     const fixed: SceneLine[] = [];
     for (const ln of sc.lines) {
       const upper = (ln.speaker || "").trim().toUpperCase();
-      if (whiteSet.has(upper) && isValidSpeakerShape(upper)) {
+      // open mode: accept any speaker passing shape validation
+      // whitelist mode: accept only whitelisted speakers passing shape validation
+      const accept = openMode
+        ? (upper === "UNKNOWN" || isValidSpeakerShape(upper))
+        : (whiteSet.has(upper) && isValidSpeakerShape(upper));
+      if (accept) {
         fixed.push(ln);
       } else {
         // Bad speaker — merge into previous or convert to UNKNOWN
@@ -499,23 +508,6 @@ async function llmCleanupToScenes(
   const model = process.env.IMPORT_CLEANUP_MODEL;
   if (!apiKey || !model) return null;
 
-  const systemPrompt = [
-    "You are a screenplay dialogue extractor. Given raw script text (possibly from OCR), extract lines as structured JSON and label their kind.",
-    "Rules:",
-    "- Each extracted line must include kind: dialogue, action, or heading.",
-    "- Only spoken dialogue should be kind=\"dialogue\".",
-    "- Scene headings/transitions must be kind=\"heading\"; action/description must be kind=\"action\".",
-    "- Do not invent dialogue.",
-    "- Do not treat scene headings, transitions, or action as dialogue.",
-    "- Merge broken dialogue lines that clearly belong to the same speaker's speech.",
-    "- Preserve the original order of dialogue.",
-    "- Speaker must be from the provided whitelist OR 'UNKNOWN'. Do NOT create new speakers.",
-    "- NEVER create speakers from dialogue fragments (e.g. 'AND WHAT DO YOU', 'I DON'T PLAY', 'WHAT'S').",
-    "- Do NOT treat names mentioned inside dialogue as speakers unless they appear in the whitelist.",
-    "- Prefer speaker names in ALL CAPS.",
-    "- Group lines into scenes. If scene breaks are unclear, put all lines in one scene titled \"Scene 1\".",
-  ].join("\n");
-
   const normalizedWhitelist = Array.from(
     new Set(speakerWhitelist.map(s => s.trim().toUpperCase()).filter(Boolean))
   );
@@ -530,15 +522,52 @@ async function llmCleanupToScenes(
     console.log("[import-cleanup] whitelist empty; enum enforcement off");
   }
 
-  const userContent = [
-    `TITLE: ${title}`,
-    "",
-    `LIKELY SPEAKERS (use ONLY these as speaker values; if unsure use 'UNKNOWN'):`,
-    whitelistStr,
-    "",
-    "SCRIPT:",
-    rawText,
+  const commonRules = [
+    "You are a screenplay dialogue extractor. Given raw script text (possibly from OCR), extract lines as structured JSON and label their kind.",
+    "Rules:",
+    "- Each extracted line must include kind: dialogue, action, or heading.",
+    "- Only spoken dialogue should be kind=\"dialogue\".",
+    "- Scene headings/transitions must be kind=\"heading\"; action/description must be kind=\"action\".",
+    "- Do not invent dialogue.",
+    "- Do not treat scene headings, transitions, or action as dialogue.",
+    "- Merge broken dialogue lines that clearly belong to the same speaker's speech.",
+    "- Preserve the original order of dialogue.",
+  ];
+  const speakerRules = normalizedWhitelist.length > 0
+    ? [
+        "- Speaker must be from the provided whitelist OR 'UNKNOWN'. Do NOT create new speakers.",
+        "- NEVER create speakers from dialogue fragments (e.g. 'AND WHAT DO YOU', 'I DON'T PLAY', 'WHAT'S').",
+        "- Do NOT treat names mentioned inside dialogue as speakers unless they appear in the whitelist.",
+        "- Prefer speaker names in ALL CAPS.",
+      ]
+    : [
+        "- Speaker names must be ALL CAPS, 1–3 words (e.g. TOMMY, DEAN PRINCE, MR LEE).",
+        "- NEVER use dialogue fragments as speakers (e.g. 'AND WHAT DO YOU', 'WHAT'S', 'PAN-AM INTERCOLLEGIATE').",
+        "- Do NOT treat names mentioned inside dialogue as speakers.",
+        "- If the speaker is unclear or looks like a sentence fragment, use 'UNKNOWN'.",
+      ];
+  const systemPrompt = [
+    ...commonRules,
+    ...speakerRules,
+    "- Group lines into scenes. If scene breaks are unclear, put all lines in one scene titled \"Scene 1\".",
   ].join("\n");
+
+  const userContent = normalizedWhitelist.length > 0
+    ? [
+        `TITLE: ${title}`,
+        "",
+        `LIKELY SPEAKERS (use ONLY these as speaker values; if unsure use 'UNKNOWN'):`,
+        whitelistStr,
+        "",
+        "SCRIPT:",
+        rawText,
+      ].join("\n")
+    : [
+        `TITLE: ${title}`,
+        "",
+        "SCRIPT:",
+        rawText,
+      ].join("\n");
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 25_000);
@@ -1476,11 +1505,18 @@ export function initHttpRoutes(app: Express) {
     let cleanupOutLines = 0;
     const qualityCheck = shouldUseImportCleanup(rawText, scenes);
     if (qualityCheck.use) {
-      let whitelistMode: "raw" | "heuristic" = "raw";
-      let whitelist = extractSpeakersFromRawText(rawText);
-      if (whitelist.length < 2) {
-        whitelist = buildSpeakerWhitelistFromHeuristic(scenes);
+      let whitelistMode: "raw" | "heuristic" | "open" = "raw";
+      let whitelist = extractSpeakersFromRawText(rawText).filter(isValidSpeakerShape);
+      if (whitelist.length <= 3) {
+        const fromScenes = buildSpeakerWhitelistFromHeuristic(scenes).filter(isValidSpeakerShape);
+        whitelist = Array.from(new Set([...whitelist, ...fromScenes]));
         whitelistMode = "heuristic";
+      }
+      const weak = whitelist.length <= 2 &&
+        (qualityCheck.reason === "too_few_lines" || qualityCheck.reason === "speaker_mixing");
+      if (weak) {
+        whitelist = [];
+        whitelistMode = "open";
       }
       logImportCleanupDebug(rawText);
       const t0 = Date.now();
@@ -1589,11 +1625,18 @@ export function initHttpRoutes(app: Express) {
           // Auto LLM cleanup if quality is poor
           const qualityCheck = shouldUseImportCleanup(extracted, scenes);
           if (qualityCheck.use) {
-            let whitelistMode: "raw" | "heuristic" = "raw";
-            let whitelist = extractSpeakersFromRawText(extracted);
-            if (whitelist.length < 2) {
-              whitelist = buildSpeakerWhitelistFromHeuristic(scenes);
+            let whitelistMode: "raw" | "heuristic" | "open" = "raw";
+            let whitelist = extractSpeakersFromRawText(extracted).filter(isValidSpeakerShape);
+            if (whitelist.length <= 3) {
+              const fromScenes = buildSpeakerWhitelistFromHeuristic(scenes).filter(isValidSpeakerShape);
+              whitelist = Array.from(new Set([...whitelist, ...fromScenes]));
               whitelistMode = "heuristic";
+            }
+            const weak = whitelist.length <= 2 &&
+              (qualityCheck.reason === "too_few_lines" || qualityCheck.reason === "speaker_mixing");
+            if (weak) {
+              whitelist = [];
+              whitelistMode = "open";
             }
             logImportCleanupDebug(extracted);
             const t0 = Date.now();
