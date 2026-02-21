@@ -982,10 +982,7 @@ async function newTesseractWorker(): Promise<TesseractWorker | null> {
     const { createWorker } = (tesseract as any);
 
     // IMPORTANT: no options with logger() → avoids DataCloneError in worker.postMessage
-    const worker = await createWorker();
-    await worker.load();
-    await worker.loadLanguage("eng");
-    await worker.initialize("eng");
+    const worker = await createWorker('eng');
     return worker as TesseractWorker;
   } catch (e) {
     console.error("[ocr] init failed:", e);
@@ -1025,7 +1022,7 @@ async function extractTextFromPdf(buffer: Buffer): Promise<string> {
     const pngs = await rasterizePdfToPngBuffers(buffer, 3);
     let ocr = "";
     for (const img of pngs) {
-      const res = await worker.recognize(img, "eng");
+      const res = await worker.recognize(img);
       ocr += (res?.data?.text || "") + "\n";
       if (ocr.replace(/\s+/g, " ").trim().length >= 40) break;
     }
@@ -1042,7 +1039,7 @@ async function extractTextFromImage(buffer: Buffer): Promise<string> {
   const worker = await newTesseractWorker();
   if (!worker) return "";
   try {
-    const res = await worker.recognize(buffer, "eng");
+    const res = await worker.recognize(buffer);
     await worker.terminate();
     return res?.data?.text || "";
   } catch (e) {
