@@ -991,8 +991,18 @@ async function newTesseractWorker(): Promise<TesseractWorker | null> {
 }
 
 async function rasterizePdfToPngBuffers(pdfBuffer: Buffer, maxPages = 3): Promise<Buffer[]> {
-  const pdfjs = await import("pdfjs-dist/legacy/build/pdf");
-  const { createCanvas } = await import("canvas");
+  let pdfjs: any;
+  let createCanvas: any;
+  try {
+    pdfjs = await import("pdfjs-dist/legacy/build/pdf");
+    ({ createCanvas } = await import("canvas"));
+  } catch (e: any) {
+    if (e?.code === "MODULE_NOT_FOUND" || /Cannot find module/.test(e?.message ?? "")) {
+      console.warn("[ocr] pdfjs-dist missing; skipping server-side PDF OCR (client OCR fallback)");
+      return [];
+    }
+    throw e;
+  }
   const loadingTask = (pdfjs as any).getDocument({ data: pdfBuffer });
   const pdf = await loadingTask.promise;
   const n = Math.min(pdf.numPages, maxPages);
@@ -1028,8 +1038,15 @@ async function extractTextFromPdf(buffer: Buffer): Promise<string> {
     }
     await worker.terminate();
     return ocr;
-  } catch (e) {
-    console.error("[ocr] pdf ocr failed:", e);
+  } catch (e: any) {
+    if (
+      e?.code === "ERR_MODULE_NOT_FOUND" &&
+      /pdfjs-dist|canvas/.test(e?.message ?? "")
+    ) {
+      console.warn("[ocr] server pdf OCR skipped (missing pdfjs-dist/canvas); client OCR fallback");
+    } else {
+      console.error("[ocr] pdf ocr failed:", e);
+    }
     try { await worker.terminate(); } catch {}
     return "";
   }
