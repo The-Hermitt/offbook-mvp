@@ -379,6 +379,78 @@ function logImportCleanupDebug(rawText: string) {
 }
 
 // ---------------------------------------------------------------------------
+// Speaker collapse: deterministic post-parse cleanup of bogus OCR speakers
+// ---------------------------------------------------------------------------
+
+const BOGUS_SPEAKER_DENYLIST_HR = new Set([
+  "OK", "HOLD", "HEADING", "ROGER", "COPY", "CLEAR",
+  "PEOPLE", "FREAKING", "PERFECT", "THANK", "ABSOLUTELY",
+  "NEGATIVE", "AFFIRMATIVE", "CONTACT", "MOVE", "STOP",
+  "WAIT", "READY", "SET", "GOOD", "OKAY",
+  "NEED", "SOME", "HAVE", "START", "CHECK",
+]);
+
+const ALWAYS_KEEP_HR = new Set(["ACTION", "UNKNOWN", "NARRATOR", "SYSTEM"]);
+
+function isPlausibleSpeakerNameHR(s: string): boolean {
+  if (ALWAYS_KEEP_HR.has(s)) return true;
+  if (/[.?!,;:]/.test(s)) return false;
+  const words = s.split(/\s+/);
+  if (words.length < 1 || words.length > 3) return false;
+  for (const w of words) {
+    if (/^[A-Z]+'(M|RE|VE|D|LL|T|S)$/.test(w)) return false;
+    const bare = w.replace(/[^A-Z]/g, "");
+    if (BOGUS_SPEAKER_DENYLIST_HR.has(bare)) return false;
+    if (!/^[A-Z][A-Z'-]*[A-Z]$/.test(w) && !/^[A-Z]$/.test(w)) return false;
+  }
+  return true;
+}
+
+function collapseBogusSpeakersHR(
+  scenes: Scene[]
+): { scenes: Scene[]; dropped: string[]; messy: boolean } {
+  const freq = new Map<string, number>();
+  for (const sc of scenes) {
+    for (const ln of sc.lines) {
+      const s = (ln.speaker || "").trim().toUpperCase();
+      if (s) freq.set(s, (freq.get(s) ?? 0) + 1);
+    }
+  }
+
+  const realSpeakers = Array.from(freq.keys()).filter(s => !ALWAYS_KEEP_HR.has(s));
+  const hasPuncSpeaker = realSpeakers.some(s => /[.?!,;:]/.test(s));
+  const hasDenylistSpeaker = realSpeakers.some(s =>
+    s.split(/\s+/).some(w => BOGUS_SPEAKER_DENYLIST_HR.has(w.replace(/[^A-Z]/g, "")))
+  );
+  const messy = realSpeakers.length > 6 || hasPuncSpeaker || hasDenylistSpeaker;
+
+  if (!messy) {
+    console.log("[speaker-collapse] messy=false before=%d", realSpeakers.length);
+    return { scenes, dropped: [], messy: false };
+  }
+
+  const plausible = realSpeakers
+    .filter(s => isPlausibleSpeakerNameHR(s))
+    .sort((a, b) => (freq.get(b) ?? 0) - (freq.get(a) ?? 0))
+    .slice(0, 8);
+  const keepSet = new Set([...plausible, ...ALWAYS_KEEP_HR]);
+  const dropped = realSpeakers.filter(s => !keepSet.has(s));
+
+  console.log("[speaker-collapse] messy=true before=%d after=%d kept=[%s] dropped=[%s]",
+    realSpeakers.length, plausible.length,
+    plausible.join(","), dropped.slice(0, 20).join(","));
+
+  const collapsedScenes = scenes.map(sc => ({
+    ...sc,
+    lines: sc.lines.map(ln => {
+      const up = (ln.speaker || "").trim().toUpperCase();
+      return keepSet.has(up) ? ln : { ...ln, speaker: "UNKNOWN" };
+    }),
+  }));
+  return { scenes: collapsedScenes, dropped, messy: true };
+}
+
+// ---------------------------------------------------------------------------
 // AI Normalize: detect OCR-specific speaker failures and reformat via LLM
 // ---------------------------------------------------------------------------
 
@@ -1833,20 +1905,33 @@ export function initHttpRoutes(app: Express) {
       }
     }
 
+    // Speaker collapse #1: deterministic cleanup of bogus OCR speakers after parse/LLM-cleanup
+    let collapseDropped: string[] = [];
+    let collapseUsed = false;
+    {
+      const cr = collapseBogusSpeakersHR(scenes);
+      scenes = cr.scenes;
+      collapseDropped = cr.dropped;
+      collapseUsed = cr.messy;
+    }
+
     // AI Normalize: second-pass OCR speaker repair.
-    // Runs after any cleanup pass (including when cleanupUsed===true) so that
-    // action_leaks/bogus-speaker cleanup paths are also covered.
+    // Triggers when shouldAiNormalize detects bogus speakers OR when the cleanup
+    // reason indicates action/heading leaks that survived the cleanup pass.
     let aiNormalizeUsed = false;
     let aiNormalizeReason = "";
     {
       const normalizeCheck = shouldAiNormalize(scenes);
-      if (normalizeCheck.use) {
+      const forceNormalize =
+        cleanupReason === "action_leaks" || cleanupReason === "heading_leaks";
+      if (normalizeCheck.use || forceNormalize) {
+        const triggerReason = normalizeCheck.use ? normalizeCheck.reason : cleanupReason;
         const speakersBefore = Array.from(
           new Set(scenes.flatMap(sc => Array.isArray(sc.lines) ? sc.lines.map(ln => ln.speaker) : []))
         ).filter(Boolean);
         console.log(
-          "[import-ai-normalize] triggered_after_cleanup reason=%s cleanupUsed=%s cleanupOk=%s cleanupReason=%s speakersBefore=%d",
-          normalizeCheck.reason, cleanupUsed, cleanupUsed && cleanupOutLines > 0, cleanupReason, speakersBefore.length
+          "[import-ai-normalize] triggered reason=%s cleanupUsed=%s cleanupReason=%s collapseUsed=%s speakersBefore=%d",
+          triggerReason, cleanupUsed, cleanupReason, collapseUsed, speakersBefore.length
         );
 
         const t0 = Date.now();
@@ -1854,7 +1939,10 @@ export function initHttpRoutes(app: Express) {
         const ms = Date.now() - t0;
 
         if (normalizedText && normalizedText.length >= 50) {
-          const newScenes = parseScenesFromText(normalizedText, rawTitle);
+          let newScenes = parseScenesFromText(normalizedText, rawTitle);
+          // Speaker collapse on the normalized result too
+          const ncr = collapseBogusSpeakersHR(newScenes);
+          newScenes = ncr.scenes;
           const newAllLines = newScenes.flatMap(sc => Array.isArray(sc.lines) ? sc.lines : []);
           const speakersAfter = Array.from(new Set(newAllLines.map(ln => ln.speaker).filter(Boolean)));
           console.log(
@@ -1863,10 +1951,16 @@ export function initHttpRoutes(app: Express) {
             speakersBefore.length, speakersAfter.length,
             newScenes.length, newAllLines.length, ms
           );
-          if (newScenes.length > 0 && newAllLines.length >= 4) {
+          // Accept normalized result if it has more lines and fewer bogus speakers
+          if (newScenes.length > 0 && newAllLines.length >= 4 &&
+              (speakersAfter.length < speakersBefore.length || newAllLines.length >= scenes.flatMap(sc => sc.lines).length * 0.8)) {
             scenes = newScenes;
+            collapseDropped = ncr.dropped;
+            collapseUsed = ncr.messy || collapseUsed;
             aiNormalizeUsed = true;
-            aiNormalizeReason = normalizeCheck.reason;
+            aiNormalizeReason = triggerReason;
+          } else {
+            console.log("[import-ai-normalize] result not better, keeping pre-normalize scenes");
           }
         } else {
           console.log("[import-ai-normalize] returned empty/short result ms=%d", ms);
@@ -1897,6 +1991,7 @@ export function initHttpRoutes(app: Express) {
       scene_count: scenes.length,
       speakers,
       ...(cleanupUsed ? { cleanup_used: true, cleanup_reason: cleanupReason, cleanup_out_lines: cleanupOutLines } : {}),
+      ...(collapseUsed ? { speaker_collapse_used: true, speaker_collapse_dropped: collapseDropped } : {}),
       ...(aiNormalizeUsed ? { ai_normalize_used: true, ai_normalize_reason: aiNormalizeReason } : {}),
     });
   });
@@ -2002,6 +2097,65 @@ export function initHttpRoutes(app: Express) {
           }
         }
 
+        // Speaker collapse #1: deterministic cleanup of bogus OCR speakers
+        let uploadCollapseDropped: string[] = [];
+        let uploadCollapseUsed = false;
+        if (scenes.length > 0) {
+          const cr = collapseBogusSpeakersHR(scenes);
+          scenes = cr.scenes;
+          uploadCollapseDropped = cr.dropped;
+          uploadCollapseUsed = cr.messy;
+        }
+
+        // AI Normalize: second-pass OCR speaker repair (same gating as upload_script_text)
+        let uploadAiNormalizeUsed = false;
+        let uploadAiNormalizeReason = "";
+        if (scenes.length > 0) {
+          const normalizeCheck = shouldAiNormalize(scenes);
+          const forceNormalize =
+            cleanupReason === "action_leaks" || cleanupReason === "heading_leaks";
+          if (normalizeCheck.use || forceNormalize) {
+            const triggerReason = normalizeCheck.use ? normalizeCheck.reason : cleanupReason;
+            const speakersBefore = Array.from(
+              new Set(scenes.flatMap(sc => Array.isArray(sc.lines) ? sc.lines.map(ln => ln.speaker) : []))
+            ).filter(Boolean);
+            console.log(
+              "[import-ai-normalize] triggered reason=%s cleanupUsed=%s cleanupReason=%s collapseUsed=%s speakersBefore=%d",
+              triggerReason, cleanupUsed, cleanupReason, uploadCollapseUsed, speakersBefore.length
+            );
+
+            const t0 = Date.now();
+            const normalizedText = await aiNormalizeOcrText(extracted, title);
+            const ms = Date.now() - t0;
+
+            if (normalizedText && normalizedText.length >= 50) {
+              let newScenes = parseScenesFromText(normalizedText, title);
+              const ncr = collapseBogusSpeakersHR(newScenes);
+              newScenes = ncr.scenes;
+              const newAllLines = newScenes.flatMap(sc => Array.isArray(sc.lines) ? sc.lines : []);
+              const speakersAfter = Array.from(new Set(newAllLines.map(ln => ln.speaker).filter(Boolean)));
+              console.log(
+                "[import-ai-normalize] in_chars=%d out_chars=%d speakers_before=%d speakers_after=%d outScenes=%d outLines=%d ms=%d",
+                extracted.length, normalizedText.length,
+                speakersBefore.length, speakersAfter.length,
+                newScenes.length, newAllLines.length, ms
+              );
+              if (newScenes.length > 0 && newAllLines.length >= 4 &&
+                  (speakersAfter.length < speakersBefore.length || newAllLines.length >= scenes.flatMap(sc => sc.lines).length * 0.8)) {
+                scenes = newScenes;
+                uploadCollapseDropped = ncr.dropped;
+                uploadCollapseUsed = ncr.messy || uploadCollapseUsed;
+                uploadAiNormalizeUsed = true;
+                uploadAiNormalizeReason = triggerReason;
+              } else {
+                console.log("[import-ai-normalize] result not better, keeping pre-normalize scenes");
+              }
+            } else {
+              console.log("[import-ai-normalize] returned empty/short result ms=%d", ms);
+            }
+          }
+        }
+
         const id = crypto.randomUUID();
         const script: Script = {
           id,
@@ -2040,6 +2194,8 @@ export function initHttpRoutes(app: Express) {
           textLen,
           ...(note ? { note } : {}),
           ...(cleanupUsed ? { cleanup_used: true, cleanup_reason: cleanupReason, cleanup_out_lines: cleanupOutLines } : {}),
+          ...(uploadCollapseUsed ? { speaker_collapse_used: true, speaker_collapse_dropped: uploadCollapseDropped } : {}),
+          ...(uploadAiNormalizeUsed ? { ai_normalize_used: true, ai_normalize_reason: uploadAiNormalizeReason } : {}),
         });
       } catch (e) {
         console.error("[upload] failed:", e);
