@@ -366,7 +366,33 @@ function shouldUseImportCleanup(
     return { use: true, reason: "pdf_gibberish", metrics: { gibberishHits } };
   }
 
-  return { use: false, reason: "quality_ok", metrics: { totalLines, headingLeaks, actionLeaks, speakerMixes, gibberishHits } };
+  // Speaker distribution analysis
+  const speakerCounts = new Map<string, number>();
+  for (const ln of allLines) {
+    const s = (ln.speaker || "").trim().toUpperCase();
+    speakerCounts.set(s, (speakerCounts.get(s) ?? 0) + 1);
+  }
+  const unknownActionCount = (speakerCounts.get("UNKNOWN") ?? 0) + (speakerCounts.get("ACTION") ?? 0);
+  const realSpeakerCount = Array.from(speakerCounts.keys()).filter(s => s !== "UNKNOWN" && s !== "ACTION" && s.length > 0).length;
+  const maxSpeakerShare = totalLines > 0
+    ? Math.max(...Array.from(speakerCounts.entries())
+        .filter(([s]) => s !== "UNKNOWN" && s !== "ACTION" && s.length > 0)
+        .map(([, c]) => c), 0) / totalLines
+    : 0;
+  const unknownActionShare = totalLines > 0 ? unknownActionCount / totalLines : 0;
+  const speakerMetrics = { realSpeakerCount, totalLines, maxSpeakerShare, unknownActionShare };
+
+  if (realSpeakerCount <= 1 && totalLines >= 8) {
+    return { use: true, reason: "single_speaker", metrics: speakerMetrics };
+  }
+  if (maxSpeakerShare >= 0.90 && totalLines >= 12) {
+    return { use: true, reason: "speaker_dominance", metrics: speakerMetrics };
+  }
+  if (unknownActionShare >= 0.60 && totalLines >= 8) {
+    return { use: true, reason: "mostly_unknown_action", metrics: speakerMetrics };
+  }
+
+  return { use: false, reason: "quality_ok", metrics: { totalLines, headingLeaks, actionLeaks, speakerMixes, gibberishHits, ...speakerMetrics } };
 }
 
 function logImportCleanupDebug(rawText: string) {
@@ -1575,12 +1601,20 @@ export function initHttpRoutes(app: Express) {
         whitelist = Array.from(new Set([...whitelist, ...fromScenes]));
         whitelistMode = "heuristic";
       }
-      const weak = whitelist.length <= 2 &&
-        (qualityCheck.reason === "too_few_lines" || qualityCheck.reason === "speaker_mixing");
-      if (weak) {
+      const OPEN_REASONS = new Set(["too_few_lines", "speaker_mixing", "single_speaker", "speaker_dominance", "mostly_unknown_action"]);
+      const weak = whitelist.length <= 2 && OPEN_REASONS.has(qualityCheck.reason);
+      const noRealSpeakers = whitelist.length === 0 || whitelist.every(s => s.toUpperCase() === "UNKNOWN");
+      if (weak || noRealSpeakers) {
         whitelist = [];
         whitelistMode = "open";
       }
+      const m = qualityCheck.metrics;
+      console.log(
+        "[import-cleanup] reason=%s totalLines=%d realSpeakers=%d maxShare=%s unkActionShare=%s whitelistMode=%s whitelistN=%d",
+        qualityCheck.reason, m.totalLines ?? 0, m.realSpeakerCount ?? 0,
+        (m.maxSpeakerShare ?? 0).toFixed(2), (m.unknownActionShare ?? 0).toFixed(2),
+        whitelistMode, whitelist.length
+      );
       logImportCleanupDebug(rawText);
       const t0 = Date.now();
       const result = await llmCleanupToScenes(rawText, rawTitle, whitelist);
@@ -1695,12 +1729,20 @@ export function initHttpRoutes(app: Express) {
               whitelist = Array.from(new Set([...whitelist, ...fromScenes]));
               whitelistMode = "heuristic";
             }
-            const weak = whitelist.length <= 2 &&
-              (qualityCheck.reason === "too_few_lines" || qualityCheck.reason === "speaker_mixing");
-            if (weak) {
+            const OPEN_REASONS = new Set(["too_few_lines", "speaker_mixing", "single_speaker", "speaker_dominance", "mostly_unknown_action"]);
+            const weak = whitelist.length <= 2 && OPEN_REASONS.has(qualityCheck.reason);
+            const noRealSpeakers = whitelist.length === 0 || whitelist.every(s => s.toUpperCase() === "UNKNOWN");
+            if (weak || noRealSpeakers) {
               whitelist = [];
               whitelistMode = "open";
             }
+            const m = qualityCheck.metrics;
+            console.log(
+              "[import-cleanup] reason=%s totalLines=%d realSpeakers=%d maxShare=%s unkActionShare=%s whitelistMode=%s whitelistN=%d",
+              qualityCheck.reason, m.totalLines ?? 0, m.realSpeakerCount ?? 0,
+              (m.maxSpeakerShare ?? 0).toFixed(2), (m.unknownActionShare ?? 0).toFixed(2),
+              whitelistMode, whitelist.length
+            );
             logImportCleanupDebug(extracted);
             const t0 = Date.now();
             const result = await llmCleanupToScenes(extracted, title, whitelist);
