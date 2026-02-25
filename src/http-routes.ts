@@ -1624,6 +1624,12 @@ export function initHttpRoutes(app: Express) {
         whitelist = [];
         whitelistMode = "open";
       }
+      const realWhitelist = whitelist.filter(s => s !== "UNKNOWN" && s !== "ACTION");
+      if (realWhitelist.length < 2) {
+        console.log("[import-cleanup] whitelist too small -> open (realWhitelist=%d)", realWhitelist.length);
+        whitelist = [];
+        whitelistMode = "open";
+      }
       logImportCleanupDebug(rawText);
       const t0 = Date.now();
       const result = await llmCleanupToScenes(rawText, rawTitle, whitelist);
@@ -1741,6 +1747,12 @@ export function initHttpRoutes(app: Express) {
             const weak = whitelist.length <= 2 &&
               (qualityCheck.reason === "too_few_lines" || qualityCheck.reason === "speaker_mixing");
             if (weak) {
+              whitelist = [];
+              whitelistMode = "open";
+            }
+            const realWhitelist = whitelist.filter(s => s !== "UNKNOWN" && s !== "ACTION");
+            if (realWhitelist.length < 2) {
+              console.log("[import-cleanup] whitelist too small -> open (realWhitelist=%d)", realWhitelist.length);
               whitelist = [];
               whitelistMode = "open";
             }
