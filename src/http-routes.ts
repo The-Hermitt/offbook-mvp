@@ -394,13 +394,19 @@ const ALWAYS_KEEP_HR = new Set(["ACTION", "UNKNOWN", "NARRATOR", "SYSTEM"]);
 
 function isPlausibleSpeakerNameHR(s: string): boolean {
   if (ALWAYS_KEEP_HR.has(s)) return true;
+  // Global punctuation gate: sentence-ending / list chars make a name invalid
   if (/[.?!,;:]/.test(s)) return false;
   const words = s.split(/\s+/);
   if (words.length < 1 || words.length > 3) return false;
   for (const w of words) {
+    // Reject English contractions: I'M, YOU'RE, CAN'T, IT'S, etc.
     if (/^[A-Z]+'(M|RE|VE|D|LL|T|S)$/.test(w)) return false;
+    // Strip all non-alpha before denylist check so punctuation-suffixed tokens
+    // (e.g. "THAT." or "ROGER,") can't bypass the denylist.
     const bare = w.replace(/[^A-Z]/g, "");
     if (BOGUS_SPEAKER_DENYLIST_HR.has(bare)) return false;
+    // Each word must be pure caps letters, optionally with internal apostrophe
+    // (O'BRIEN) or hyphen (MARY-LOU) — no trailing/leading punctuation.
     if (!/^[A-Z][A-Z'-]*[A-Z]$/.test(w) && !/^[A-Z]$/.test(w)) return false;
   }
   return true;
@@ -418,11 +424,16 @@ function collapseBogusSpeakersHR(
   }
 
   const realSpeakers = Array.from(freq.keys()).filter(s => !ALWAYS_KEEP_HR.has(s));
+
+  // Compute the full set of invalid speakers up-front — this is the primary
+  // collapse trigger so even a single bogus speaker (e.g. "ROGER THAT.") causes
+  // the whole set to be validated, regardless of total speaker count.
+  const invalidSpeakers = realSpeakers.filter(s => !isPlausibleSpeakerNameHR(s));
   const hasPuncSpeaker = realSpeakers.some(s => /[.?!,;:]/.test(s));
   const hasDenylistSpeaker = realSpeakers.some(s =>
     s.split(/\s+/).some(w => BOGUS_SPEAKER_DENYLIST_HR.has(w.replace(/[^A-Z]/g, "")))
   );
-  const messy = realSpeakers.length > 6 || hasPuncSpeaker || hasDenylistSpeaker;
+  const messy = invalidSpeakers.length > 0 || realSpeakers.length > 6 || hasPuncSpeaker || hasDenylistSpeaker;
 
   if (!messy) {
     console.log("[speaker-collapse] messy=false before=%d", realSpeakers.length);
@@ -434,6 +445,7 @@ function collapseBogusSpeakersHR(
     .sort((a, b) => (freq.get(b) ?? 0) - (freq.get(a) ?? 0))
     .slice(0, 8);
   const keepSet = new Set([...plausible, ...ALWAYS_KEEP_HR]);
+  // dropped = all invalid speakers + any valid ones beyond the top-8 cap
   const dropped = realSpeakers.filter(s => !keepSet.has(s));
 
   console.log("[speaker-collapse] messy=true before=%d after=%d kept=[%s] dropped=[%s]",
