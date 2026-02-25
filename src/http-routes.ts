@@ -366,33 +366,7 @@ function shouldUseImportCleanup(
     return { use: true, reason: "pdf_gibberish", metrics: { gibberishHits } };
   }
 
-  // Speaker distribution analysis
-  const speakerCounts = new Map<string, number>();
-  for (const ln of allLines) {
-    const s = (ln.speaker || "").trim().toUpperCase();
-    speakerCounts.set(s, (speakerCounts.get(s) ?? 0) + 1);
-  }
-  const unknownActionCount = (speakerCounts.get("UNKNOWN") ?? 0) + (speakerCounts.get("ACTION") ?? 0);
-  const realSpeakerCount = Array.from(speakerCounts.keys()).filter(s => s !== "UNKNOWN" && s !== "ACTION" && s.length > 0).length;
-  const maxSpeakerShare = totalLines > 0
-    ? Math.max(...Array.from(speakerCounts.entries())
-        .filter(([s]) => s !== "UNKNOWN" && s !== "ACTION" && s.length > 0)
-        .map(([, c]) => c), 0) / totalLines
-    : 0;
-  const unknownActionShare = totalLines > 0 ? unknownActionCount / totalLines : 0;
-  const speakerMetrics = { realSpeakerCount, totalLines, maxSpeakerShare, unknownActionShare };
-
-  if (realSpeakerCount <= 1 && totalLines >= 8) {
-    return { use: true, reason: "single_speaker", metrics: speakerMetrics };
-  }
-  if (maxSpeakerShare >= 0.90 && totalLines >= 12) {
-    return { use: true, reason: "speaker_dominance", metrics: speakerMetrics };
-  }
-  if (unknownActionShare >= 0.60 && totalLines >= 8) {
-    return { use: true, reason: "mostly_unknown_action", metrics: speakerMetrics };
-  }
-
-  return { use: false, reason: "quality_ok", metrics: { totalLines, headingLeaks, actionLeaks, speakerMixes, gibberishHits, ...speakerMetrics } };
+  return { use: false, reason: "quality_ok", metrics: { totalLines, headingLeaks, actionLeaks, speakerMixes, gibberishHits } };
 }
 
 function logImportCleanupDebug(rawText: string) {
@@ -575,26 +549,24 @@ function splitEmbeddedSpeakers(
 }
 
 // ---------------------------------------------------------------------------
-// shrinkTextForCleanup: reduce raw text size before sending to LLM
+// shrinkTextForCleanup: strip noise and cap length before sending to LLM
 // ---------------------------------------------------------------------------
-function shrinkTextForCleanup(rawText: string, maxChars = 22000): string {
-  // Watermark/header/footer patterns: lines with clusters of digits/hyphens, or known noise phrases
+function shrinkTextForCleanup(text: string, maxChars = 22000): string {
+  // Watermark/header/footer: lines with dense digit-or-hyphen clusters, or known noise phrases
   const WATERMARK_RE = /(?:\d[\s\-./]{1,3}){3,}|^\s*(?:page\s+\d+|actors?\s+access|breakdown\s+services|confidential|all\s+rights\s+reserved)\s*$/i;
-  // Speaker-colon marker: genuine dialogue label
+  // Genuine dialogue label: SPEAKER: text
   const SPEAKER_COLON_RE = /^[A-Z][A-Z0-9 _&'.-]{1,30}:\s/;
 
-  const lines = rawText.split(/\r?\n/);
   const kept: string[] = [];
-  for (const line of lines) {
+  for (const line of text.split(/\r?\n/)) {
     if (WATERMARK_RE.test(line)) continue;
-    // Drop very long lines with no speaker-colon prefix (OCR action dumps)
     if (line.length > 220 && !SPEAKER_COLON_RE.test(line.trim())) continue;
     kept.push(line);
   }
 
   let result = kept.join("\n");
 
-  // Last resort truncation: keep first 8000 + last 4000 chars
+  // Last-resort truncation: preserve title (head) + trailing dialogue (tail)
   if (result.length > maxChars) {
     result = result.slice(0, 8000) + "\n...\n" + result.slice(-4000);
   }
@@ -603,7 +575,7 @@ function shrinkTextForCleanup(rawText: string, maxChars = 22000): string {
 }
 
 // ---------------------------------------------------------------------------
-// llmCleanupAttempt: single attempt; returns result | null | "timeout"
+// llmCleanupAttempt: one OpenAI call; returns result | null | "timeout"
 // ---------------------------------------------------------------------------
 async function llmCleanupAttempt(
   text: string,
@@ -659,21 +631,8 @@ async function llmCleanupAttempt(
   ].join("\n");
 
   const userContent = normalizedWhitelist.length > 0
-    ? [
-        `TITLE: ${title}`,
-        "",
-        `LIKELY SPEAKERS (use ONLY these as speaker values; if unsure use 'UNKNOWN'):`,
-        whitelistStr,
-        "",
-        "SCRIPT:",
-        text,
-      ].join("\n")
-    : [
-        `TITLE: ${title}`,
-        "",
-        "SCRIPT:",
-        text,
-      ].join("\n");
+    ? [`TITLE: ${title}`, "", `LIKELY SPEAKERS (use ONLY these as speaker values; if unsure use 'UNKNOWN'):`, whitelistStr, "", "SCRIPT:", text].join("\n")
+    : [`TITLE: ${title}`, "", "SCRIPT:", text].join("\n");
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -686,10 +645,7 @@ async function llmCleanupAttempt(
   try {
     const resp = await fetch("https://api.openai.com/v1/responses", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
       body: JSON.stringify({
         model,
         input: [
@@ -748,7 +704,6 @@ async function llmCleanupAttempt(
 
     const json: any = await resp.json();
 
-    // Extract text from response.output[] -> message items -> output_text content
     let outputText = "";
     if (Array.isArray(json.output)) {
       for (const item of json.output) {
@@ -763,14 +718,13 @@ async function llmCleanupAttempt(
     }
 
     if (!outputText) {
-      console.error("[import-cleanup] attempt=%d no output_text found in response", attempt);
+      console.error("[import-cleanup] attempt=%d no output_text in response", attempt);
       return null;
     }
 
     const parsed = JSON.parse(outputText);
     if (!Array.isArray(parsed.scenes)) return null;
 
-    // Validate and build Scene[] with IDs
     const validScenes: Scene[] = [];
     let keptLines = 0;
     for (const sc of parsed.scenes) {
@@ -783,10 +737,7 @@ async function llmCleanupAttempt(
           ln.speaker.trim().length > 0 &&
           ln.text.trim().length > 0 &&
           ln.kind === "dialogue"
-      ).map((ln: any) => ({
-        speaker: ln.speaker.trim(),
-        text: ln.text.trim(),
-      }));
+      ).map((ln: any) => ({ speaker: ln.speaker.trim(), text: ln.text.trim() }));
       if (validLines.length > 0) {
         keptLines += validLines.length;
         validScenes.push({
@@ -798,8 +749,8 @@ async function llmCleanupAttempt(
     }
 
     if (validScenes.length === 0) return null;
-
     return { scenes: validScenes, keptLines };
+
   } catch (err: any) {
     if (err.name === "AbortError") {
       console.error("[import-cleanup] attempt=%d timeout after %dms", attempt, timeoutMs);
@@ -813,7 +764,7 @@ async function llmCleanupAttempt(
 }
 
 // ---------------------------------------------------------------------------
-// llmCleanupToScenes: public entry point; up to 2 attempts
+// llmCleanupToScenes: public entry point — up to 2 attempts
 // ---------------------------------------------------------------------------
 async function llmCleanupToScenes(
   rawText: string,
@@ -824,23 +775,23 @@ async function llmCleanupToScenes(
   const model = process.env.IMPORT_CLEANUP_MODEL;
   if (!apiKey || !model) return null;
 
-  const timeoutMs = parseInt(process.env.IMPORT_CLEANUP_TIMEOUT_MS ?? "90000", 10);
-  const fallbackModel = process.env.IMPORT_CLEANUP_MODEL_FALLBACK ?? "gpt-4o-mini";
+  const timeoutMs = parseInt(process.env.IMPORT_CLEANUP_TIMEOUT_MS || "90000", 10);
+  const fallbackModel = process.env.IMPORT_CLEANUP_MODEL_FALLBACK || "gpt-4o-mini";
 
-  // Attempt 1: primary model, text shrunk to remove noise
-  const shrunk1 = shrinkTextForCleanup(rawText);
-  const result1 = await llmCleanupAttempt(shrunk1, title, speakerWhitelist, model, timeoutMs, 1, apiKey);
-  if (result1 !== "timeout") return result1;
+  // Attempt 1: primary model, noise-filtered text (cap ~22 000 chars)
+  const shrunk1 = shrinkTextForCleanup(rawText, 22000);
+  const r1 = await llmCleanupAttempt(shrunk1, title, speakerWhitelist, model, timeoutMs, 1, apiKey);
+  if (r1 !== "timeout") return r1;
 
-  // Attempt 2: fallback model, more aggressively shrunk text (~14000 chars)
-  console.log("[import-cleanup] attempt=1 timed out; retrying with fallback model=%s", fallbackModel);
+  // Attempt 2 (timeout only): fallback model, more aggressive shrink (~14 000 chars)
+  console.log("[import-cleanup] attempt=1 timed out — retrying with fallback model=%s", fallbackModel);
   const shrunk2 = shrinkTextForCleanup(rawText, 14000);
-  const result2 = await llmCleanupAttempt(shrunk2, title, speakerWhitelist, fallbackModel, timeoutMs, 2, apiKey);
-  if (result2 === "timeout") {
+  const r2 = await llmCleanupAttempt(shrunk2, title, speakerWhitelist, fallbackModel, timeoutMs, 2, apiKey);
+  if (r2 === "timeout") {
     console.error("[import-cleanup] attempt=2 also timed out; giving up");
     return null;
   }
-  return result2;
+  return r2;
 }
 
 // ---------- Parser: supports `NAME: line` and screenplay blocks ----------
@@ -1667,20 +1618,12 @@ export function initHttpRoutes(app: Express) {
         whitelist = Array.from(new Set([...whitelist, ...fromScenes]));
         whitelistMode = "heuristic";
       }
-      const OPEN_REASONS = new Set(["too_few_lines", "speaker_mixing", "single_speaker", "speaker_dominance", "mostly_unknown_action"]);
-      const weak = whitelist.length <= 2 && OPEN_REASONS.has(qualityCheck.reason);
-      const noRealSpeakers = whitelist.length === 0 || whitelist.every(s => s.toUpperCase() === "UNKNOWN");
-      if (weak || noRealSpeakers) {
+      const weak = whitelist.length <= 2 &&
+        (qualityCheck.reason === "too_few_lines" || qualityCheck.reason === "speaker_mixing");
+      if (weak) {
         whitelist = [];
         whitelistMode = "open";
       }
-      const m = qualityCheck.metrics;
-      console.log(
-        "[import-cleanup] reason=%s totalLines=%d realSpeakers=%d maxShare=%s unkActionShare=%s whitelistMode=%s whitelistN=%d",
-        qualityCheck.reason, m.totalLines ?? 0, m.realSpeakerCount ?? 0,
-        (m.maxSpeakerShare ?? 0).toFixed(2), (m.unknownActionShare ?? 0).toFixed(2),
-        whitelistMode, whitelist.length
-      );
       logImportCleanupDebug(rawText);
       const t0 = Date.now();
       const result = await llmCleanupToScenes(rawText, rawTitle, whitelist);
@@ -1795,20 +1738,12 @@ export function initHttpRoutes(app: Express) {
               whitelist = Array.from(new Set([...whitelist, ...fromScenes]));
               whitelistMode = "heuristic";
             }
-            const OPEN_REASONS = new Set(["too_few_lines", "speaker_mixing", "single_speaker", "speaker_dominance", "mostly_unknown_action"]);
-            const weak = whitelist.length <= 2 && OPEN_REASONS.has(qualityCheck.reason);
-            const noRealSpeakers = whitelist.length === 0 || whitelist.every(s => s.toUpperCase() === "UNKNOWN");
-            if (weak || noRealSpeakers) {
+            const weak = whitelist.length <= 2 &&
+              (qualityCheck.reason === "too_few_lines" || qualityCheck.reason === "speaker_mixing");
+            if (weak) {
               whitelist = [];
               whitelistMode = "open";
             }
-            const m = qualityCheck.metrics;
-            console.log(
-              "[import-cleanup] reason=%s totalLines=%d realSpeakers=%d maxShare=%s unkActionShare=%s whitelistMode=%s whitelistN=%d",
-              qualityCheck.reason, m.totalLines ?? 0, m.realSpeakerCount ?? 0,
-              (m.maxSpeakerShare ?? 0).toFixed(2), (m.unknownActionShare ?? 0).toFixed(2),
-              whitelistMode, whitelist.length
-            );
             logImportCleanupDebug(extracted);
             const t0 = Date.now();
             const result = await llmCleanupToScenes(extracted, title, whitelist);
@@ -4392,16 +4327,4 @@ export function initHttpRoutes(app: Express) {
 export function registerHttpRoutes(app: express.Express): void {
   // Mount the API and debug routers on the main app.
   initHttpRoutes(app as Express);
-
-  // Optional warmup: pre-cache model schema path to avoid cold-start timeouts
-  if (process.env.IMPORT_CLEANUP_WARMUP === "1") {
-    const t0 = Date.now();
-    llmCleanupToScenes("JANE: Hi\nGABE: Hey", "warmup", [])
-      .then(result => {
-        console.log("[import-cleanup] warmup ok=%s ms=%d", !!(result && result.scenes.length > 0), Date.now() - t0);
-      })
-      .catch(err => {
-        console.warn("[import-cleanup] warmup error: %s", err?.message || err);
-      });
-  }
 }
