@@ -1725,6 +1725,80 @@ function uniqueSpeakers(sc: Scene) {
   set.delete("NARRATOR"); set.delete("SYSTEM");
   return Array.from(set);
 }
+
+// Denylist of action/filler words that should never be speaker names in OCR output
+const BOGUS_SPEAKER_DENYLIST = new Set([
+  "OK", "HOLD", "HEADING", "ROGER", "COPY", "CLEAR",
+  "PEOPLE", "FREAKING", "PERFECT", "THANK", "ABSOLUTELY",
+  "NEGATIVE", "AFFIRMATIVE", "CONTACT", "MOVE", "STOP",
+  "WAIT", "READY", "SET", "GOOD", "OKAY",
+]);
+
+function isPlausibleSpeakerName(s: string): boolean {
+  if (s === "ACTION" || s === "UNKNOWN" || s === "NARRATOR" || s === "SYSTEM") return true;
+  // Reject if contains sentence/list punctuation (apostrophe allowed for O'NAME only)
+  if (/[.?!,;:]/.test(s)) return false;
+  const words = s.split(/\s+/);
+  if (words.length < 1 || words.length > 3) return false;
+  for (const w of words) {
+    // Reject English contractions: I'M, YOU'RE, CAN'T, DON'T, IT'S etc.
+    if (/^[A-Z]+'(M|RE|VE|D|LL|T|S)$/.test(w)) return false;
+    // Denylist check (strip non-alpha first)
+    const bare = w.replace(/[^A-Z]/g, "");
+    if (BOGUS_SPEAKER_DENYLIST.has(bare)) return false;
+    // Each word must be letters only, optionally with apostrophe (O'BRIEN) or hyphen
+    if (!/^[A-Z][A-Z'-]*[A-Z]$/.test(w) && !/^[A-Z]$/.test(w)) return false;
+  }
+  return true;
+}
+
+function collapseBogusSpeakers(scenes: Scene[]): Scene[] {
+  // Build frequency table across all scenes
+  const freq = new Map<string, number>();
+  for (const sc of scenes) {
+    for (const ln of sc.lines) {
+      const s = (ln.speaker || "").trim().toUpperCase();
+      if (s) freq.set(s, (freq.get(s) ?? 0) + 1);
+    }
+  }
+
+  const ALWAYS_KEEP = new Set(["ACTION", "UNKNOWN", "NARRATOR", "SYSTEM"]);
+  const realSpeakers = Array.from(freq.keys()).filter(s => !ALWAYS_KEEP.has(s));
+
+  // Detect OCR-messy parse
+  const hasPuncSpeaker = realSpeakers.some(s => /[.?!,;:]/.test(s));
+  const hasDenylistSpeaker = realSpeakers.some(s =>
+    s.split(/\s+/).some(w => BOGUS_SPEAKER_DENYLIST.has(w.replace(/[^A-Z]/g, "")))
+  );
+  const messy = realSpeakers.length > 6 || hasPuncSpeaker || hasDenylistSpeaker;
+
+  if (!messy) {
+    console.log("[speaker-collapse] messy=false before=%d", realSpeakers.length);
+    return scenes;
+  }
+
+  // Keep top 8 plausible speakers by frequency
+  const plausible = realSpeakers
+    .filter(s => isPlausibleSpeakerName(s))
+    .sort((a, b) => (freq.get(b) ?? 0) - (freq.get(a) ?? 0))
+    .slice(0, 8);
+  const keepSet = new Set([...plausible, ...ALWAYS_KEEP]);
+
+  const dropped = realSpeakers.filter(s => !keepSet.has(s));
+  console.log("[speaker-collapse] messy=true before=%d after=%d kept=[%s] dropped=[%s]",
+    realSpeakers.length, plausible.length,
+    plausible.join(","), dropped.slice(0, 20).join(","));
+
+  // Remap bogus speakers → UNKNOWN
+  return scenes.map(sc => ({
+    ...sc,
+    lines: sc.lines.map(ln => {
+      const up = (ln.speaker || "").trim().toUpperCase();
+      return keepSet.has(up) ? ln : { ...ln, speaker: "UNKNOWN" };
+    }),
+  }));
+}
+
 const isBoilerplate = (txt: string) => {
   const s = (txt || "").trim().toLowerCase();
   if (!s) return true;
@@ -2478,7 +2552,7 @@ function mountFallbackDebugRoutes() {
       const title = String(req.body?.title || "Script");
       const text = String(req.body?.text || "");
       const id = genId("scr");
-      const scenes = parseTextToScenes(title, text);
+      const scenes = collapseBogusSpeakers(parseTextToScenes(title, text));
       const speakers = uniqueSpeakers(scenes[0]);
 
       const cacheKey = scriptCacheKey(userId, id);
