@@ -378,6 +378,171 @@ function logImportCleanupDebug(rawText: string) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// AI Normalize: detect OCR-specific speaker failures and reformat via LLM
+// ---------------------------------------------------------------------------
+
+const OCR_ACTION_FRAGMENTS = new Set([
+  "HOLD", "GO", "CLEAR", "COPY", "ROGER", "NEGATIVE", "AFFIRMATIVE",
+  "CONTACT", "MOVE", "STOP", "WAIT", "STAY", "READY", "SET", "NOW",
+  "GOOD", "OK", "OKAY", "YES", "NO", "RIGHT", "LEFT", "DOWN", "UP",
+  "HEADING", "TARGET", "SECURE", "BREAK", "FALL", "BACK", "OUT",
+]);
+
+function shouldAiNormalize(
+  scenes: Scene[]
+): { use: boolean; reason: string; metrics: Record<string, unknown> } {
+  if (process.env.IMPORT_CLEANUP_ENABLED !== "1") {
+    return { use: false, reason: "disabled", metrics: {} };
+  }
+  if (!process.env.OPENAI_API_KEY) {
+    return { use: false, reason: "missing_env", metrics: {} };
+  }
+
+  const allLines = scenes.flatMap(sc => Array.isArray(sc.lines) ? sc.lines : []);
+  const totalLines = allLines.length;
+
+  if (scenes.length === 0 || totalLines === 0) {
+    return { use: true, reason: "no_scenes", metrics: { scenes: scenes.length, totalLines } };
+  }
+
+  const speakerList = Array.from(
+    new Set(allLines.map(ln => (ln.speaker || "").trim().toUpperCase()))
+  ).filter(s => s && s !== "UNKNOWN" && s !== "ACTION");
+
+  // Speakers with terminal/internal punctuation — clear OCR fragment signal
+  const puncSpeakers = speakerList.filter(s => /[.?!,;]/.test(s));
+  const puncRatio = speakerList.length > 0 ? puncSpeakers.length / speakerList.length : 0;
+  if (puncSpeakers.length >= 2 || puncRatio >= 0.20) {
+    return {
+      use: true,
+      reason: "ocr_bogus_speakers",
+      metrics: { puncSpeakers: puncSpeakers.length, puncRatio: +puncRatio.toFixed(2), totalSpeakers: speakerList.length },
+    };
+  }
+
+  // Too many unique "speakers" relative to total lines
+  const speakerDensity = totalLines > 0 ? speakerList.length / totalLines : 0;
+  if (speakerDensity > 0.35 && speakerList.length > 5) {
+    return {
+      use: true,
+      reason: "high_speaker_density",
+      metrics: { speakers: speakerList.length, totalLines, density: +speakerDensity.toFixed(2) },
+    };
+  }
+
+  // Known OCR action-word fragments appearing as speaker names
+  const fragSpeakers = speakerList.filter(s => {
+    const words = s.split(/\s+/);
+    return words.length <= 3 && words.some(w => OCR_ACTION_FRAGMENTS.has(w.replace(/[^A-Z]/g, "")));
+  });
+  if (fragSpeakers.length >= 2) {
+    return {
+      use: true,
+      reason: "ocr_action_fragments",
+      metrics: { fragSpeakers: fragSpeakers.slice(0, 6), totalSpeakers: speakerList.length },
+    };
+  }
+
+  return {
+    use: false,
+    reason: "quality_ok",
+    metrics: { speakers: speakerList.length, totalLines, density: +speakerDensity.toFixed(2) },
+  };
+}
+
+async function aiNormalizeOcrText(
+  rawText: string,
+  title: string
+): Promise<string | null> {
+  const apiKey = process.env.OPENAI_API_KEY;
+  const model = process.env.IMPORT_CLEANUP_MODEL || "gpt-4o-mini";
+  if (!apiKey) return null;
+
+  const timeoutMs = parseInt(process.env.IMPORT_CLEANUP_TIMEOUT_MS || "90000", 10);
+
+  const systemPrompt = [
+    "You are a screenplay formatter. Convert OCR-scanned script text into canonical SPEAKER: Dialogue format.",
+    "Rules:",
+    "- Output ONLY lines in the exact format: SPEAKER: dialogue text",
+    "- One line per speech turn. No blank lines between turns.",
+    "- Speaker names must be proper names: 1-3 words, ALL CAPS, no terminal punctuation.",
+    "- NEVER use sentence fragments, action phrases, or tactical words as speaker names.",
+    "- Examples of INVALID speaker names: ROGER THAT, OK HOLD, TWO INFECTED HEADING, COPY THAT, GO GO GO",
+    "- If an all-caps phrase is an action or unclear who is speaking, fold it into the",
+    "  previous speaker's dialogue or label it UNKNOWN: if the speaker is truly unknown.",
+    "- Omit scene headings (INT./EXT.), action lines, parentheticals, and transitions.",
+    "- Do not invent or paraphrase dialogue.",
+  ].join("\n");
+
+  // Shrink text to avoid token limits — reuse existing helper once it is defined
+  const lines = rawText.split(/\r?\n/);
+  const SPEAKER_COLON_RE = /^[A-Z][A-Z0-9 _&'.-]{1,30}:\s/;
+  const shrunkLines: string[] = [];
+  for (const line of lines) {
+    if (line.length > 220 && !SPEAKER_COLON_RE.test(line.trim())) continue;
+    shrunkLines.push(line);
+  }
+  let shrunk = shrunkLines.join("\n");
+  if (shrunk.length > 18000) {
+    shrunk = shrunk.slice(0, 8000) + "\n...\n" + shrunk.slice(-4000);
+  }
+
+  const userContent = `TITLE: ${title}\n\nSCRIPT:\n${shrunk}`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  console.log("[import-ai-normalize] calling model=%s inChars=%d", model, shrunk.length);
+
+  try {
+    const resp = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({
+        model,
+        input: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userContent },
+        ],
+        temperature: 0,
+        max_output_tokens: 8000,
+        text: { format: { type: "text" } },
+      }),
+      signal: controller.signal,
+    });
+
+    if (!resp.ok) {
+      const body = await resp.text().catch(() => "");
+      console.error("[import-ai-normalize] API error status=%d body=%s", resp.status, body.slice(0, 200));
+      return null;
+    }
+
+    const json: any = await resp.json();
+    let outputText = "";
+    if (Array.isArray(json.output)) {
+      for (const item of json.output) {
+        if (item.type === "message" && Array.isArray(item.content)) {
+          for (const part of item.content) {
+            if (part.type === "output_text" && typeof part.text === "string") {
+              outputText += part.text;
+            }
+          }
+        }
+      }
+    }
+    return outputText.trim() || null;
+  } catch (err: any) {
+    if (err.name === "AbortError") {
+      console.error("[import-ai-normalize] timeout after %dms", timeoutMs);
+    } else {
+      console.error("[import-ai-normalize] error: %s", err.message || err);
+    }
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 const SPEAKER_STOPWORDS = new Set([
   "AND", "OR", "BUT", "WHAT", "WHATS", "WHO", "WHY", "HOW",
   "I", "YOU", "HE", "SHE", "WE", "THEY", "MY", "YOUR", "HIS", "HER", "OUR",
@@ -1668,6 +1833,42 @@ export function initHttpRoutes(app: Express) {
       }
     }
 
+    // AI Normalize: second-pass OCR speaker repair.
+    // Only runs when the existing LLM cleanup did not already succeed.
+    let aiNormalizeUsed = false;
+    let aiNormalizeReason = "";
+    if (!cleanupUsed) {
+      const normalizeCheck = shouldAiNormalize(scenes);
+      if (normalizeCheck.use) {
+        const speakersBefore = Array.from(
+          new Set(scenes.flatMap(sc => Array.isArray(sc.lines) ? sc.lines.map(ln => ln.speaker) : []))
+        ).filter(Boolean);
+        console.log("[import-ai-normalize] triggered reason=%s metrics=%j speakersBefore=%d",
+          normalizeCheck.reason, normalizeCheck.metrics, speakersBefore.length);
+
+        const t0 = Date.now();
+        const normalizedText = await aiNormalizeOcrText(rawText, rawTitle);
+        const ms = Date.now() - t0;
+
+        if (normalizedText && normalizedText.length >= 50) {
+          const newScenes = parseScenesFromText(normalizedText, rawTitle);
+          const newAllLines = newScenes.flatMap(sc => Array.isArray(sc.lines) ? sc.lines : []);
+          const speakersAfter = Array.from(new Set(newAllLines.map(ln => ln.speaker).filter(Boolean)));
+          console.log("[import-ai-normalize] in_chars=%d out_chars=%d speakers_before=%d speakers_after=%d outScenes=%d outLines=%d ms=%d",
+            rawText.length, normalizedText.length,
+            speakersBefore.length, speakersAfter.length,
+            newScenes.length, newAllLines.length, ms);
+          if (newScenes.length > 0 && newAllLines.length >= 4) {
+            scenes = newScenes;
+            aiNormalizeUsed = true;
+            aiNormalizeReason = normalizeCheck.reason;
+          }
+        } else {
+          console.log("[import-ai-normalize] returned empty/short result ms=%d", ms);
+        }
+      }
+    }
+
     const script: Script = { id, title: rawTitle, text: rawText, scenes };
 
     // Cache in memory for this process (user-keyed)
@@ -1691,6 +1892,7 @@ export function initHttpRoutes(app: Express) {
       scene_count: scenes.length,
       speakers,
       ...(cleanupUsed ? { cleanup_used: true, cleanup_reason: cleanupReason, cleanup_out_lines: cleanupOutLines } : {}),
+      ...(aiNormalizeUsed ? { ai_normalize_used: true, ai_normalize_reason: aiNormalizeReason } : {}),
     });
   });
 
