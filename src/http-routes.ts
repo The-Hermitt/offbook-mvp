@@ -1834,17 +1834,20 @@ export function initHttpRoutes(app: Express) {
     }
 
     // AI Normalize: second-pass OCR speaker repair.
-    // Only runs when the existing LLM cleanup did not already succeed.
+    // Runs after any cleanup pass (including when cleanupUsed===true) so that
+    // action_leaks/bogus-speaker cleanup paths are also covered.
     let aiNormalizeUsed = false;
     let aiNormalizeReason = "";
-    if (!cleanupUsed) {
+    {
       const normalizeCheck = shouldAiNormalize(scenes);
       if (normalizeCheck.use) {
         const speakersBefore = Array.from(
           new Set(scenes.flatMap(sc => Array.isArray(sc.lines) ? sc.lines.map(ln => ln.speaker) : []))
         ).filter(Boolean);
-        console.log("[import-ai-normalize] triggered reason=%s metrics=%j speakersBefore=%d",
-          normalizeCheck.reason, normalizeCheck.metrics, speakersBefore.length);
+        console.log(
+          "[import-ai-normalize] triggered_after_cleanup reason=%s cleanupUsed=%s cleanupOk=%s cleanupReason=%s speakersBefore=%d",
+          normalizeCheck.reason, cleanupUsed, cleanupUsed && cleanupOutLines > 0, cleanupReason, speakersBefore.length
+        );
 
         const t0 = Date.now();
         const normalizedText = await aiNormalizeOcrText(rawText, rawTitle);
@@ -1854,10 +1857,12 @@ export function initHttpRoutes(app: Express) {
           const newScenes = parseScenesFromText(normalizedText, rawTitle);
           const newAllLines = newScenes.flatMap(sc => Array.isArray(sc.lines) ? sc.lines : []);
           const speakersAfter = Array.from(new Set(newAllLines.map(ln => ln.speaker).filter(Boolean)));
-          console.log("[import-ai-normalize] in_chars=%d out_chars=%d speakers_before=%d speakers_after=%d outScenes=%d outLines=%d ms=%d",
+          console.log(
+            "[import-ai-normalize] in_chars=%d out_chars=%d speakers_before=%d speakers_after=%d outScenes=%d outLines=%d ms=%d",
             rawText.length, normalizedText.length,
             speakersBefore.length, speakersAfter.length,
-            newScenes.length, newAllLines.length, ms);
+            newScenes.length, newAllLines.length, ms
+          );
           if (newScenes.length > 0 && newAllLines.length >= 4) {
             scenes = newScenes;
             aiNormalizeUsed = true;
