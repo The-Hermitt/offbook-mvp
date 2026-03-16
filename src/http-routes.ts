@@ -2127,6 +2127,7 @@ export function initHttpRoutes(app: Express) {
     let cleanupUsed = false;
     let cleanupReason = "";
     let cleanupOutLines = 0;
+    let cleanupMultiScene = false;
     const qualityCheck = multiSceneUsed
       ? { use: false as const, reason: "", metrics: {} }
       : shouldUseImportCleanup(rawText, scenes);
@@ -2175,6 +2176,10 @@ export function initHttpRoutes(app: Express) {
         cleanupUsed = true;
         cleanupReason = qualityCheck.reason;
         cleanupOutLines = outLines;
+        if (scenes.filter(sc => sc.lines.length > 0).length >= 2) {
+          cleanupMultiScene = true;
+          console.log("[import-multiscene] source=cleanup preserved=true scenes=%d", scenes.length);
+        }
       }
       const debugImport = process.env.IMPORT_CLEANUP_DEBUG === "1";
       const whitelistValues = debugImport ? ` whitelistValues=${whitelist.join(",")}` : "";
@@ -2201,9 +2206,12 @@ export function initHttpRoutes(app: Express) {
     // AI Normalize: second-pass OCR speaker repair.
     // Triggers when shouldAiNormalize detects bogus speakers OR when the cleanup
     // reason indicates action/heading leaks that survived the cleanup pass.
+    // Skipped entirely when cleanup already produced a valid multi-scene result.
     let aiNormalizeUsed = false;
     let aiNormalizeReason = "";
-    if (!multiSceneUsed) {
+    if (!multiSceneUsed && cleanupMultiScene) {
+      console.log("[import-ai-normalize] skipped reason=already_multi_scene scenes=%d", scenes.length);
+    } else if (!multiSceneUsed) {
       const normalizeCheck = shouldAiNormalize(scenes);
       const forceNormalize =
         cleanupReason === "action_leaks" || cleanupReason === "heading_leaks";
@@ -2234,8 +2242,12 @@ export function initHttpRoutes(app: Express) {
             speakersBefore.length, speakersAfter.length,
             newScenes.length, newAllLines.length, ms
           );
+          // Safety guard: never let ai-normalize collapse a multi-scene result.
+          const preNormalizeSceneCount = scenes.length;
+          if (preNormalizeSceneCount >= 2 && newScenes.length < preNormalizeSceneCount) {
+            console.log("[import-ai-normalize] rejected reason=scene_count_regression before=%d after=%d", preNormalizeSceneCount, newScenes.length);
           // Accept normalized result if it has more lines and fewer bogus speakers
-          if (newScenes.length > 0 && newAllLines.length >= 4 &&
+          } else if (newScenes.length > 0 && newAllLines.length >= 4 &&
               (speakersAfter.length < speakersBefore.length || newAllLines.length >= scenes.flatMap(sc => sc.lines).length * 0.8)) {
             scenes = newScenes;
             collapseDropped = ncr.dropped;
