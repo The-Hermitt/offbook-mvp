@@ -1527,33 +1527,54 @@ async function buildScenesFromImportedText(rawText: string, title: string): Prom
 }
 
 // ---------------------------------------------------------------------------
-// detectMarkedScenePageStarts: scan [[PAGE n]]-annotated OCR text for
+// splitTextIntoPageBlocks: shared helper that handles both [[PAGE n]] numbered
+// markers and legacy --- PAGE BREAK --- separators (assigned synthetic page
+// numbers starting at 1).  Returns [] if neither format is present.
+// ---------------------------------------------------------------------------
+function splitTextIntoPageBlocks(rawText: string): Array<{ pageNum: number; text: string }> {
+  // Try [[PAGE n]] numbered markers first
+  const NUMBERED_RE = /\[\[PAGE (\d+)\]\]/g;
+  if (NUMBERED_RE.test(rawText)) {
+    NUMBERED_RE.lastIndex = 0;
+    const blocks: Array<{ pageNum: number; text: string }> = [];
+    let m: RegExpExecArray | null;
+    let lastIndex = 0;
+    let lastPageNum = 0;
+    while ((m = NUMBERED_RE.exec(rawText)) !== null) {
+      if (lastPageNum > 0) {
+        blocks.push({ pageNum: lastPageNum, text: rawText.slice(lastIndex, m.index) });
+      }
+      lastPageNum = parseInt(m[1], 10);
+      lastIndex = m.index + m[0].length;
+    }
+    if (lastPageNum > 0) {
+      blocks.push({ pageNum: lastPageNum, text: rawText.slice(lastIndex) });
+    }
+    return blocks;
+  }
+
+  // Fall back to --- PAGE BREAK --- with synthetic ascending page numbers
+  const LEGACY_RE = /---\s*PAGE\s+BREAK\s*---/i;
+  if (LEGACY_RE.test(rawText)) {
+    return rawText.split(/---\s*PAGE\s+BREAK\s*---/i).map((text, idx) => ({
+      pageNum: idx + 1,
+      text,
+    }));
+  }
+
+  return [];
+}
+
+// ---------------------------------------------------------------------------
+// detectMarkedScenePageStarts: scan page-blocked text for casting-side
 // scene-start headers near the top of each page block.
+// Handles both [[PAGE n]] markers and legacy --- PAGE BREAK --- separators.
 // Returns results only when ≥2 distinct ascending scene numbers are found.
 // ---------------------------------------------------------------------------
 function detectMarkedScenePageStarts(
   rawText: string
 ): Array<{ sceneNumber: number; startPage: number; marker: string }> {
-  // Split text into page blocks using [[PAGE n]] markers
-  const PAGE_MARKER_RE = /\[\[PAGE (\d+)\]\]/g;
-  type PageBlock = { pageNum: number; text: string };
-  const pageBlocks: PageBlock[] = [];
-
-  let m: RegExpExecArray | null;
-  let lastIndex = 0;
-  let lastPageNum = 0;
-
-  while ((m = PAGE_MARKER_RE.exec(rawText)) !== null) {
-    if (lastPageNum > 0) {
-      pageBlocks.push({ pageNum: lastPageNum, text: rawText.slice(lastIndex, m.index) });
-    }
-    lastPageNum = parseInt(m[1], 10);
-    lastIndex = m.index + m[0].length;
-  }
-  if (lastPageNum > 0) {
-    pageBlocks.push({ pageNum: lastPageNum, text: rawText.slice(lastIndex) });
-  }
-
+  const pageBlocks = splitTextIntoPageBlocks(rawText);
   if (pageBlocks.length === 0) return [];
 
   // Match: "scene 1 of 4", "sc 2 of 4", "scn 3 of 4", "scene 4", OCR variants
@@ -1600,25 +1621,8 @@ async function buildMarkedPdfScenes(rawText: string, title: string): Promise<Sce
     return null;
   }
 
-  // Re-parse page blocks (same logic as detectMarkedScenePageStarts)
-  const PAGE_MARKER_RE2 = /\[\[PAGE (\d+)\]\]/g;
-  type PageBlock2 = { pageNum: number; text: string };
-  const pageBlocks: PageBlock2[] = [];
-
-  let m2: RegExpExecArray | null;
-  let lastIndex2 = 0;
-  let lastPageNum2 = 0;
-
-  while ((m2 = PAGE_MARKER_RE2.exec(rawText)) !== null) {
-    if (lastPageNum2 > 0) {
-      pageBlocks.push({ pageNum: lastPageNum2, text: rawText.slice(lastIndex2, m2.index) });
-    }
-    lastPageNum2 = parseInt(m2[1], 10);
-    lastIndex2 = m2.index + m2[0].length;
-  }
-  if (lastPageNum2 > 0) {
-    pageBlocks.push({ pageNum: lastPageNum2, text: rawText.slice(lastIndex2) });
-  }
+  // Re-parse page blocks (handles both [[PAGE n]] and legacy --- PAGE BREAK ---)
+  const pageBlocks = splitTextIntoPageBlocks(rawText);
 
   // Strip extension from title for scene naming (e.g. "Jake_Luska.pdf" → "Jake_Luska")
   const baseTitle = title.replace(/\.[^.]+$/, "");
@@ -2104,14 +2108,28 @@ export function initHttpRoutes(app: Express) {
     const rawText = String(text);
     const rawTitle = String(title);
 
-    // First: run existing parser
-    let scenes = parseScenesFromText(rawText, rawTitle);
+    // If page markers are present, try multi-scene splitting first
+    let scenes: Scene[] = [];
+    let multiSceneUsed = false;
+    const hasPageMarkers = /\[\[PAGE \d+\]\]/.test(rawText) || /---\s*PAGE\s+BREAK\s*---/i.test(rawText);
+    if (hasPageMarkers) {
+      const markedScenes = await buildMarkedPdfScenes(rawText, rawTitle);
+      if (markedScenes) {
+        scenes = markedScenes;
+        multiSceneUsed = true;
+      }
+    }
+    if (!multiSceneUsed) {
+      scenes = parseScenesFromText(rawText, rawTitle);
+    }
 
-    // Auto LLM cleanup if quality is poor
+    // Auto LLM cleanup if quality is poor (skipped when multi-scene path succeeded)
     let cleanupUsed = false;
     let cleanupReason = "";
     let cleanupOutLines = 0;
-    const qualityCheck = shouldUseImportCleanup(rawText, scenes);
+    const qualityCheck = multiSceneUsed
+      ? { use: false as const, reason: "", metrics: {} }
+      : shouldUseImportCleanup(rawText, scenes);
     if (qualityCheck.use) {
       let whitelistMode: "raw" | "heuristic" | "open" = "raw";
       let whitelist = extractSpeakersFromRawText(rawText).filter(isValidSpeakerShape);
@@ -2173,7 +2191,7 @@ export function initHttpRoutes(app: Express) {
     // Speaker collapse #1: deterministic cleanup of bogus OCR speakers after parse/LLM-cleanup
     let collapseDropped: string[] = [];
     let collapseUsed = false;
-    {
+    if (!multiSceneUsed) {
       const cr = collapseBogusSpeakersHR(scenes);
       scenes = cr.scenes;
       collapseDropped = cr.dropped;
@@ -2185,7 +2203,7 @@ export function initHttpRoutes(app: Express) {
     // reason indicates action/heading leaks that survived the cleanup pass.
     let aiNormalizeUsed = false;
     let aiNormalizeReason = "";
-    {
+    if (!multiSceneUsed) {
       const normalizeCheck = shouldAiNormalize(scenes);
       const forceNormalize =
         cleanupReason === "action_leaks" || cleanupReason === "heading_leaks";
@@ -2255,6 +2273,7 @@ export function initHttpRoutes(app: Express) {
       script_id: id,
       scene_count: scenes.length,
       speakers,
+      ...(multiSceneUsed ? { multi_scene_used: true } : {}),
       ...(cleanupUsed ? { cleanup_used: true, cleanup_reason: cleanupReason, cleanup_out_lines: cleanupOutLines } : {}),
       ...(collapseUsed ? { speaker_collapse_used: true, speaker_collapse_dropped: collapseDropped } : {}),
       ...(aiNormalizeUsed ? { ai_normalize_used: true, ai_normalize_reason: aiNormalizeReason } : {}),
