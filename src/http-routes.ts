@@ -1369,13 +1369,15 @@ async function extractTextFromPdf(buffer: Buffer): Promise<string> {
   }
   const worker = await newTesseractWorker();
   if (!worker) return "";
+  // Env-aware OCR page limit: IMPORT_OCR_MAX_PAGES (default 15, hard cap 25)
+  const envMax = parseInt(process.env.IMPORT_OCR_MAX_PAGES || "15", 10);
+  const ocrMaxPages = Math.min(Math.max(1, envMax), 25);
   try {
-    const pngs = await rasterizePdfToPngBuffers(buffer, 3);
+    const pngs = await rasterizePdfToPngBuffers(buffer, ocrMaxPages);
     let ocr = "";
-    for (const img of pngs) {
-      const res = await worker.recognize(img);
-      ocr += (res?.data?.text || "") + "\n";
-      if (ocr.replace(/\s+/g, " ").trim().length >= 40) break;
+    for (let pageIdx = 0; pageIdx < pngs.length; pageIdx++) {
+      const res = await worker.recognize(pngs[pageIdx]);
+      ocr += `[[PAGE ${pageIdx + 1}]]\n` + (res?.data?.text || "") + "\n";
     }
     await worker.terminate();
     return ocr;
@@ -1409,6 +1411,257 @@ async function extractTextFromImage(buffer: Buffer): Promise<string> {
 
 async function extractTextAuto(buffer: Buffer, mime: string): Promise<string> {
   return mime === "application/pdf" ? extractTextFromPdf(buffer) : extractTextFromImage(buffer);
+}
+
+// ---------------------------------------------------------------------------
+// buildScenesFromImportedText: reusable text → Scene[] pipeline
+// Mirrors the upload_script_upload parse flow so chunks can be processed
+// the same way as a full document.
+// ---------------------------------------------------------------------------
+async function buildScenesFromImportedText(rawText: string, title: string): Promise<Scene[]> {
+  if (rawText.replace(/\s+/g, " ").trim().length < 40) return [];
+
+  const parsed = parseScenesFromText(rawText, title);
+  let scenes = (parsed || []).filter(sc => Array.isArray(sc.lines) && sc.lines.length > 0);
+
+  // Auto LLM cleanup if quality is poor
+  let cleanupReason = "";
+  const qualityCheck = shouldUseImportCleanup(rawText, scenes);
+  if (qualityCheck.use) {
+    let whitelistMode: "raw" | "heuristic" | "open" = "raw";
+    let whitelist = extractSpeakersFromRawText(rawText).filter(isValidSpeakerShape);
+    if (whitelist.length <= 3) {
+      const fromScenes = buildSpeakerWhitelistFromHeuristic(scenes).filter(isValidSpeakerShape);
+      whitelist = Array.from(new Set([...whitelist, ...fromScenes]));
+      whitelistMode = "heuristic";
+    }
+    const weak = whitelist.length <= 2 &&
+      (qualityCheck.reason === "too_few_lines" || qualityCheck.reason === "speaker_mixing");
+    if (weak) { whitelist = []; whitelistMode = "open"; }
+    const realWhitelist = whitelist.filter(s => s !== "UNKNOWN" && s !== "ACTION");
+    if (realWhitelist.length < 2) {
+      console.log("[import-cleanup] whitelist too small -> open (realWhitelist=%d)", realWhitelist.length);
+      whitelist = [];
+      whitelistMode = "open";
+    }
+    logImportCleanupDebug(rawText);
+    const t0 = Date.now();
+    const result = await llmCleanupToScenes(rawText, title, whitelist);
+    const ms = Date.now() - t0;
+    const model = process.env.IMPORT_CLEANUP_MODEL || "?";
+    const keptLines = result ? result.keptLines : 0;
+    let outLines = result ? result.scenes.flatMap(s => s.lines).length : 0;
+    const ok = !!(result && outLines > 0);
+    let fixedCount = 0;
+    let droppedSpeakers: string[] = [];
+    let splitCount = 0;
+    if (ok) {
+      const postFix = fixFalseSpeakers(result!.scenes, whitelist);
+      scenes = postFix.scenes.filter(sc => sc.lines.length > 0);
+      fixedCount = postFix.fixedCount;
+      droppedSpeakers = postFix.droppedSpeakers;
+      for (const sc of scenes) {
+        const split = splitEmbeddedSpeakers(sc.lines, whitelist);
+        sc.lines = split.lines;
+        splitCount += split.splitCount;
+      }
+      outLines = scenes.flatMap(s => s.lines).length;
+      cleanupReason = qualityCheck.reason;
+    }
+    console.log(
+      "[import-cleanup] used=%s ok=%s reason=%s model=%s inChars=%d outScenes=%d outLines=%d ms=%d whitelistMode=%s whitelist=%d kept=%d split=%d fixed=%d",
+      true, ok, qualityCheck.reason, model, rawText.length,
+      ok ? scenes.length : 0, outLines, ms, whitelistMode, whitelist.length, keptLines, splitCount, fixedCount
+    );
+    if (fixedCount > 0) console.log("[import-cleanup] droppedSpeakers=%s", droppedSpeakers.join(", "));
+  }
+
+  // Speaker collapse: deterministic cleanup of bogus OCR speakers
+  {
+    const cr = collapseBogusSpeakersHR(scenes);
+    scenes = cr.scenes;
+  }
+
+  // AI Normalize: second-pass OCR speaker repair
+  {
+    const normalizeCheck = shouldAiNormalize(scenes);
+    const forceNormalize = cleanupReason === "action_leaks" || cleanupReason === "heading_leaks";
+    if (normalizeCheck.use || forceNormalize) {
+      const triggerReason = normalizeCheck.use ? normalizeCheck.reason : cleanupReason;
+      const speakersBefore = Array.from(
+        new Set(scenes.flatMap(sc => Array.isArray(sc.lines) ? sc.lines.map(ln => ln.speaker) : []))
+      ).filter(Boolean);
+      console.log(
+        "[import-ai-normalize] triggered reason=%s speakersBefore=%d",
+        triggerReason, speakersBefore.length
+      );
+      const t0 = Date.now();
+      const normalizedText = await aiNormalizeOcrText(rawText, title);
+      const ms = Date.now() - t0;
+      if (normalizedText && normalizedText.length >= 50) {
+        let newScenes = parseScenesFromText(normalizedText, title);
+        const ncr = collapseBogusSpeakersHR(newScenes);
+        newScenes = ncr.scenes;
+        const newAllLines = newScenes.flatMap(sc => Array.isArray(sc.lines) ? sc.lines : []);
+        const speakersAfter = Array.from(new Set(newAllLines.map(ln => ln.speaker).filter(Boolean)));
+        console.log(
+          "[import-ai-normalize] in_chars=%d out_chars=%d speakers_before=%d speakers_after=%d outScenes=%d outLines=%d ms=%d",
+          rawText.length, normalizedText.length,
+          speakersBefore.length, speakersAfter.length,
+          newScenes.length, newAllLines.length, ms
+        );
+        if (newScenes.length > 0 && newAllLines.length >= 4 &&
+            (speakersAfter.length < speakersBefore.length ||
+             newAllLines.length >= scenes.flatMap(sc => sc.lines).length * 0.8)) {
+          scenes = newScenes;
+        } else {
+          console.log("[import-ai-normalize] result not better, keeping pre-normalize scenes");
+        }
+      } else {
+        console.log("[import-ai-normalize] returned empty/short result ms=%d", ms);
+      }
+    }
+  }
+
+  return scenes;
+}
+
+// ---------------------------------------------------------------------------
+// detectMarkedScenePageStarts: scan [[PAGE n]]-annotated OCR text for
+// scene-start headers near the top of each page block.
+// Returns results only when ≥2 distinct ascending scene numbers are found.
+// ---------------------------------------------------------------------------
+function detectMarkedScenePageStarts(
+  rawText: string
+): Array<{ sceneNumber: number; startPage: number; marker: string }> {
+  // Split text into page blocks using [[PAGE n]] markers
+  const PAGE_MARKER_RE = /\[\[PAGE (\d+)\]\]/g;
+  type PageBlock = { pageNum: number; text: string };
+  const pageBlocks: PageBlock[] = [];
+
+  let m: RegExpExecArray | null;
+  let lastIndex = 0;
+  let lastPageNum = 0;
+
+  while ((m = PAGE_MARKER_RE.exec(rawText)) !== null) {
+    if (lastPageNum > 0) {
+      pageBlocks.push({ pageNum: lastPageNum, text: rawText.slice(lastIndex, m.index) });
+    }
+    lastPageNum = parseInt(m[1], 10);
+    lastIndex = m.index + m[0].length;
+  }
+  if (lastPageNum > 0) {
+    pageBlocks.push({ pageNum: lastPageNum, text: rawText.slice(lastIndex) });
+  }
+
+  if (pageBlocks.length === 0) return [];
+
+  // Match: "scene 1 of 4", "sc 2 of 4", "scn 3 of 4", "scene 4", OCR variants
+  // Only look near the top of each page (~300 chars) to avoid buried matches
+  const SCENE_START_RE = /\b(sc(?:ene?|n)?\.?\s*)(\d{1,3})\b(?:\s+of\s+\d+)?/i;
+
+  const detected: Array<{ sceneNumber: number; startPage: number; marker: string }> = [];
+
+  for (const block of pageBlocks) {
+    const topText = block.text.slice(0, 300);
+    const hit = topText.match(SCENE_START_RE);
+    if (hit) {
+      const sceneNum = parseInt(hit[2], 10);
+      detected.push({ sceneNumber: sceneNum, startPage: block.pageNum, marker: hit[0].trim() });
+    }
+  }
+
+  if (detected.length < 2) return [];
+
+  // Require strictly ascending scene numbers
+  for (let i = 1; i < detected.length; i++) {
+    if (detected[i].sceneNumber <= detected[i - 1].sceneNumber) return [];
+  }
+
+  // Require at least 2 distinct numbered scene starts
+  const distinctNums = new Set(detected.map(d => d.sceneNumber));
+  if (distinctNums.size < 2) return [];
+
+  return detected;
+}
+
+// ---------------------------------------------------------------------------
+// buildMarkedPdfScenes: attempt to split a page-marked OCR text into multiple
+// backend scenes based on detected casting-side markers.
+// Returns null to signal caller should use single-scene fallback.
+// ---------------------------------------------------------------------------
+async function buildMarkedPdfScenes(rawText: string, title: string): Promise<Scene[] | null> {
+  const sceneStarts = detectMarkedScenePageStarts(rawText);
+
+  console.log("[scene-split] markers_found=%d", sceneStarts.length);
+
+  if (sceneStarts.length < 2) {
+    console.log("[scene-split] fallback=insufficient_markers");
+    return null;
+  }
+
+  // Re-parse page blocks (same logic as detectMarkedScenePageStarts)
+  const PAGE_MARKER_RE2 = /\[\[PAGE (\d+)\]\]/g;
+  type PageBlock2 = { pageNum: number; text: string };
+  const pageBlocks: PageBlock2[] = [];
+
+  let m2: RegExpExecArray | null;
+  let lastIndex2 = 0;
+  let lastPageNum2 = 0;
+
+  while ((m2 = PAGE_MARKER_RE2.exec(rawText)) !== null) {
+    if (lastPageNum2 > 0) {
+      pageBlocks.push({ pageNum: lastPageNum2, text: rawText.slice(lastIndex2, m2.index) });
+    }
+    lastPageNum2 = parseInt(m2[1], 10);
+    lastIndex2 = m2.index + m2[0].length;
+  }
+  if (lastPageNum2 > 0) {
+    pageBlocks.push({ pageNum: lastPageNum2, text: rawText.slice(lastIndex2) });
+  }
+
+  // Strip extension from title for scene naming (e.g. "Jake_Luska.pdf" → "Jake_Luska")
+  const baseTitle = title.replace(/\.[^.]+$/, "");
+
+  const resultScenes: Scene[] = [];
+
+  for (let i = 0; i < sceneStarts.length; i++) {
+    const startPage = sceneStarts[i].startPage;
+    const endPage = i + 1 < sceneStarts.length ? sceneStarts[i + 1].startPage - 1 : Infinity;
+
+    let chunkText = "";
+    for (const block of pageBlocks) {
+      if (block.pageNum >= startPage && block.pageNum <= endPage) {
+        chunkText += block.text + "\n";
+      }
+    }
+
+    chunkText = chunkText.trim();
+    if (chunkText.length < 40) {
+      console.log("[scene-split] chunk=%d too_short len=%d", i + 1, chunkText.length);
+      continue;
+    }
+
+    const chunkTitle = `${baseTitle} Scn-${i + 1}`;
+    const chunkScenes = await buildScenesFromImportedText(chunkText, chunkTitle);
+    const totalLines = chunkScenes.flatMap(sc => sc.lines).length;
+
+    if (chunkScenes.length > 0 && totalLines >= 2) {
+      // Flatten into one backend Scene per casting-side chunk
+      const allLines = chunkScenes.flatMap(sc => sc.lines);
+      resultScenes.push({ id: crypto.randomUUID(), title: chunkTitle, lines: allLines });
+    } else {
+      console.log("[scene-split] chunk=%d rejected lines=%d", i + 1, totalLines);
+    }
+  }
+
+  if (resultScenes.length < 2) {
+    console.log("[scene-split] fallback=insufficient_accepted accepted=%d", resultScenes.length);
+    return null;
+  }
+
+  console.log("[scene-split] accepted=true count=%d", resultScenes.length);
+  return resultScenes;
 }
 
 function baseUrlFrom(req: Request): string {
@@ -2040,8 +2293,18 @@ export function initHttpRoutes(app: Express) {
         let cleanupUsed = false;
         let cleanupReason = "";
         let cleanupOutLines = 0;
+        let multiSceneUsed = false;
 
-        if (textLen >= 40) {
+        // For PDFs: try page-aware multi-scene detection first (casting-side PDFs)
+        if (req.file.mimetype === "application/pdf" && textLen >= 40) {
+          const markedScenes = await buildMarkedPdfScenes(extracted, title);
+          if (markedScenes) {
+            scenes = markedScenes;
+            multiSceneUsed = true;
+          }
+        }
+
+        if (!multiSceneUsed && textLen >= 40) {
           const parsed = parseScenesFromText(extracted, title);
           // Drop any scenes that have no dialogue lines; they are noise.
           scenes = (parsed || []).filter(
@@ -2205,6 +2468,7 @@ export function initHttpRoutes(app: Express) {
           speakers,
           textLen,
           ...(note ? { note } : {}),
+          ...(multiSceneUsed ? { multi_scene_used: true } : {}),
           ...(cleanupUsed ? { cleanup_used: true, cleanup_reason: cleanupReason, cleanup_out_lines: cleanupOutLines } : {}),
           ...(uploadCollapseUsed ? { speaker_collapse_used: true, speaker_collapse_dropped: uploadCollapseDropped } : {}),
           ...(uploadAiNormalizeUsed ? { ai_normalize_used: true, ai_normalize_reason: uploadAiNormalizeReason } : {}),
