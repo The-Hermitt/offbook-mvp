@@ -2123,12 +2123,30 @@ export function initHttpRoutes(app: Express) {
       scenes = parseScenesFromText(rawText, rawTitle);
     }
 
-    // Auto LLM cleanup if quality is poor (skipped when multi-scene path succeeded)
+    // Early bypass for clean pasted scripts: skip LLM import-cleanup when the
+    // raw parse already yields 2+ dialogue lines with 2+ distinct speakers.
+    let pastedScriptBypass = false;
+    if (!multiSceneUsed) {
+      const allParsedLines = scenes.flatMap(sc => sc.lines);
+      const dialogueLines = allParsedLines.filter(
+        ln => ln.speaker && ln.speaker !== "ACTION" && ln.speaker !== "UNKNOWN"
+      );
+      const distinctSpeakers = new Set(dialogueLines.map(ln => ln.speaker));
+      if (dialogueLines.length >= 2 && distinctSpeakers.size >= 2) {
+        pastedScriptBypass = true;
+        console.log(
+          "[import-cleanup] bypassed reason=clean_paste dialogueLines=%d distinctSpeakers=%d",
+          dialogueLines.length, distinctSpeakers.size
+        );
+      }
+    }
+
+    // Auto LLM cleanup if quality is poor (skipped when multi-scene path succeeded or clean paste detected)
     let cleanupUsed = false;
     let cleanupReason = "";
     let cleanupOutLines = 0;
     let cleanupMultiScene = false;
-    const qualityCheck = multiSceneUsed
+    const qualityCheck = (multiSceneUsed || pastedScriptBypass)
       ? { use: false as const, reason: "", metrics: {} }
       : shouldUseImportCleanup(rawText, scenes);
     if (qualityCheck.use) {
