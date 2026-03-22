@@ -1592,18 +1592,63 @@ function detectMarkedScenePageStarts(
     }
   }
 
-  if (detected.length < 2) return [];
+  if (detected.length === 0) return [];
 
-  // Require strictly ascending scene numbers
-  for (let i = 1; i < detected.length; i++) {
-    if (detected[i].sceneNumber <= detected[i - 1].sceneNumber) return [];
+  console.log(
+    "[scene-split] raw_hits=%d pages_with_marker=%s",
+    detected.length,
+    detected.map(d => `sc${d.sceneNumber}@p${d.startPage}`).join(", ")
+  );
+
+  // Dedupe / noise-filter pass.
+  //
+  // OCR'd casting-side PDFs often repeat the same scene label on every page
+  // of a multi-page scene (e.g. "SC 1 OF 4" on pages 1–4).  The old strictly-
+  // ascending check nuked the entire detection pass for those files.
+  //
+  // New rules, applied in page order:
+  //   • First hit is always accepted.
+  //   • Same number as last accepted  → duplicate (same scene continues), skip.
+  //   • Higher number, plausible step (≤ +50) → new scene start, accept.
+  //   • Higher number but absurd jump (> +50)  → likely OCR garbage, skip.
+  //   • Lower than last accepted               → backward OCR noise, skip.
+  //
+  // The ≤ +50 bound is very conservative: no real casting PDF skips 50 scenes
+  // at once, so it will not affect clean pasted text (which never reaches this
+  // path because splitTextIntoPageBlocks returns [] without page markers).
+  const accepted: Array<{ sceneNumber: number; startPage: number; marker: string }> = [];
+  const ignoredDetails: string[] = [];
+  let lastAccepted = -1;
+
+  for (const hit of detected) {
+    if (lastAccepted === -1) {
+      accepted.push(hit);
+      lastAccepted = hit.sceneNumber;
+    } else if (hit.sceneNumber === lastAccepted) {
+      ignoredDetails.push(`sc${hit.sceneNumber}@p${hit.startPage}(duplicate)`);
+    } else if (hit.sceneNumber > lastAccepted && hit.sceneNumber <= lastAccepted + 50) {
+      accepted.push(hit);
+      lastAccepted = hit.sceneNumber;
+    } else if (hit.sceneNumber > lastAccepted) {
+      ignoredDetails.push(`sc${hit.sceneNumber}@p${hit.startPage}(absurd_jump)`);
+    } else {
+      ignoredDetails.push(`sc${hit.sceneNumber}@p${hit.startPage}(backward_noise)`);
+    }
   }
 
-  // Require at least 2 distinct numbered scene starts
-  const distinctNums = new Set(detected.map(d => d.sceneNumber));
+  console.log(
+    "[scene-split] accepted=%d ignored=%d%s",
+    accepted.length,
+    ignoredDetails.length,
+    ignoredDetails.length > 0 ? " ignored_detail=" + ignoredDetails.join(", ") : ""
+  );
+
+  // Require at least 2 distinct accepted scene starts before committing to
+  // page-marker splitting (same threshold as before).
+  const distinctNums = new Set(accepted.map(a => a.sceneNumber));
   if (distinctNums.size < 2) return [];
 
-  return detected;
+  return accepted;
 }
 
 // ---------------------------------------------------------------------------
